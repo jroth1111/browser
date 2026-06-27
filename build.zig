@@ -179,7 +179,7 @@ pub fn build(b: *Build) !void {
 
     {
         // Chimera profile/authority tests are kept separate from the full
-        // browser test graph so they do not require a V8 bootstrap.
+        // browser test graph so they do not require a built V8 artifact.
         const chimera_tests = b.addTest(.{
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/chimera/chimera_tests.zig"),

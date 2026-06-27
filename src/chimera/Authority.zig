@@ -136,97 +136,132 @@ fn optionalBool(obj: std.json.ObjectMap, key: []const u8) !bool {
     };
 }
 
+const test_authority_json =
+    \\{
+    \\  "authority_version":"chimera-lightpanda-authority/v1",
+    \\  "profile_schema_version":"chimera-browser-profile/v1",
+    \\  "profile_id":"lightpanda:sess-1",
+    \\  "target_domain":"example.com",
+    \\  "profile":{
+    \\    "schema_version":"chimera-browser-profile/v1",
+    \\    "profile_id":"lightpanda:sess-1",
+    \\    "target_domain":"example.com",
+    \\    "user_agent":"Mozilla/5.0",
+    \\    "app_version":"5.0",
+    \\    "accept_language":"en-AU,en;q=0.9",
+    \\    "languages":["en-AU","en"],
+    \\    "headers":{
+    \\      "User-Agent":"Mozilla/5.0",
+    \\      "Accept-Language":"en-AU,en;q=0.9",
+    \\      "Sec-CH-UA":"\"Chromium\";v=\"136\"",
+    \\      "Sec-CH-UA-Mobile":"?0",
+    \\      "Sec-CH-UA-Platform":"\"macOS\""
+    \\    },
+    \\    "navigator":{
+    \\      "platform":"MacIntel",
+    \\      "vendor":"Google Inc.",
+    \\      "product":"Gecko",
+    \\      "hardware_concurrency":8,
+    \\      "device_memory":8,
+    \\      "max_touch_points":0,
+    \\      "webdriver":false
+    \\    },
+    \\    "ua_data":{
+    \\      "brands":[{"brand":"Chromium","version":"136"}],
+    \\      "full_version_list":[{"brand":"Chromium","version":"136.0.0.0"}],
+    \\      "mobile":false,
+    \\      "platform":"macOS",
+    \\      "architecture":"arm",
+    \\      "bitness":"64",
+    \\      "model":"",
+    \\      "platform_version":"15.0.0",
+    \\      "ua_full_version":"136.0.0.0",
+    \\      "wow64":false,
+    \\      "form_factor":["Desktop"]
+    \\    },
+    \\    "seeds":{
+    \\      "canvas":111,
+    \\      "audio":222,
+    \\      "font":333,
+    \\      "human":444
+    \\    },
+    \\    "plugins":{
+    \\      "pdf_enabled":true
+    \\    },
+    \\    "canvas":{
+    \\      "enabled":true,
+    \\      "seed":111
+    \\    },
+    \\    "audio":{
+    \\      "enabled":true,
+    \\      "seed":222
+    \\    },
+    \\    "transport":{
+    \\      "impersonate_target":"chrome136",
+    \\      "requires_curl_impersonate":true
+    \\    },
+    \\    "capabilities":{
+    \\      "requires_proxy":true,
+    \\      "requires_webrtc_exit_ip":false,
+    \\      "requires_curl_impersonate":true
+    \\    }
+    \\  },
+    \\  "network":{
+    \\    "proxy_url":"http://routejson.token:secret@127.0.0.1:8080",
+    \\    "route_id":"exit-a",
+    \\    "proxy_route":"lock:exit-a:sess-1:lightpanda",
+    \\    "requires_proxy":true
+    \\  },
+    \\  "diagnostics":{
+    \\    "expected_impersonation_target":"chrome136",
+    \\    "requires_curl_impersonate":true
+    \\  }
+    \\}
+;
+
 test "Chimera Authority parses managed launch authority" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const authority = try Authority.parseLeaky(arena.allocator(),
-        \\{
-        \\  "authority_version":"chimera-lightpanda-authority/v1",
-        \\  "profile_schema_version":"chimera-browser-profile/v1",
-        \\  "profile_id":"lightpanda:sess-1",
-        \\  "target_domain":"example.com",
-        \\  "profile":{
-        \\    "schema_version":"chimera-browser-profile/v1",
-        \\    "profile_id":"lightpanda:sess-1",
-        \\    "target_domain":"example.com",
-        \\    "user_agent":"Mozilla/5.0",
-        \\    "app_version":"5.0",
-        \\    "accept_language":"en-AU,en;q=0.9",
-        \\    "languages":["en-AU","en"],
-        \\    "headers":{
-        \\      "User-Agent":"Mozilla/5.0",
-        \\      "Accept-Language":"en-AU,en;q=0.9",
-        \\      "Sec-CH-UA":"\"Chromium\";v=\"136\"",
-        \\      "Sec-CH-UA-Mobile":"?0",
-        \\      "Sec-CH-UA-Platform":"\"macOS\""
-        \\    },
-        \\    "navigator":{
-        \\      "platform":"MacIntel",
-        \\      "vendor":"Google Inc.",
-        \\      "product":"Gecko",
-        \\      "hardware_concurrency":8,
-        \\      "device_memory":8,
-        \\      "max_touch_points":0,
-        \\      "webdriver":false
-        \\    },
-        \\    "ua_data":{
-        \\      "brands":[{"brand":"Chromium","version":"136"}],
-        \\      "full_version_list":[{"brand":"Chromium","version":"136.0.0.0"}],
-        \\      "mobile":false,
-        \\      "platform":"macOS",
-        \\      "architecture":"arm",
-        \\      "bitness":"64",
-        \\      "model":"",
-        \\      "platform_version":"15.0.0",
-        \\      "ua_full_version":"136.0.0.0",
-        \\      "wow64":false,
-        \\      "form_factor":["Desktop"]
-        \\    },
-        \\    "seeds":{
-        \\      "canvas":111,
-        \\      "audio":222,
-        \\      "font":333,
-        \\      "human":444
-        \\    },
-        \\    "plugins":{
-        \\      "pdf_enabled":true
-        \\    },
-        \\    "canvas":{
-        \\      "enabled":true,
-        \\      "seed":111
-        \\    },
-        \\    "audio":{
-        \\      "enabled":true,
-        \\      "seed":222
-        \\    },
-        \\    "transport":{
-        \\      "impersonate_target":"chrome136",
-        \\      "requires_curl_impersonate":true
-        \\    },
-        \\    "capabilities":{
-        \\      "requires_proxy":true,
-        \\      "requires_webrtc_exit_ip":false,
-        \\      "requires_curl_impersonate":true
-        \\    }
-        \\  },
-        \\  "network":{
-        \\    "proxy_url":"http://routejson.token:secret@127.0.0.1:8080",
-        \\    "route_id":"exit-a",
-        \\    "proxy_route":"lock:exit-a:sess-1:lightpanda",
-        \\    "requires_proxy":true
-        \\  },
-        \\  "diagnostics":{
-        \\    "expected_impersonation_target":"chrome136",
-        \\    "requires_curl_impersonate":true
-        \\  }
-        \\}
-    );
+    const authority = try Authority.parseLeaky(arena.allocator(), test_authority_json);
 
     try testing.expectEqualStrings("chimera-lightpanda-authority/v1", authority.authority_version);
     try testing.expectEqualStrings("lightpanda:sess-1", authority.profile_id);
     try testing.expectEqualStrings("http://routejson.token:secret@127.0.0.1:8080", authority.network.proxy_url);
     try testing.expectEqualStrings("chrome136", authority.profile.transport.impersonate_target.?);
     try testing.expect(authority.diagnostics.requires_curl_impersonate);
+}
+
+test "Chimera Authority rejects unsupported authority version" {
+    try expectMutatedAuthorityError(
+        error.UnsupportedChimeraAuthorityVersion,
+        "\"authority_version\":\"chimera-lightpanda-authority/v1\"",
+        "\"authority_version\":\"unsupported\"",
+    );
+}
+
+test "Chimera Authority rejects missing required proxy" {
+    try expectMutatedAuthorityError(
+        error.InvalidChimeraAuthority,
+        "\"proxy_url\":\"http://routejson.token:secret@127.0.0.1:8080\"",
+        "\"proxy_url\":\"\"",
+    );
+}
+
+test "Chimera Authority rejects missing required impersonation target" {
+    try expectMutatedAuthorityError(
+        error.InvalidChimeraAuthority,
+        "\"impersonate_target\":\"chrome136\"",
+        "\"impersonate_target\":null",
+    );
+}
+
+fn expectMutatedAuthorityError(expected: anyerror, needle: []const u8, replacement: []const u8) !void {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const mutated = try std.mem.replaceOwned(u8, arena.allocator(), test_authority_json, needle, replacement);
+    try testing.expectError(expected, Authority.parseLeaky(arena.allocator(), mutated));
 }
