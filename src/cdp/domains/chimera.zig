@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const CDP = @import("../CDP.zig");
+const Diagnostics = @import("../../chimera/Diagnostics.zig");
 const libcurl = @import("../../sys/libcurl.zig");
 
 pub fn processMessage(cmd: *CDP.Command) !void {
@@ -14,40 +15,8 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 }
 
 fn getProfileDiagnostics(cmd: *CDP.Command) !void {
-    const config = cmd.cdp.browser.http_client.network.config;
-    const authority = config.chimeraAuthority();
-    const profile = if (authority) |loaded| &loaded.profile else null;
-    const diagnostics = if (authority) |loaded| loaded.diagnostics else .{};
-    const target = config.curlImpersonateTarget();
-    const requires_curl_impersonate = if (profile) |p|
-        p.capabilities.requires_curl_impersonate or
-            p.transport.requires_curl_impersonate or
-            diagnostics.requires_curl_impersonate
-    else
-        false;
-
-    return cmd.sendResult(.{
-        .authority_version = if (authority) |loaded| loaded.authority_version else null,
-        .profile_id = if (authority) |loaded| loaded.profile_id else null,
-        .proxy_configured = config.httpProxy() != null,
-        .impersonation_target = target,
-        .requires_curl_impersonate = requires_curl_impersonate,
-        .curl_impersonate_available = libcurl.has_curl_impersonate,
-        .impersonation_active = target != null and libcurl.has_curl_impersonate,
-        .header_profile_active = if (profile) |p|
-            std.mem.eql(u8, config.http_headers.user_agent, p.headers.user_agent)
-        else
-            false,
-        .navigator_profile_active = profile != null,
-        .uadata_profile_active = profile != null,
-        .plugin_profile_active = if (profile) |p| p.plugins.pdf_enabled else false,
-        .canvas_profile_active = if (profile) |p| p.canvas.enabled else false,
-        .audio_profile_active = if (profile) |p| p.audio.enabled else false,
-        .timezone_path = "runtime_probe",
-        .webrtc_supported = false,
-        .webrtc_exit_ip_active = false,
-        .webrtc_exit_ip = null,
-    }, .{});
+    const config = &cmd.cdp.browser.http_client.network.config;
+    return cmd.sendResult(Diagnostics.fromConfig(config), .{});
 }
 
 const testing = @import("../testing.zig");
@@ -72,8 +41,10 @@ test "cdp.Chimera: getProfileDiagnostics reports unmanaged defaults" {
         .plugin_profile_active = false,
         .canvas_profile_active = false,
         .audio_profile_active = false,
+        .init_scripts_registered = false,
         .timezone_path = "runtime_probe",
         .webrtc_supported = false,
         .webrtc_exit_ip_active = false,
+        .degraded_capabilities = &.{},
     }, .{ .id = 1 });
 }
