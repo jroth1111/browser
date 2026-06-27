@@ -39,7 +39,8 @@ pub fn fromConfig(config: anytype) Snapshot {
             profile.transport.requires_curl_impersonate or
             diagnostics.requires_curl_impersonate;
         const impersonation_active = target != null and libcurl.has_curl_impersonate;
-        const canvas_profile_active = profile.canvas.enabled;
+        // Runtime liveness is verified by the shared profile probe.
+        const canvas_profile_active = false;
 
         return .{
             .authority_version = loaded.authority_version,

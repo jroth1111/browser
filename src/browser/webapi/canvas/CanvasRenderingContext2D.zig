@@ -47,7 +47,7 @@ const FilledRect = struct {
     height: f64,
     rgba: color.RGBA,
 
-    fn contains(self: FilledRect, x: i32, y: i32) bool {
+    fn contains(self: FilledRect, x: i64, y: i64) bool {
         const xf = @as(f64, @floatFromInt(x)) + 0.5;
         const yf = @as(f64, @floatFromInt(y)) + 0.5;
         return xf >= self.x and
@@ -117,19 +117,20 @@ pub fn getImageData(
     if (sw <= 0 or sh <= 0) {
         return error.IndexSizeError;
     }
+    const image_data = try ImageData.init(@as(u32, @intCast(sw)), @as(u32, @intCast(sh)), null, exec);
+    const pixels = image_data.pixelData(exec);
     const width: usize = @intCast(sw);
     const height: usize = @intCast(sh);
-    const pixel_count = std.math.mul(usize, width, height) catch return error.IndexSizeError;
-    const byte_len = std.math.mul(usize, pixel_count, 4) catch return error.IndexSizeError;
-    const pixels = try exec.call_arena.alloc(u8, byte_len);
+    const sx_base: i64 = sx;
+    const sy_base: i64 = sy;
     const seed = canvasSeed(exec);
 
     var pos: usize = 0;
     for (0..height) |y| {
         for (0..width) |x| {
             const rgba = self.pixelAt(
-                sx + @as(i32, @intCast(x)),
-                sy + @as(i32, @intCast(y)),
+                sx_base + @as(i64, @intCast(x)),
+                sy_base + @as(i64, @intCast(y)),
                 seed,
             );
             pixels[pos + 0] = rgba.r;
@@ -140,7 +141,7 @@ pub fn getImageData(
         }
     }
 
-    return ImageData.initWithPixels(@as(u32, @intCast(width)), @as(u32, @intCast(height)), null, pixels, exec);
+    return image_data;
 }
 
 pub fn save(_: *CanvasRenderingContext2D) void {}
@@ -196,7 +197,7 @@ pub fn pngRawPixels(
         out[pos] = 0;
         pos += 1;
         for (0..width) |x| {
-            const rgba = self.pixelAt(@intCast(x), @intCast(y), seed);
+            const rgba = self.pixelAt(@as(i64, @intCast(x)), @as(i64, @intCast(y)), seed);
             out[pos + 0] = rgba.r;
             out[pos + 1] = rgba.g;
             out[pos + 2] = rgba.b;
@@ -207,7 +208,7 @@ pub fn pngRawPixels(
     return out;
 }
 
-fn pixelAt(self: *const CanvasRenderingContext2D, x: i32, y: i32, seed: u64) color.RGBA {
+fn pixelAt(self: *const CanvasRenderingContext2D, x: i64, y: i64, seed: u64) color.RGBA {
     var rgba = self.basePixelAt(x, y);
     if (seed != 0 and rgba.a != 0) {
         rgba.r = noisyChannel(rgba.r, seed, x, y, 0);
@@ -217,16 +218,16 @@ fn pixelAt(self: *const CanvasRenderingContext2D, x: i32, y: i32, seed: u64) col
     return rgba;
 }
 
-fn basePixelAt(self: *const CanvasRenderingContext2D, x: i32, y: i32) color.RGBA {
+fn basePixelAt(self: *const CanvasRenderingContext2D, x: i64, y: i64) color.RGBA {
     if (self._filled_rect) |rect| {
         if (rect.contains(x, y)) return rect.rgba;
     }
     return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 }
 
-fn noisyChannel(value: u8, seed: u64, x: i32, y: i32, channel: u8) u8 {
-    const ux: u64 = @bitCast(@as(i64, x));
-    const uy: u64 = @bitCast(@as(i64, y));
+fn noisyChannel(value: u8, seed: u64, x: i64, y: i64, channel: u8) u8 {
+    const ux: u64 = @bitCast(x);
+    const uy: u64 = @bitCast(y);
     const rotated_y = (uy << 17) | (uy >> 47);
     const mixed = Seeds.mix(seed, ux ^ rotated_y ^ (@as(u64, channel) << 56));
     const delta = @as(i16, @intCast(mixed % 3)) - 1;
