@@ -282,6 +282,20 @@ fn modeNeedsHttp(mode: Mode) bool {
     return mode != .help and mode != .version;
 }
 
+fn authorityRequiresCurlImpersonate(authority: *const ChimeraAuthority) bool {
+    const profile = &authority.profile;
+    return profile.capabilities.requires_curl_impersonate or
+        profile.transport.requires_curl_impersonate or
+        authority.diagnostics.requires_curl_impersonate;
+}
+
+fn authorityCurlImpersonateTarget(authority: *const ChimeraAuthority) ?[]const u8 {
+    if (!authorityRequiresCurlImpersonate(authority)) {
+        return null;
+    }
+    return authority.profile.transport.impersonate_target;
+}
+
 pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
     var config = Config{
         .mode = mode,
@@ -296,16 +310,12 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         config.chimera_authority_proxy = try allocator.dupeZ(u8, config.chimera_authority.?.network.proxy_url);
         errdefer if (config.chimera_authority_proxy) |proxy| allocator.free(proxy);
         const authority = &config.chimera_authority.?;
-        const profile = &authority.profile;
-        if (profile.transport.impersonate_target) |target| {
+        const requires_curl_impersonate = authorityRequiresCurlImpersonate(authority);
+        if (authorityCurlImpersonateTarget(authority)) |target| {
             config.chimera_impersonate_target = try allocator.dupeZ(u8, target);
             errdefer if (config.chimera_impersonate_target) |value| allocator.free(value);
         }
-        if ((profile.capabilities.requires_curl_impersonate or
-            profile.transport.requires_curl_impersonate or
-            authority.diagnostics.requires_curl_impersonate) and
-            !libcurl.has_curl_impersonate)
-        {
+        if (requires_curl_impersonate and !libcurl.has_curl_impersonate) {
             return error.CurlImpersonateUnavailable;
         }
     }
@@ -869,4 +879,90 @@ test "managed profile file option keeps neutral CLI alias" {
         }
     }
     try std.testing.expect(found);
+}
+
+test "managed authority exposes curl target only when impersonation is required" {
+    var optional_authority = testChimeraAuthority(false);
+    try std.testing.expect(!authorityRequiresCurlImpersonate(&optional_authority));
+    try std.testing.expectEqual(@as(?[]const u8, null), authorityCurlImpersonateTarget(&optional_authority));
+
+    var required_authority = testChimeraAuthority(true);
+    try std.testing.expect(authorityRequiresCurlImpersonate(&required_authority));
+    try std.testing.expectEqualStrings("chrome136", authorityCurlImpersonateTarget(&required_authority).?);
+}
+
+fn testChimeraAuthority(requires_curl_impersonate: bool) ChimeraAuthority {
+    const Profile = @import("chimera/Profile.zig");
+    const languages = &[_][]const u8{ "en-AU", "en" };
+    const brands = &[_]Profile.Brand{.{ .brand = "Chromium", .version = "136" }};
+    const full_version_list = &[_]Profile.Brand{.{ .brand = "Chromium", .version = "136.0.0.0" }};
+    const form_factor = &[_][]const u8{"Desktop"};
+
+    return .{
+        .authority_version = ChimeraAuthority.VERSION,
+        .profile_schema_version = Profile.VERSION,
+        .profile_id = "lightpanda:sess-1",
+        .target_domain = "example.com",
+        .profile = .{
+            .schema_version = Profile.VERSION,
+            .profile_id = "lightpanda:sess-1",
+            .target_domain = "example.com",
+            .user_agent = "Mozilla/5.0",
+            .app_version = "5.0",
+            .accept_language = "en-AU,en;q=0.9",
+            .languages = languages,
+            .headers = .{
+                .user_agent = "Mozilla/5.0",
+                .accept_language = "en-AU,en;q=0.9",
+                .sec_ch_ua = "\"Chromium\";v=\"136\"",
+                .sec_ch_ua_mobile = "?0",
+                .sec_ch_ua_platform = "\"macOS\"",
+            },
+            .navigator = .{
+                .platform = "MacIntel",
+                .vendor = "Google Inc.",
+                .product = "Gecko",
+                .hardware_concurrency = 8,
+                .device_memory = 8,
+                .max_touch_points = 0,
+                .webdriver = false,
+            },
+            .ua_data = .{
+                .brands = brands,
+                .full_version_list = full_version_list,
+                .mobile = false,
+                .platform = "macOS",
+                .architecture = "arm",
+                .bitness = "64",
+                .model = "",
+                .platform_version = "15.0.0",
+                .ua_full_version = "136.0.0.0",
+                .wow64 = false,
+                .form_factor = form_factor,
+            },
+            .seeds = .{ .canvas = 111, .audio = 222, .font = 333, .human = 444 },
+            .plugins = .{ .pdf_enabled = true },
+            .canvas = .{ .enabled = true, .seed = 111 },
+            .audio = .{ .enabled = true, .seed = 222 },
+            .transport = .{
+                .impersonate_target = "chrome136",
+                .requires_curl_impersonate = requires_curl_impersonate,
+            },
+            .capabilities = .{
+                .requires_proxy = true,
+                .requires_webrtc_exit_ip = false,
+                .requires_curl_impersonate = requires_curl_impersonate,
+            },
+        },
+        .network = .{
+            .proxy_url = "http://routejson.token:secret@127.0.0.1:8080",
+            .route_id = "exit-a",
+            .proxy_route = "lock:exit-a:sess-1:lightpanda",
+            .requires_proxy = true,
+        },
+        .diagnostics = .{
+            .expected_impersonation_target = "chrome136",
+            .requires_curl_impersonate = requires_curl_impersonate,
+        },
+    };
 }
