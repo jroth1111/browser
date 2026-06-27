@@ -28,6 +28,7 @@ const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
 const Crypto = @import("Crypto.zig");
 const CSS = @import("CSS.zig");
+const Chrome = @import("Chrome.zig");
 const Navigator = @import("Navigator.zig");
 const ModelContext = @import("ModelContext.zig");
 const Screen = @import("Screen.zig");
@@ -67,6 +68,7 @@ _proto: *EventTarget,
 _frame: *Frame,
 _document: *Document,
 _css: CSS = .init,
+_chrome: Chrome = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
@@ -241,6 +243,13 @@ pub fn getCrypto(self: *Window) *Crypto {
 
 pub fn getCSS(self: *Window) *CSS {
     return &self._css;
+}
+
+pub fn getChrome(self: *Window, exec: *const Execution) ?*Chrome {
+    if (exec.session.browser.http_client.network.config.chimeraAuthority() == null) {
+        return null;
+    }
+    return &self._chrome;
 }
 
 pub fn getPerformance(self: *Window) *Performance {
@@ -1014,6 +1023,7 @@ pub const JsApi = struct {
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{});
     pub const CSS = bridge.accessor(Window.getCSS, null, .{});
+    pub const chrome = bridge.accessor(Window.getChrome, null, .{ .null_as_undefined = true });
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{});
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});

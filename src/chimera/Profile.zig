@@ -15,7 +15,12 @@ languages: []const []const u8,
 headers: Headers,
 navigator: Navigator,
 ua_data: UAData,
+seeds: Seeds,
+plugins: Plugins,
+canvas: SeededSurface,
+audio: SeededSurface,
 transport: Transport,
+capabilities: Capabilities,
 
 pub const Headers = struct {
     user_agent: []const u8,
@@ -54,9 +59,31 @@ pub const UAData = struct {
     form_factor: []const []const u8,
 };
 
+pub const Seeds = struct {
+    canvas: u64,
+    audio: u64,
+    font: u64,
+    human: u64,
+};
+
+pub const Plugins = struct {
+    pdf_enabled: bool,
+};
+
+pub const SeededSurface = struct {
+    enabled: bool,
+    seed: u64,
+};
+
 pub const Transport = struct {
     impersonate_target: ?[]const u8 = null,
     requires_curl_impersonate: bool = false,
+};
+
+pub const Capabilities = struct {
+    requires_proxy: bool,
+    requires_webrtc_exit_ip: bool,
+    requires_curl_impersonate: bool,
 };
 
 pub fn fromJsonValue(allocator: Allocator, value: std.json.Value) !Profile {
@@ -72,6 +99,16 @@ pub fn fromJsonValue(allocator: Allocator, value: std.json.Value) !Profile {
     const navigator_obj = try object(navigator_value);
     const ua_data_value = obj.get("ua_data") orelse return error.InvalidChimeraProfile;
     const ua_data_obj = try object(ua_data_value);
+    const seeds_value = obj.get("seeds") orelse return error.InvalidChimeraProfile;
+    const seeds_obj = try object(seeds_value);
+    const plugins_value = obj.get("plugins") orelse return error.InvalidChimeraProfile;
+    const plugins_obj = try object(plugins_value);
+    const canvas_value = obj.get("canvas") orelse return error.InvalidChimeraProfile;
+    const canvas_obj = try object(canvas_value);
+    const audio_value = obj.get("audio") orelse return error.InvalidChimeraProfile;
+    const audio_obj = try object(audio_value);
+    const capabilities_value = obj.get("capabilities") orelse return error.InvalidChimeraProfile;
+    const capabilities_obj = try object(capabilities_value);
     var transport = Transport{};
     if (obj.get("transport")) |transport_value| {
         const transport_obj = try object(transport_value);
@@ -118,7 +155,29 @@ pub fn fromJsonValue(allocator: Allocator, value: std.json.Value) !Profile {
             .wow64 = try requiredBool(ua_data_obj, "wow64"),
             .form_factor = try requiredStringList(allocator, ua_data_obj, "form_factor"),
         },
+        .seeds = .{
+            .canvas = try requiredU64(seeds_obj, "canvas"),
+            .audio = try requiredU64(seeds_obj, "audio"),
+            .font = try requiredU64(seeds_obj, "font"),
+            .human = try requiredU64(seeds_obj, "human"),
+        },
+        .plugins = .{
+            .pdf_enabled = try requiredBool(plugins_obj, "pdf_enabled"),
+        },
+        .canvas = .{
+            .enabled = try requiredBool(canvas_obj, "enabled"),
+            .seed = try requiredU64(canvas_obj, "seed"),
+        },
+        .audio = .{
+            .enabled = try requiredBool(audio_obj, "enabled"),
+            .seed = try requiredU64(audio_obj, "seed"),
+        },
         .transport = transport,
+        .capabilities = .{
+            .requires_proxy = try requiredBool(capabilities_obj, "requires_proxy"),
+            .requires_webrtc_exit_ip = try requiredBool(capabilities_obj, "requires_webrtc_exit_ip"),
+            .requires_curl_impersonate = try requiredBool(capabilities_obj, "requires_curl_impersonate"),
+        },
     };
 }
 
@@ -132,7 +191,7 @@ fn object(value: std.json.Value) !std.json.ObjectMap {
 fn requiredString(obj: std.json.ObjectMap, key: []const u8) ![]const u8 {
     const value = obj.get(key) orelse return error.InvalidChimeraProfile;
     return switch (value) {
-        inline .string, .allocated_string => |str| if (str.len > 0) str else error.InvalidChimeraProfile,
+        .string => |str| if (str.len > 0) str else error.InvalidChimeraProfile,
         else => error.InvalidChimeraProfile,
     };
 }
@@ -140,7 +199,7 @@ fn requiredString(obj: std.json.ObjectMap, key: []const u8) ![]const u8 {
 fn optionalString(obj: std.json.ObjectMap, key: []const u8) !?[]const u8 {
     const value = obj.get(key) orelse return null;
     return switch (value) {
-        inline .string, .allocated_string => |str| if (str.len > 0) str else null,
+        .string => |str| if (str.len > 0) str else null,
         .null => null,
         else => error.InvalidChimeraProfile,
     };
@@ -157,7 +216,7 @@ fn requiredStringList(allocator: Allocator, obj: std.json.ObjectMap, key: []cons
     const out = try allocator.alloc([]const u8, items.len);
     for (items, 0..) |item, i| {
         out[i] = switch (item) {
-            inline .string, .allocated_string => |str| if (str.len > 0) str else return error.InvalidChimeraProfile,
+            .string => |str| if (str.len > 0) str else return error.InvalidChimeraProfile,
             else => return error.InvalidChimeraProfile,
         };
     }
@@ -207,6 +266,16 @@ fn requiredU32(obj: std.json.ObjectMap, key: []const u8) !u32 {
         else => return error.InvalidChimeraProfile,
     };
     if (raw < 0 or raw > std.math.maxInt(u32)) return error.InvalidChimeraProfile;
+    return @intCast(raw);
+}
+
+fn requiredU64(obj: std.json.ObjectMap, key: []const u8) !u64 {
+    const value = obj.get(key) orelse return error.InvalidChimeraProfile;
+    const raw = switch (value) {
+        .integer => |n| n,
+        else => return error.InvalidChimeraProfile,
+    };
+    if (raw < 0) return error.InvalidChimeraProfile;
     return @intCast(raw);
 }
 
@@ -262,8 +331,30 @@ test "Chimera Profile parses managed browser identity" {
         \\    "wow64":false,
         \\    "form_factor":["Desktop"]
         \\  },
+        \\  "seeds":{
+        \\    "canvas":111,
+        \\    "audio":222,
+        \\    "font":333,
+        \\    "human":444
+        \\  },
+        \\  "plugins":{
+        \\    "pdf_enabled":true
+        \\  },
+        \\  "canvas":{
+        \\    "enabled":true,
+        \\    "seed":111
+        \\  },
+        \\  "audio":{
+        \\    "enabled":true,
+        \\    "seed":222
+        \\  },
         \\  "transport":{
         \\    "impersonate_target":"chrome136",
+        \\    "requires_curl_impersonate":true
+        \\  },
+        \\  "capabilities":{
+        \\    "requires_proxy":true,
+        \\    "requires_webrtc_exit_ip":false,
         \\    "requires_curl_impersonate":true
         \\  }
         \\}
@@ -277,6 +368,9 @@ test "Chimera Profile parses managed browser identity" {
     try testing.expectString("en-AU", profile.languages[0]);
     try testing.expectString("MacIntel", profile.navigator.platform);
     try testing.expectString("Chromium", profile.ua_data.brands[0].brand);
+    try testing.expectEqual(@as(u64, 111), profile.canvas.seed);
+    try testing.expect(profile.plugins.pdf_enabled);
     try testing.expectString("chrome136", profile.transport.impersonate_target.?);
     try testing.expect(profile.transport.requires_curl_impersonate);
+    try testing.expect(profile.capabilities.requires_proxy);
 }

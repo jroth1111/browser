@@ -50,13 +50,34 @@ pub fn fromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !Autho
     const profile_value = obj.get("profile") orelse return error.InvalidChimeraAuthority;
     const profile = try Profile.fromJsonValue(allocator, profile_value);
     const network = try networkFromValue(obj.get("network") orelse return error.InvalidChimeraAuthority);
-    const diagnostics = diagnosticsFromValue(obj.get("diagnostics")) catch .{};
+    const diagnostics = diagnosticsFromValue(obj.get("diagnostics")) catch Diagnostics{};
+    const profile_id = try requiredString(obj, "profile_id");
+    const target_domain = try requiredString(obj, "target_domain");
+    if (!std.mem.eql(u8, profile_id, profile.profile_id)) {
+        return error.InvalidChimeraAuthority;
+    }
+    if (!std.mem.eql(u8, target_domain, profile.target_domain)) {
+        return error.InvalidChimeraAuthority;
+    }
+    if (profile.capabilities.requires_proxy and !network.requires_proxy) {
+        return error.InvalidChimeraAuthority;
+    }
+    if ((profile.capabilities.requires_proxy or network.requires_proxy) and network.proxy_url.len == 0) {
+        return error.InvalidChimeraAuthority;
+    }
+    if ((profile.capabilities.requires_curl_impersonate or
+        profile.transport.requires_curl_impersonate or
+        diagnostics.requires_curl_impersonate) and
+        profile.transport.impersonate_target == null)
+    {
+        return error.InvalidChimeraAuthority;
+    }
 
     return .{
         .authority_version = authority_version,
         .profile_schema_version = profile_schema_version,
-        .profile_id = try requiredString(obj, "profile_id"),
-        .target_domain = try requiredString(obj, "target_domain"),
+        .profile_id = profile_id,
+        .target_domain = target_domain,
         .profile = profile,
         .network = network,
         .diagnostics = diagnostics,
@@ -92,7 +113,7 @@ fn object(value: std.json.Value) !std.json.ObjectMap {
 fn requiredString(obj: std.json.ObjectMap, key: []const u8) ![]const u8 {
     const value = obj.get(key) orelse return error.InvalidChimeraAuthority;
     return switch (value) {
-        inline .string, .allocated_string => |str| if (str.len > 0) str else error.InvalidChimeraAuthority,
+        .string => |str| if (str.len > 0) str else error.InvalidChimeraAuthority,
         else => error.InvalidChimeraAuthority,
     };
 }
@@ -100,7 +121,7 @@ fn requiredString(obj: std.json.ObjectMap, key: []const u8) ![]const u8 {
 fn optionalString(obj: std.json.ObjectMap, key: []const u8) !?[]const u8 {
     const value = obj.get(key) orelse return null;
     return switch (value) {
-        inline .string, .allocated_string => |str| if (str.len > 0) str else null,
+        .string => |str| if (str.len > 0) str else null,
         .null => null,
         else => error.InvalidChimeraAuthority,
     };
@@ -163,8 +184,30 @@ test "Chimera Authority parses managed launch authority" {
         \\      "wow64":false,
         \\      "form_factor":["Desktop"]
         \\    },
+        \\    "seeds":{
+        \\      "canvas":111,
+        \\      "audio":222,
+        \\      "font":333,
+        \\      "human":444
+        \\    },
+        \\    "plugins":{
+        \\      "pdf_enabled":true
+        \\    },
+        \\    "canvas":{
+        \\      "enabled":true,
+        \\      "seed":111
+        \\    },
+        \\    "audio":{
+        \\      "enabled":true,
+        \\      "seed":222
+        \\    },
         \\    "transport":{
         \\      "impersonate_target":"chrome136",
+        \\      "requires_curl_impersonate":true
+        \\    },
+        \\    "capabilities":{
+        \\      "requires_proxy":true,
+        \\      "requires_webrtc_exit_ip":false,
         \\      "requires_curl_impersonate":true
         \\    }
         \\  },

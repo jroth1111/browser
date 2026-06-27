@@ -273,6 +273,7 @@ mode: Mode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
 chimera_authority: ?ChimeraAuthority = null,
+chimera_authority_proxy: ?[:0]const u8 = null,
 
 fn modeNeedsHttp(mode: Mode) bool {
     return mode != .help and mode != .version;
@@ -284,9 +285,11 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         .exec_name = exec_name,
         .http_headers = undefined,
         .chimera_authority = null,
+        .chimera_authority_proxy = null,
     };
     if (config.chimeraAuthorityFile()) |path| {
         config.chimera_authority = try ChimeraAuthority.loadFromFile(allocator, path);
+        config.chimera_authority_proxy = try allocator.dupeZ(u8, config.chimera_authority.?.network.proxy_url);
     }
     if (modeNeedsHttp(mode)) {
         config.http_headers = try HttpHeaders.init(allocator, &config);
@@ -297,6 +300,9 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
 pub fn deinit(self: *const Config, allocator: Allocator) void {
     if (modeNeedsHttp(self.mode)) {
         self.http_headers.deinit(allocator);
+    }
+    if (self.chimera_authority_proxy) |proxy| {
+        allocator.free(proxy);
     }
 }
 
@@ -345,6 +351,9 @@ pub fn enableExternalStylesheets(self: *const Config) bool {
 }
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
+    if (self.chimera_authority_proxy) |proxy| {
+        return proxy;
+    }
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
         else => unreachable,
@@ -366,6 +375,9 @@ pub fn chimeraAuthority(self: *const Config) ?*const ChimeraAuthority {
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
+    if (self.chimera_authority != null) {
+        return null;
+    }
     return switch (self.mode) {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.proxy_bearer_token,
         .help, .version => null,
