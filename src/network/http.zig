@@ -112,6 +112,15 @@ pub const Header = struct {
 pub const Headers = struct {
     headers: ?*libcurl.CurlSList,
 
+    pub const BrowserHeaderOverrides = struct {
+        user_agent_header: ?[:0]const u8 = null,
+        accept_language_header: ?[:0]const u8 = null,
+        client_hints_enabled: bool = true,
+        sec_ch_ua_header: ?[:0]const u8 = null,
+        sec_ch_ua_mobile_header: ?[:0]const u8 = null,
+        sec_ch_ua_platform_header: ?[:0]const u8 = null,
+    };
+
     pub fn init(user_agent: [:0]const u8) !Headers {
         const header_list = libcurl.curl_slist_append(null, user_agent);
         if (header_list == null) {
@@ -121,16 +130,26 @@ pub const Headers = struct {
     }
 
     pub fn initBrowser(http_headers: *const Config.HttpHeaders, user_agent_header: [:0]const u8) !Headers {
-        var headers = try Headers.init(user_agent_header);
+        return initBrowserWithOverrides(http_headers, .{ .user_agent_header = user_agent_header });
+    }
+
+    pub fn initBrowserWithOverrides(http_headers: *const Config.HttpHeaders, overrides: BrowserHeaderOverrides) !Headers {
+        var headers = try Headers.init(overrides.user_agent_header orelse http_headers.user_agent_header);
         errdefer headers.deinit();
 
-        try headers.set(http_headers.sec_ch_ua_header);
-        try headers.set(http_headers.accept_language_header);
-        if (http_headers.sec_ch_ua_mobile_header) |hdr| {
-            try headers.set(hdr);
-        }
-        if (http_headers.sec_ch_ua_platform_header) |hdr| {
-            try headers.set(hdr);
+        try headers.set(overrides.accept_language_header orelse http_headers.accept_language_header);
+        if (overrides.client_hints_enabled) {
+            try headers.set(overrides.sec_ch_ua_header orelse http_headers.sec_ch_ua_header);
+            if (overrides.sec_ch_ua_mobile_header) |hdr| {
+                try headers.set(hdr);
+            } else if (http_headers.sec_ch_ua_mobile_header) |hdr| {
+                try headers.set(hdr);
+            }
+            if (overrides.sec_ch_ua_platform_header) |hdr| {
+                try headers.set(hdr);
+            } else if (http_headers.sec_ch_ua_platform_header) |hdr| {
+                try headers.set(hdr);
+            }
         }
         return headers;
     }
@@ -556,6 +575,13 @@ pub const Connection = struct {
         // default write callback to prevent libcurl from writing to stdout
         try self.setWriteCallback(discardBody);
 
+        if (config.curlImpersonateTarget()) |target| {
+            libcurl.curl_easy_impersonate(self._easy, target.ptr, 0) catch |err| {
+                log.err(.http, "curl impersonate failed", .{ .target = target, .err = err });
+                return err;
+            };
+        }
+
         // IP filter: block private/internal network addresses
         if (ip_filter) |filter| {
             try libcurl.curl_easy_setopt(self._easy, .opensocket_function, opensocketCallback);
@@ -885,6 +911,52 @@ test "Headers.initBrowser keeps configured profile headers when user agent is ov
     try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"120\", \"Not?A_Brand\";v=\"8\"");
     try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectHeader(headers, "Sec-CH-UA-Platform", "\"Windows\"");
+}
+
+test "Headers.initBrowserWithOverrides updates identity headers together" {
+    const http_headers = Config.HttpHeaders{
+        .user_agent = "Profile/1.0",
+        .user_agent_header = "User-Agent: Profile/1.0",
+        .accept_language_header = "Accept-Language: fr-FR,fr;q=0.9",
+        .sec_ch_ua_header = "Sec-CH-UA: \"Chromium\";v=\"120\"",
+        .sec_ch_ua_mobile_header = "Sec-CH-UA-Mobile: ?0",
+        .sec_ch_ua_platform_header = "Sec-CH-UA-Platform: \"Windows\"",
+        .proxy_bearer_header = null,
+    };
+    var headers = try Headers.initBrowserWithOverrides(&http_headers, .{
+        .user_agent_header = "User-Agent: Override/2.0",
+        .accept_language_header = "Accept-Language: en-US,en;q=0.9",
+        .sec_ch_ua_header = "Sec-CH-UA: \"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"",
+        .sec_ch_ua_mobile_header = "Sec-CH-UA-Mobile: ?0",
+        .sec_ch_ua_platform_header = "Sec-CH-UA-Platform: \"Linux\"",
+    });
+    defer headers.deinit();
+
+    try expectHeader(headers, "User-Agent", "Override/2.0");
+    try expectHeader(headers, "Accept-Language", "en-US,en;q=0.9");
+    try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
+    try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
+    try expectHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
+}
+
+test "Headers.initBrowserWithOverrides can suppress client hints" {
+    const http_headers = Config.HttpHeaders{
+        .user_agent = "Profile/1.0",
+        .user_agent_header = "User-Agent: Profile/1.0",
+        .accept_language_header = "Accept-Language: fr-FR,fr;q=0.9",
+        .sec_ch_ua_header = "Sec-CH-UA: \"Chromium\";v=\"120\"",
+        .sec_ch_ua_mobile_header = "Sec-CH-UA-Mobile: ?0",
+        .sec_ch_ua_platform_header = "Sec-CH-UA-Platform: \"Windows\"",
+        .proxy_bearer_header = null,
+    };
+    var headers = try Headers.initBrowserWithOverrides(&http_headers, .{ .client_hints_enabled = false });
+    defer headers.deinit();
+
+    try expectHeader(headers, "User-Agent", "Profile/1.0");
+    try expectHeader(headers, "Accept-Language", "fr-FR,fr;q=0.9");
+    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA").count);
+    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Mobile").count);
+    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Platform").count);
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {

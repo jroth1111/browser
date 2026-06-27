@@ -29,6 +29,7 @@ const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 const ChimeraAuthority = @import("chimera/Authority.zig");
 const Headers = @import("chimera/Headers.zig");
+const libcurl = @import("sys/libcurl.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -275,6 +276,7 @@ exec_name: []const u8,
 http_headers: HttpHeaders,
 chimera_authority: ?ChimeraAuthority = null,
 chimera_authority_proxy: ?[:0]const u8 = null,
+chimera_impersonate_target: ?[:0]const u8 = null,
 
 fn modeNeedsHttp(mode: Mode) bool {
     return mode != .help and mode != .version;
@@ -287,10 +289,25 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         .http_headers = undefined,
         .chimera_authority = null,
         .chimera_authority_proxy = null,
+        .chimera_impersonate_target = null,
     };
     if (config.chimeraAuthorityFile()) |path| {
         config.chimera_authority = try ChimeraAuthority.loadFromFile(allocator, path);
         config.chimera_authority_proxy = try allocator.dupeZ(u8, config.chimera_authority.?.network.proxy_url);
+        errdefer if (config.chimera_authority_proxy) |proxy| allocator.free(proxy);
+        const authority = &config.chimera_authority.?;
+        const profile = &authority.profile;
+        if (profile.transport.impersonate_target) |target| {
+            config.chimera_impersonate_target = try allocator.dupeZ(u8, target);
+            errdefer if (config.chimera_impersonate_target) |value| allocator.free(value);
+        }
+        if ((profile.capabilities.requires_curl_impersonate or
+            profile.transport.requires_curl_impersonate or
+            authority.diagnostics.requires_curl_impersonate) and
+            !libcurl.has_curl_impersonate)
+        {
+            return error.CurlImpersonateUnavailable;
+        }
     }
     if (modeNeedsHttp(mode)) {
         config.http_headers = try HttpHeaders.init(allocator, &config);
@@ -304,6 +321,9 @@ pub fn deinit(self: *const Config, allocator: Allocator) void {
     }
     if (self.chimera_authority_proxy) |proxy| {
         allocator.free(proxy);
+    }
+    if (self.chimera_impersonate_target) |target| {
+        allocator.free(target);
     }
 }
 
@@ -373,6 +393,10 @@ pub fn chimeraAuthority(self: *const Config) ?*const ChimeraAuthority {
         return authority;
     }
     return null;
+}
+
+pub fn curlImpersonateTarget(self: *const Config) ?[:0]const u8 {
+    return self.chimera_impersonate_target;
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {

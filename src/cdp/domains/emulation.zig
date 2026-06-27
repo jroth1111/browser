@@ -21,6 +21,8 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 const Config = @import("../../Config.zig");
+const HttpClient = @import("../../browser/HttpClient.zig");
+const Http = @import("../../network/http.zig");
 
 const log = lp.log;
 
@@ -145,14 +147,8 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
         userAgent: []const u8,
         acceptLanguage: ?[]const u8 = null,
         platform: ?[]const u8 = null,
+        userAgentMetadata: ?HttpClient.UserAgentMetadata = null,
     })) orelse return error.InvalidParams;
-
-    if (params.acceptLanguage) |v| {
-        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "acceptLanguage", .value = v });
-    }
-    if (params.platform) |v| {
-        log.warn(.not_implemented, "Emulation.setUserAgentOverride", .{ .param = "platform", .value = v });
-    }
 
     const ua = params.userAgent;
     Config.validateUserAgent(ua) catch |err| switch (err) {
@@ -165,7 +161,7 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const http_client = &cmd.cdp.browser.http_client;
-    try http_client.setUserAgentOverride(ua);
+    try http_client.setUserAgentOverride(ua, params.acceptLanguage, params.platform, params.userAgentMetadata);
     bc.user_agent_changed = true;
 
     return cmd.sendResult(null, .{});
@@ -241,9 +237,6 @@ test "cdp.Emulation: setUserAgentOverride rejects non-printable characters" {
 }
 
 test "cdp.Emulation: setUserAgentOverride with optional params" {
-    const filter: testing.LogFilter = .init(&.{.not_implemented});
-    defer filter.deinit();
-
     var ctx = try testing.context();
     defer ctx.deinit();
     _ = try ctx.loadBrowserContext(.{ .id = "BID-UA5" });
@@ -253,12 +246,63 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
         .method = "Emulation.setUserAgentOverride",
         .params = .{
             .userAgent = "CustomBot/2.0",
-            .acceptLanguage = "en-US",
+            .acceptLanguage = "en-US,en;q=0.9",
             .platform = "Linux",
+            .userAgentMetadata = .{
+                .brands = &.{
+                    .{ .brand = "Chromium", .version = "136" },
+                    .{ .brand = "Not.A/Brand", .version = "24" },
+                },
+                .fullVersionList = &.{
+                    .{ .brand = "Chromium", .version = "136.0.0.0" },
+                    .{ .brand = "Not.A/Brand", .version = "24.0.0.0" },
+                },
+                .fullVersion = "136.0.0.0",
+                .platform = "Linux",
+                .platformVersion = "6.6.0",
+                .architecture = "x86",
+                .bitness = "64",
+                .model = "",
+                .mobile = false,
+                .wow64 = false,
+                .formFactor = &.{"Desktop"},
+            },
         },
     });
 
     try ctx.expectSentResult(null, .{ .id = 5 });
+
+    const client = &ctx.cdp().browser.http_client;
+    try testing.expectEqual("CustomBot/2.0", client.getUserAgent());
+    try testing.expectEqual("en-US", client.getLanguageOverride().?);
+    try testing.expectEqual("Linux", client.getNavigatorPlatformOverride().?);
+
+    const languages = client.getLanguagesOverride().?;
+    try testing.expectEqual(@as(usize, 2), languages.len);
+    try testing.expectEqual("en-US", languages[0]);
+    try testing.expectEqual("en", languages[1]);
+
+    const ua_data = client.getUADataOverride().?;
+    try testing.expectEqual(@as(usize, 2), ua_data.brands.len);
+    try testing.expectEqual("Chromium", ua_data.brands[0].brand);
+    try testing.expectEqual("136", ua_data.brands[0].version);
+    try testing.expectEqual(@as(usize, 2), ua_data.full_version_list.len);
+    try testing.expectEqual("136.0.0.0", ua_data.full_version_list[0].version);
+    try testing.expectEqual(false, ua_data.mobile);
+    try testing.expectEqual("Linux", ua_data.platform);
+    try testing.expectEqual("x86", ua_data.architecture);
+    try testing.expectEqual("64", ua_data.bitness);
+    try testing.expectEqual("6.6.0", ua_data.platform_version);
+    try testing.expectEqual("136.0.0.0", ua_data.ua_full_version);
+    try testing.expectEqual("Desktop", ua_data.form_factor[0]);
+
+    const headers = try client.newHeaders();
+    defer headers.deinit();
+    try expectRequestHeader(headers, "User-Agent", "CustomBot/2.0");
+    try expectRequestHeader(headers, "Accept-Language", "en-US,en;q=0.9");
+    try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
+    try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
 }
 
 test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
@@ -318,4 +362,14 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 9 });
     try testing.expectEqual(1920, page.getViewport().width);
     try testing.expectEqual(1080, page.getViewport().height);
+}
+
+fn expectRequestHeader(headers: Http.Headers, name: []const u8, expected: []const u8) !void {
+    var it = headers.iterator();
+    while (it.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, name)) {
+            return testing.expectEqual(expected, header.value);
+        }
+    }
+    return testing.expect(false);
 }

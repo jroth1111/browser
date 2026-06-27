@@ -47,6 +47,9 @@ pub fn getUserAgent(_: *const Navigator, exec: *const Execution) []const u8 {
 }
 
 pub fn getLanguages(_: *const Navigator, exec: *const Execution) []const []const u8 {
+    if (exec.session.browser.http_client.getLanguagesOverride()) |languages| {
+        return languages;
+    }
     if (chimeraProfile(exec)) |profile| {
         return profile.languages;
     }
@@ -73,6 +76,9 @@ pub fn getAppVersion(_: *const Navigator, exec: *const Execution) []const u8 {
 }
 
 pub fn getLanguage(_: *const Navigator, exec: *const Execution) []const u8 {
+    if (exec.session.browser.http_client.getLanguageOverride()) |language| {
+        return language;
+    }
     if (chimeraProfile(exec)) |profile| {
         return profile.languages[0];
     }
@@ -139,6 +145,9 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
 }
 
 pub fn getPlatform(_: *const Navigator, exec: *const Execution) []const u8 {
+    if (exec.session.browser.http_client.getNavigatorPlatformOverride()) |platform| {
+        return platform;
+    }
     if (chimeraProfile(exec)) |profile| {
         return profile.navigator.platform;
     }

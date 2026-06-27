@@ -41,6 +41,7 @@ pub fn build(b: *Build) !void {
 
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
+    const curl_impersonate_path = b.option([]const u8, "curl_impersonate_path", "Path to prebuilt curl-impersonate directory with lib/ and include/");
     const wpt_extensions = b.option(bool, "wpt_extensions", "Extend WebAPI with WPT driver behavior") orelse false;
 
     const version = resolveVersion(b);
@@ -85,7 +86,7 @@ pub fn build(b: *Build) !void {
         b.default_step.dependOn(fmt_step);
 
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
-        try linkCurl(b, mod, enable_tsan);
+        try linkCurl(b, mod, enable_tsan, curl_impersonate_path);
         try linkHtml5Ever(b, mod);
         linkZenai(b, mod);
         linkIsocline(b, mod);
@@ -295,8 +296,34 @@ fn linkSqlite(b: *Build, mod: *Build.Module, enable_csan: ?std.zig.SanitizeC, is
     mod.linkLibrary(lib);
 }
 
-fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
+fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, curl_impersonate_path: ?[]const u8) !void {
     const target = mod.resolved_target.?;
+
+    if (curl_impersonate_path) |ci_path| {
+        const lib_path: Build.LazyPath = .{ .cwd_relative = b.fmt("{s}/lib", .{ci_path}) };
+        const include_path: Build.LazyPath = .{ .cwd_relative = b.fmt("{s}/include", .{ci_path}) };
+
+        mod.addObjectFile(lib_path.path(b, "libcurl-impersonate.a"));
+        mod.addObjectFile(lib_path.path(b, "libssl.a"));
+        mod.addObjectFile(lib_path.path(b, "libcrypto.a"));
+        mod.addObjectFile(lib_path.path(b, "libnghttp2.a"));
+        mod.addObjectFile(lib_path.path(b, "libbrotlicommon.a"));
+        mod.addObjectFile(lib_path.path(b, "libbrotlidec.a"));
+        mod.addObjectFile(lib_path.path(b, "libbrotlienc.a"));
+        mod.addObjectFile(lib_path.path(b, "libz.a"));
+        mod.addObjectFile(lib_path.path(b, "libzstd.a"));
+        mod.addIncludePath(include_path);
+        mod.addIncludePath(include_path.path(b, "curl"));
+        mod.link_libcpp = true;
+        switch (target.result.os.tag) {
+            .macos => {
+                mod.linkSystemLibrary("iconv", .{});
+                mod.linkSystemLibrary("icucore", .{});
+            },
+            else => {},
+        }
+        return;
+    }
 
     const curl = buildCurl(b, target, mod.optimize.?, is_tsan);
     mod.linkLibrary(curl);

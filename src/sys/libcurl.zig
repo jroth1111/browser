@@ -35,6 +35,7 @@ pub const CurlHttpPost = c.curl_httppost;
 pub const CurlSocket = c.curl_socket_t;
 pub const CurlBlob = c.curl_blob;
 pub const CurlOffT = c.curl_off_t;
+pub const has_curl_impersonate = @hasDecl(c, "curl_easy_impersonate");
 
 pub const CurlDebugFunction = fn (*Curl, CurlInfoType, [*c]u8, usize, *anyopaque) c_int;
 pub const CurlHeaderFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
@@ -581,6 +582,14 @@ pub fn curl_easy_cleanup(easy: *Curl) void {
 
 pub fn curl_easy_reset(easy: *Curl) void {
     c.curl_easy_reset(easy);
+}
+
+pub fn curl_easy_impersonate(easy: *Curl, target: [*:0]const u8, default_headers: c_int) Error!void {
+    if (comptime has_curl_impersonate) {
+        try errorCheck(c.curl_easy_impersonate(easy, target, default_headers));
+    } else {
+        return error.NotBuiltIn;
+    }
 }
 
 pub fn curl_easy_perform(easy: *Curl) Error!void {

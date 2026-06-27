@@ -29,6 +29,7 @@ const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
+const ChimeraProfile = @import("../chimera/Profile.zig");
 
 const CDP = @import("../cdp/CDP.zig");
 const Inbox = @import("../Inbox.zig");
@@ -49,6 +50,183 @@ pub const RobotsLayer = @import("../network/layer/RobotsLayer.zig");
 pub const WebBotAuthLayer = @import("../network/layer/WebBotAuthLayer.zig");
 pub const InterceptionLayer = @import("../network/layer/InterceptionLayer.zig");
 pub const DeferringLayer = @import("../network/layer/DeferringLayer.zig");
+
+pub const UserAgentMetadata = struct {
+    brands: []const ChimeraProfile.Brand = &.{},
+    fullVersionList: ?[]const ChimeraProfile.Brand = null,
+    fullVersion: ?[]const u8 = null,
+    platform: ?[]const u8 = null,
+    platformVersion: ?[]const u8 = null,
+    architecture: ?[]const u8 = null,
+    model: ?[]const u8 = null,
+    mobile: ?bool = null,
+    bitness: ?[]const u8 = null,
+    wow64: ?bool = null,
+    formFactor: ?[]const []const u8 = null,
+};
+
+const UADataOverride = struct {
+    const default_form_factor = [_][]const u8{"Desktop"};
+
+    data: ChimeraProfile.UAData,
+    client_hints_enabled: bool,
+    sec_ch_ua_header: ?[:0]const u8,
+    sec_ch_ua_mobile_header: ?[:0]const u8,
+    sec_ch_ua_platform_header: ?[:0]const u8,
+
+    fn init(allocator: Allocator, metadata: UserAgentMetadata) !UADataOverride {
+        const brands = try copyBrandList(allocator, metadata.brands);
+        errdefer freeBrandList(allocator, brands);
+
+        const full_version_list = try copyBrandList(allocator, metadata.fullVersionList orelse metadata.brands);
+        errdefer freeBrandList(allocator, full_version_list);
+
+        const platform = try allocator.dupe(u8, metadata.platform orelse "");
+        errdefer allocator.free(platform);
+        const architecture = try allocator.dupe(u8, metadata.architecture orelse "");
+        errdefer allocator.free(architecture);
+        const bitness = try allocator.dupe(u8, metadata.bitness orelse "");
+        errdefer allocator.free(bitness);
+        const model = try allocator.dupe(u8, metadata.model orelse "");
+        errdefer allocator.free(model);
+        const platform_version = try allocator.dupe(u8, metadata.platformVersion orelse "");
+        errdefer allocator.free(platform_version);
+        const ua_full_version = try allocator.dupe(u8, metadata.fullVersion orelse "");
+        errdefer allocator.free(ua_full_version);
+        const form_factor = try copyStringList(allocator, metadata.formFactor orelse default_form_factor[0..]);
+        errdefer freeStringList(allocator, form_factor);
+
+        const client_hints_enabled = brands.len > 0;
+        const sec_ch_ua_header = if (client_hints_enabled)
+            try formatSecChUaHeader(allocator, brands)
+        else
+            null;
+        errdefer if (sec_ch_ua_header) |header| allocator.free(header);
+
+        const sec_ch_ua_mobile_header = if (client_hints_enabled)
+            try std.fmt.allocPrintSentinel(allocator, "Sec-CH-UA-Mobile: ?{d}", .{@intFromBool(metadata.mobile orelse false)}, 0)
+        else
+            null;
+        errdefer if (sec_ch_ua_mobile_header) |header| allocator.free(header);
+
+        const sec_ch_ua_platform_header = if (client_hints_enabled)
+            try std.fmt.allocPrintSentinel(allocator, "Sec-CH-UA-Platform: \"{s}\"", .{platform}, 0)
+        else
+            null;
+        errdefer if (sec_ch_ua_platform_header) |header| allocator.free(header);
+
+        return .{
+            .data = .{
+                .brands = brands,
+                .full_version_list = full_version_list,
+                .mobile = metadata.mobile orelse false,
+                .platform = platform,
+                .architecture = architecture,
+                .bitness = bitness,
+                .model = model,
+                .platform_version = platform_version,
+                .ua_full_version = ua_full_version,
+                .wow64 = metadata.wow64 orelse false,
+                .form_factor = form_factor,
+            },
+            .client_hints_enabled = client_hints_enabled,
+            .sec_ch_ua_header = sec_ch_ua_header,
+            .sec_ch_ua_mobile_header = sec_ch_ua_mobile_header,
+            .sec_ch_ua_platform_header = sec_ch_ua_platform_header,
+        };
+    }
+
+    fn deinit(self: *const UADataOverride, allocator: Allocator) void {
+        if (self.sec_ch_ua_platform_header) |header| allocator.free(header);
+        if (self.sec_ch_ua_mobile_header) |header| allocator.free(header);
+        if (self.sec_ch_ua_header) |header| allocator.free(header);
+        freeStringList(allocator, self.data.form_factor);
+        allocator.free(self.data.ua_full_version);
+        allocator.free(self.data.platform_version);
+        allocator.free(self.data.model);
+        allocator.free(self.data.bitness);
+        allocator.free(self.data.architecture);
+        allocator.free(self.data.platform);
+        freeBrandList(allocator, self.data.full_version_list);
+        freeBrandList(allocator, self.data.brands);
+    }
+};
+
+fn copyBrandList(allocator: Allocator, source: []const ChimeraProfile.Brand) ![]const ChimeraProfile.Brand {
+    if (source.len == 0) return &.{};
+    const out = try allocator.alloc(ChimeraProfile.Brand, source.len);
+    var initialized: usize = 0;
+    errdefer {
+        freeBrandItems(allocator, out[0..initialized]);
+        allocator.free(out);
+    }
+    for (source, 0..) |brand, i| {
+        {
+            const brand_value = try allocator.dupe(u8, brand.brand);
+            errdefer allocator.free(brand_value);
+            const version_value = try allocator.dupe(u8, brand.version);
+            errdefer allocator.free(version_value);
+            out[i] = .{
+                .brand = brand_value,
+                .version = version_value,
+            };
+        }
+        initialized += 1;
+    }
+    return out;
+}
+
+fn freeBrandList(allocator: Allocator, list: []const ChimeraProfile.Brand) void {
+    if (list.len == 0) return;
+    freeBrandItems(allocator, list);
+    allocator.free(list);
+}
+
+fn freeBrandItems(allocator: Allocator, list: []const ChimeraProfile.Brand) void {
+    for (list) |brand| {
+        allocator.free(brand.version);
+        allocator.free(brand.brand);
+    }
+}
+
+fn copyStringList(allocator: Allocator, source: []const []const u8) ![]const []const u8 {
+    if (source.len == 0) return &.{};
+    const out = try allocator.alloc([]const u8, source.len);
+    var initialized: usize = 0;
+    errdefer {
+        freeStringItems(allocator, out[0..initialized]);
+        allocator.free(out);
+    }
+    for (source, 0..) |item, i| {
+        out[i] = try allocator.dupe(u8, item);
+        initialized += 1;
+    }
+    return out;
+}
+
+fn freeStringList(allocator: Allocator, list: []const []const u8) void {
+    if (list.len == 0) return;
+    freeStringItems(allocator, list);
+    allocator.free(list);
+}
+
+fn freeStringItems(allocator: Allocator, list: []const []const u8) void {
+    for (list) |item| {
+        allocator.free(item);
+    }
+}
+
+fn formatSecChUaHeader(allocator: Allocator, brands: []const ChimeraProfile.Brand) ![:0]const u8 {
+    var value = try std.ArrayList(u8).initCapacity(allocator, brands.len * 32);
+    defer value.deinit(allocator);
+    var writer = value.writer(allocator);
+
+    for (brands, 0..) |brand, i| {
+        if (i > 0) try writer.writeAll(", ");
+        try writer.print("\"{s}\";v=\"{s}\"", .{ brand.brand, brand.version });
+    }
+    return try std.fmt.allocPrintSentinel(allocator, "Sec-CH-UA: {s}", .{value.items}, 0);
+}
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -131,11 +309,17 @@ tls_verify: bool = true,
 
 obey_robots: bool,
 
-// User agent override set via CDP Emulation.setUserAgentOverride.
-// When set, takes precedence over the config's http_headers values.
-// Both fields are allocated from self.allocator when set, null otherwise.
+// Identity overrides set via CDP Emulation.setUserAgentOverride.
+// When set, they take precedence over config http_headers/profile values.
+// Allocated fields are owned by this client and cleared together so wire and
+// JS-visible state cannot drift across repeated CDP overrides.
 user_agent_override: ?[:0]const u8 = null,
 user_agent_header_override: ?[:0]const u8 = null,
+accept_language_override: ?[:0]const u8 = null,
+accept_language_header_override: ?[:0]const u8 = null,
+language_override_items: ?[]const []const u8 = null,
+navigator_platform_override: ?[:0]const u8 = null,
+ua_data_override: ?UADataOverride = null,
 
 // The CDP layer we dispatch inbox messages to. Set in CDP.init for
 // `serve` mode; null in all other modes. Since this is set early, BEFORE the
@@ -292,19 +476,71 @@ pub fn layer(self: *Client) Layer {
     };
 }
 
-// Set a user agent override. Both the raw UA string and the pre-formatted
-// "User-Agent: <ua>" header string are allocated from self.allocator.
-pub fn setUserAgentOverride(self: *Client, ua: []const u8) !void {
+// Set identity overrides from CDP. The raw values and pre-formatted headers are
+// allocated from self.allocator and then cleared together on the next override.
+pub fn setUserAgentOverride(
+    self: *Client,
+    ua: []const u8,
+    accept_language: ?[]const u8,
+    platform: ?[]const u8,
+    user_agent_metadata: ?UserAgentMetadata,
+) !void {
     self.clearUserAgentOverride();
+
     const override = try self.allocator.dupeZ(u8, ua);
     errdefer self.allocator.free(override);
     const header = try std.fmt.allocPrintSentinel(self.allocator, "User-Agent: {s}", .{ua}, 0);
+    errdefer self.allocator.free(header);
+
+    const accept_language_override = if (accept_language) |value|
+        try self.allocator.dupeZ(u8, value)
+    else
+        null;
+    errdefer if (accept_language_override) |value| self.allocator.free(value);
+
+    const language_override_items = if (accept_language_override) |value|
+        try parseAcceptLanguage(self.allocator, value)
+    else
+        null;
+    errdefer if (language_override_items) |items| self.allocator.free(items);
+
+    const accept_language_header_override = if (accept_language_override) |value|
+        try std.fmt.allocPrintSentinel(self.allocator, "Accept-Language: {s}", .{value}, 0)
+    else
+        null;
+    errdefer if (accept_language_header_override) |value| self.allocator.free(value);
+
+    const navigator_platform_override = if (platform) |value|
+        try self.allocator.dupeZ(u8, value)
+    else
+        null;
+    errdefer if (navigator_platform_override) |value| self.allocator.free(value);
+
+    const ua_data_override = if (user_agent_metadata) |metadata|
+        try UADataOverride.init(self.allocator, metadata)
+    else
+        null;
+    errdefer if (ua_data_override) |*value| value.deinit(self.allocator);
+
     self.user_agent_override = override;
     self.user_agent_header_override = header;
+    self.accept_language_override = accept_language_override;
+    self.accept_language_header_override = accept_language_header_override;
+    self.language_override_items = language_override_items;
+    self.navigator_platform_override = navigator_platform_override;
+    self.ua_data_override = ua_data_override;
 }
 
-// Clear any user agent override, restoring the default from config.
+// Clear any identity override, restoring the default from config/profile.
 pub fn clearUserAgentOverride(self: *Client) void {
+    if (self.ua_data_override) |*value| {
+        value.deinit(self.allocator);
+        self.ua_data_override = null;
+    }
+    if (self.language_override_items) |items| {
+        self.allocator.free(items);
+        self.language_override_items = null;
+    }
     if (self.user_agent_override) |ua| {
         self.allocator.free(ua);
         self.user_agent_override = null;
@@ -312,6 +548,18 @@ pub fn clearUserAgentOverride(self: *Client) void {
     if (self.user_agent_header_override) |uah| {
         self.allocator.free(uah);
         self.user_agent_header_override = null;
+    }
+    if (self.accept_language_override) |value| {
+        self.allocator.free(value);
+        self.accept_language_override = null;
+    }
+    if (self.accept_language_header_override) |header| {
+        self.allocator.free(header);
+        self.accept_language_header_override = null;
+    }
+    if (self.navigator_platform_override) |platform| {
+        self.allocator.free(platform);
+        self.navigator_platform_override = null;
     }
 }
 
@@ -367,11 +615,57 @@ pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
 
 pub fn newHeaders(self: *const Client) !http.Headers {
     const ua_header = self.user_agent_header_override orelse self.network.config.http_headers.user_agent_header;
-    return http.Headers.initBrowser(&self.network.config.http_headers, ua_header);
+    const ua_data = if (self.ua_data_override) |*value| value else null;
+    return http.Headers.initBrowserWithOverrides(&self.network.config.http_headers, .{
+        .user_agent_header = ua_header,
+        .accept_language_header = self.accept_language_header_override,
+        .client_hints_enabled = if (ua_data) |value| value.client_hints_enabled else true,
+        .sec_ch_ua_header = if (ua_data) |value| value.sec_ch_ua_header else null,
+        .sec_ch_ua_mobile_header = if (ua_data) |value| value.sec_ch_ua_mobile_header else null,
+        .sec_ch_ua_platform_header = if (ua_data) |value| value.sec_ch_ua_platform_header else null,
+    });
 }
 
 pub fn getUserAgent(self: *const Client) [:0]const u8 {
     return self.user_agent_override orelse self.network.config.http_headers.user_agent;
+}
+
+pub fn getLanguagesOverride(self: *const Client) ?[]const []const u8 {
+    return self.language_override_items;
+}
+
+pub fn getLanguageOverride(self: *const Client) ?[]const u8 {
+    const items = self.language_override_items orelse return null;
+    if (items.len == 0) return null;
+    return items[0];
+}
+
+pub fn getNavigatorPlatformOverride(self: *const Client) ?[]const u8 {
+    return self.navigator_platform_override;
+}
+
+pub fn getUADataOverride(self: *const Client) ?*const ChimeraProfile.UAData {
+    if (self.ua_data_override) |*value| {
+        return &value.data;
+    }
+    return null;
+}
+
+fn parseAcceptLanguage(allocator: Allocator, value: []const u8) ![]const []const u8 {
+    var items = try std.ArrayList([]const u8).initCapacity(allocator, 2);
+    errdefer items.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, value, ',');
+    while (it.next()) |part| {
+        const end = std.mem.indexOfScalar(u8, part, ';') orelse part.len;
+        const language = std.mem.trim(u8, part[0..end], " \t");
+        if (language.len == 0) continue;
+        try items.append(allocator, language);
+    }
+    if (items.items.len == 0) {
+        return error.InvalidAcceptLanguage;
+    }
+    return try items.toOwnedSlice(allocator);
 }
 
 pub fn abort(self: *Client) void {

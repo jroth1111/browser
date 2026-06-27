@@ -35,7 +35,7 @@ pub fn getBrands(_: *const NavigatorUAData, exec: *const Execution) []const Bran
 }
 
 pub fn getMobile(_: *const NavigatorUAData, exec: *const Execution) bool {
-    if (chimeraUAData(exec)) |ua| {
+    if (profileUAData(exec)) |ua| {
         return ua.mobile;
     }
     return false;
@@ -51,7 +51,7 @@ pub fn toJSON(_: *const NavigatorUAData, exec: *const Execution) struct {
     platform: []const u8,
 } {
     return .{
-        .mobile = if (chimeraUAData(exec)) |ua| ua.mobile else false,
+        .mobile = if (profileUAData(exec)) |ua| ua.mobile else false,
         .brands = brandList(exec),
         .platform = uaPlatform(exec),
     };
@@ -64,7 +64,7 @@ pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8
 
     _ = hints;
 
-    const ua = chimeraUAData(exec);
+    const ua = profileUAData(exec);
     return exec.js.local.?.resolvePromise(.{
         .brands = brandList(exec),
         .mobile = if (ua) |data| data.mobile else false,
@@ -81,7 +81,7 @@ pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8
 }
 
 fn brandList(exec: *const Execution) []const Brand {
-    if (chimeraUAData(exec)) |ua| {
+    if (profileUAData(exec)) |ua| {
         return ua.brands;
     }
     const out = comptime blk: {
@@ -97,7 +97,7 @@ fn brandList(exec: *const Execution) []const Brand {
 }
 
 fn uaPlatform(exec: *const Execution) []const u8 {
-    if (chimeraUAData(exec)) |ua| {
+    if (profileUAData(exec)) |ua| {
         return ua.platform;
     }
     return switch (builtin.os.tag) {
@@ -109,7 +109,10 @@ fn uaPlatform(exec: *const Execution) []const u8 {
     };
 }
 
-fn chimeraUAData(exec: *const Execution) ?*const ChimeraProfile.UAData {
+fn profileUAData(exec: *const Execution) ?*const ChimeraProfile.UAData {
+    if (exec.session.browser.http_client.getUADataOverride()) |ua| {
+        return ua;
+    }
     const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return null;
     return &authority.profile.ua_data;
 }

@@ -382,6 +382,7 @@ fn dispatchCommand(command: *Command, method: []const u8) !void {
         },
         7 => switch (@as(u56, @bitCast(domain[0..7].*))) {
             asUint(u56, "Browser") => return @import("domains/browser.zig").processMessage(command),
+            asUint(u56, "Chimera") => return @import("domains/chimera.zig").processMessage(command),
             asUint(u56, "Runtime") => return @import("domains/runtime.zig").processMessage(command),
             asUint(u56, "Network") => return @import("domains/network.zig").processMessage(command),
             asUint(u56, "Storage") => return @import("domains/storage.zig").processMessage(command),
