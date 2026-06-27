@@ -25,8 +25,7 @@ pub const Snapshot = struct {
 };
 
 pub fn fromConfig(config: anytype) Snapshot {
-    const libcurl = @import("../sys/libcurl.zig");
-    return fromConfigWithCurlAvailability(config, libcurl.has_curl_impersonate);
+    return fromConfigWithCurlAvailability(config, curlImpersonateAvailable(config));
 }
 
 fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: bool) Snapshot {
@@ -84,6 +83,14 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
     };
 }
 
+fn curlImpersonateAvailable(config: anytype) bool {
+    const ConfigType = @typeInfo(@TypeOf(config)).pointer.child;
+    if (comptime @hasDecl(ConfigType, "curlImpersonateAvailable")) {
+        return config.curlImpersonateAvailable();
+    }
+    return false;
+}
+
 fn degradedCapabilities(
     requires_curl_impersonate: bool,
     impersonation_active: bool,
@@ -104,7 +111,7 @@ fn degradedCapabilities(
     return &.{};
 }
 
-test "Chimera Diagnostics reports profile-backed canvas active" {
+pub fn expectProfileBackedCanvasActiveForTest() !void {
     const testing = std.testing;
     const Authority = @import("Authority.zig");
     const Profile = @import("Profile.zig");
@@ -200,4 +207,8 @@ test "Chimera Diagnostics reports profile-backed canvas active" {
 
     try testing.expect(snapshot.canvas_profile_active);
     try testing.expectEqual(@as(usize, 0), snapshot.degraded_capabilities.len);
+}
+
+test "Chimera Diagnostics reports profile-backed canvas active" {
+    try expectProfileBackedCanvasActiveForTest();
 }

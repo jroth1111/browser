@@ -409,6 +409,10 @@ pub fn curlImpersonateTarget(self: *const Config) ?[:0]const u8 {
     return self.chimera_impersonate_target;
 }
 
+pub fn curlImpersonateAvailable(_: *const Config) bool {
+    return libcurl.has_curl_impersonate;
+}
+
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     if (self.chimera_authority != null) {
         return null;
