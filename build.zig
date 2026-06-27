@@ -317,6 +317,7 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, curl_impersonate_path:
         mod.link_libcpp = true;
         switch (target.result.os.tag) {
             .macos => {
+                addDarwinSystemFrameworks(b, mod);
                 mod.linkSystemLibrary("iconv", .{});
                 mod.linkSystemLibrary("icucore", .{});
             },
@@ -343,12 +344,22 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, curl_impersonate_path:
     switch (target.result.os.tag) {
         .macos => {
             // needed for proxying on mac
-            mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
-            mod.linkFramework("CoreFoundation", .{});
-            mod.linkFramework("SystemConfiguration", .{});
+            addDarwinSystemFrameworks(b, mod);
+            addDarwinSystemFrameworks(b, curl.root_module);
         },
         else => {},
     }
+}
+
+fn addDarwinSystemFrameworks(b: *Build, mod: *Build.Module) void {
+    const frameworks_path: Build.LazyPath = if (b.sysroot) |sysroot|
+        .{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sysroot}) }
+    else
+        .{ .cwd_relative = "/System/Library/Frameworks" };
+
+    mod.addSystemFrameworkPath(frameworks_path);
+    mod.linkFramework("CoreFoundation", .{});
+    mod.linkFramework("SystemConfiguration", .{});
 }
 
 fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {

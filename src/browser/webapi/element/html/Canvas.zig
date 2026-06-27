@@ -158,7 +158,7 @@ fn canvasRawPixels(self: *const Canvas, allocator: std.mem.Allocator, seed: u64,
 
     const out = try allocator.alloc(u8, raw_len);
     var pos: usize = 0;
-    for (0..height) |y| {
+    for (0..height) |_| {
         out[pos] = 0;
         pos += 1;
         for (0..width) |_| {

@@ -219,8 +219,8 @@ fn pixelAt(self: *const CanvasRenderingContext2D, x: i64, y: i64, seed: u64) col
 }
 
 fn basePixelAt(self: *const CanvasRenderingContext2D, x: i64, y: i64) color.RGBA {
-    if (self._filled_rect) |rect| {
-        if (rect.contains(x, y)) return rect.rgba;
+    if (self._filled_rect) |filled_rect| {
+        if (filled_rect.contains(x, y)) return filled_rect.rgba;
     }
     return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 }

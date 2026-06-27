@@ -15,7 +15,7 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 }
 
 fn getProfileDiagnostics(cmd: *CDP.Command) !void {
-    const config = &cmd.cdp.browser.http_client.network.config;
+    const config = cmd.cdp.browser.http_client.network.config;
     return cmd.sendResult(Diagnostics.fromConfig(config), .{});
 }
 
