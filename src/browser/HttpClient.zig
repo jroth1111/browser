@@ -367,7 +367,7 @@ pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
 
 pub fn newHeaders(self: *const Client) !http.Headers {
     const ua_header = self.user_agent_header_override orelse self.network.config.http_headers.user_agent_header;
-    return http.Headers.init(ua_header);
+    return http.Headers.initBrowser(&self.network.config.http_headers, ua_header);
 }
 
 pub fn getUserAgent(self: *const Client) [:0]const u8 {

@@ -136,6 +136,21 @@ pub const Headers = struct {
         return .{ .headers = updated_headers };
     }
 
+    pub fn initBrowser(http_headers: *const Config.HttpHeaders, user_agent_header: [:0]const u8) !Headers {
+        var headers = try Headers.init(user_agent_header);
+        errdefer headers.deinit();
+
+        try headers.set(http_headers.sec_ch_ua_header);
+        try headers.set(http_headers.accept_language_header);
+        if (http_headers.sec_ch_ua_mobile_header) |hdr| {
+            try headers.set(hdr);
+        }
+        if (http_headers.sec_ch_ua_platform_header) |hdr| {
+            try headers.set(hdr);
+        }
+        return headers;
+    }
+
     pub fn deinit(self: *const Headers) void {
         if (self.headers) |hdr| {
             libcurl.curl_slist_free_all(hdr);
@@ -659,7 +674,7 @@ pub const Connection = struct {
     }
 
     pub fn request(self: *const Connection, http_headers: *const Config.HttpHeaders) !u16 {
-        var header_list = try Headers.init(http_headers.user_agent_header);
+        var header_list = try Headers.initBrowser(http_headers, http_headers.user_agent_header);
         defer header_list.deinit();
         try self.secretHeaders(&header_list, http_headers);
         try self.setHeaders(&header_list);

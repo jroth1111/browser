@@ -27,6 +27,7 @@ const dump = @import("browser/dump.zig");
 
 const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
+const ChimeraAuthority = @import("chimera/Authority.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -114,6 +115,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
+    .{ .name = "chimera_authority_file", .type = ?[]const u8 },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -270,6 +272,7 @@ pub const Agent = @FieldType(Mode, "agent");
 mode: Mode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
+chimera_authority: ?ChimeraAuthority = null,
 
 fn modeNeedsHttp(mode: Mode) bool {
     return mode != .help and mode != .version;
@@ -280,7 +283,11 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         .mode = mode,
         .exec_name = exec_name,
         .http_headers = undefined,
+        .chimera_authority = null,
     };
+    if (config.chimeraAuthorityFile()) |path| {
+        config.chimera_authority = try ChimeraAuthority.loadFromFile(allocator, path);
+    }
     if (modeNeedsHttp(mode)) {
         config.http_headers = try HttpHeaders.init(allocator, &config);
     }
@@ -342,6 +349,20 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
         inline .serve, .fetch, .mcp, .agent => |opts| opts.http_proxy,
         else => unreachable,
     };
+}
+
+pub fn chimeraAuthorityFile(self: *const Config) ?[]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch, .mcp, .agent => |opts| opts.chimera_authority_file,
+        .help, .version => null,
+    };
+}
+
+pub fn chimeraAuthority(self: *const Config) ?*const ChimeraAuthority {
+    if (self.chimera_authority) |*authority| {
+        return authority;
+    }
+    return null;
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
@@ -620,20 +641,51 @@ pub const HttpHeaders = struct {
 
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
     user_agent_header: [:0]const u8,
+    accept_language_header: [:0]const u8,
+    sec_ch_ua_header: [:0]const u8,
+    sec_ch_ua_mobile_header: ?[:0]const u8,
+    sec_ch_ua_platform_header: ?[:0]const u8,
 
     proxy_bearer_header: ?[:0]const u8,
 
     pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
-        const user_agent: [:0]const u8 = if (config.userAgent()) |ua|
+        const profile = if (config.chimeraAuthority()) |authority| &authority.profile else null;
+        const user_agent: [:0]const u8 = if (profile) |p|
+            try allocator.dupeZ(u8, p.headers.user_agent)
+        else if (config.userAgent()) |ua|
             try allocator.dupeZ(u8, ua)
         else if (config.userAgentSuffix()) |suffix|
             try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
         else
             user_agent_base;
-        errdefer if (config.userAgent() != null or config.userAgentSuffix() != null) allocator.free(user_agent);
+        errdefer if (user_agent.ptr != user_agent_base.ptr) allocator.free(user_agent);
 
         const user_agent_header = try std.fmt.allocPrintSentinel(allocator, "User-Agent: {s}", .{user_agent}, 0);
         errdefer allocator.free(user_agent_header);
+
+        const accept_language_header: [:0]const u8 = if (profile) |p|
+            try std.fmt.allocPrintSentinel(allocator, "Accept-Language: {s}", .{p.headers.accept_language}, 0)
+        else
+            accept_language;
+        errdefer if (accept_language_header.ptr != accept_language.ptr) allocator.free(accept_language_header);
+
+        const sec_ch_ua_header: [:0]const u8 = if (profile) |p|
+            try std.fmt.allocPrintSentinel(allocator, "Sec-CH-UA: {s}", .{p.headers.sec_ch_ua}, 0)
+        else
+            sec_ch_ua;
+        errdefer if (sec_ch_ua_header.ptr != sec_ch_ua.ptr) allocator.free(sec_ch_ua_header);
+
+        const sec_ch_ua_mobile_header = if (profile) |p|
+            try requiredHeader(allocator, "Sec-CH-UA-Mobile", p.headers.sec_ch_ua_mobile)
+        else
+            null;
+        errdefer if (sec_ch_ua_mobile_header) |hdr| allocator.free(hdr);
+
+        const sec_ch_ua_platform_header = if (profile) |p|
+            try requiredHeader(allocator, "Sec-CH-UA-Platform", p.headers.sec_ch_ua_platform)
+        else
+            null;
+        errdefer if (sec_ch_ua_platform_header) |hdr| allocator.free(hdr);
 
         const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
             try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
@@ -643,6 +695,10 @@ pub const HttpHeaders = struct {
         return .{
             .user_agent = user_agent,
             .user_agent_header = user_agent_header,
+            .accept_language_header = accept_language_header,
+            .sec_ch_ua_header = sec_ch_ua_header,
+            .sec_ch_ua_mobile_header = sec_ch_ua_mobile_header,
+            .sec_ch_ua_platform_header = sec_ch_ua_platform_header,
             .proxy_bearer_header = proxy_bearer_header,
         };
     }
@@ -652,9 +708,25 @@ pub const HttpHeaders = struct {
             allocator.free(hdr);
         }
         allocator.free(self.user_agent_header);
+        if (self.accept_language_header.ptr != accept_language.ptr) {
+            allocator.free(self.accept_language_header);
+        }
+        if (self.sec_ch_ua_header.ptr != sec_ch_ua.ptr) {
+            allocator.free(self.sec_ch_ua_header);
+        }
+        if (self.sec_ch_ua_mobile_header) |hdr| {
+            allocator.free(hdr);
+        }
+        if (self.sec_ch_ua_platform_header) |hdr| {
+            allocator.free(hdr);
+        }
         if (self.user_agent.ptr != user_agent_base.ptr) {
             allocator.free(self.user_agent);
         }
+    }
+
+    fn requiredHeader(allocator: Allocator, comptime name: []const u8, value: []const u8) !?[:0]const u8 {
+        return try std.fmt.allocPrintSentinel(allocator, name ++ ": {s}", .{value}, 0);
     }
 };
 

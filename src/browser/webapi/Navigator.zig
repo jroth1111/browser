@@ -28,6 +28,7 @@ const Permissions = @import("Permissions.zig");
 const StorageManager = @import("StorageManager.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const ModelContext = @import("ModelContext.zig");
+const ChimeraProfile = @import("../../chimera/Profile.zig");
 
 const Navigator = @This();
 _pad: bool = false,
@@ -37,13 +38,17 @@ _storage: StorageManager = .{},
 _ua_data: NavigatorUAData = .{},
 
 pub const init: Navigator = .{};
+const default_languages = [_][]const u8{ "en-US", "en" };
 
 pub fn getUserAgent(_: *const Navigator, exec: *const Execution) []const u8 {
     return exec.session.browser.http_client.getUserAgent();
 }
 
-pub fn getLanguages(_: *const Navigator) [2][]const u8 {
-    return .{ "en-US", "en" };
+pub fn getLanguages(_: *const Navigator, exec: *const Execution) []const []const u8 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.languages;
+    }
+    return default_languages[0..];
 }
 
 pub fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
@@ -58,12 +63,18 @@ pub fn getAppCodeName(_: *const Navigator) []const u8 {
     return "Mozilla";
 }
 
-pub fn getAppVersion(_: *const Navigator) []const u8 {
+pub fn getAppVersion(_: *const Navigator, exec: *const Execution) []const u8 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.app_version;
+    }
     return "1.0";
 }
 
-pub fn getLanguage(_: *const Navigator) []const u8 {
-    return "en-US";
+pub fn getLanguage(_: *const Navigator, exec: *const Execution) []const u8 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.languages[0];
+    }
+    return default_languages[0];
 }
 
 pub fn getOnLine(_: *const Navigator) bool {
@@ -74,27 +85,45 @@ pub fn getCookieEnabled(_: *const Navigator) bool {
     return true;
 }
 
-pub fn getHardwareConcurrency(_: *const Navigator) u32 {
+pub fn getHardwareConcurrency(_: *const Navigator, exec: *const Execution) u32 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.navigator.hardware_concurrency;
+    }
     return 4;
 }
 
-pub fn getDeviceMemory(_: *const Navigator) f64 {
+pub fn getDeviceMemory(_: *const Navigator, exec: *const Execution) f64 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.navigator.device_memory;
+    }
     return 8.0;
 }
 
-pub fn getMaxTouchPoints(_: *const Navigator) u32 {
+pub fn getMaxTouchPoints(_: *const Navigator, exec: *const Execution) u32 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.navigator.max_touch_points;
+    }
     return 0;
 }
 
-pub fn getVendor(_: *const Navigator) []const u8 {
+pub fn getVendor(_: *const Navigator, exec: *const Execution) []const u8 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.navigator.vendor;
+    }
     return "";
 }
 
-pub fn getProduct(_: *const Navigator) []const u8 {
+pub fn getProduct(_: *const Navigator, exec: *const Execution) []const u8 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.navigator.product;
+    }
     return "Gecko";
 }
 
-pub fn getWebdriver(_: *const Navigator) bool {
+pub fn getWebdriver(_: *const Navigator, exec: *const Execution) bool {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.navigator.webdriver;
+    }
     return false;
 }
 
@@ -107,7 +136,10 @@ pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
     return false;
 }
 
-pub fn getPlatform(_: *const Navigator) []const u8 {
+pub fn getPlatform(_: *const Navigator, exec: *const Execution) []const u8 {
+    if (chimeraProfile(exec)) |profile| {
+        return profile.navigator.platform;
+    }
     return switch (builtin.os.tag) {
         .macos => "MacIntel",
         .windows => "Win32",
@@ -156,6 +188,11 @@ pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0
 pub fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, frame: *const Frame) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, frame);
+}
+
+fn chimeraProfile(exec: *const Execution) ?*const ChimeraProfile {
+    const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return null;
+    return &authority.profile;
 }
 
 fn validateProtocolHandlerScheme(scheme: []const u8) !void {

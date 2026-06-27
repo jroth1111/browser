@@ -44,6 +44,7 @@ pub const actions = @import("browser/actions.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const tools = @import("browser/tools.zig");
 pub const HttpClient = @import("browser/HttpClient.zig");
+pub const chimera = @import("chimera/Authority.zig");
 
 pub const mcp = @import("mcp.zig");
 pub const Agent = @import("agent/Agent.zig");

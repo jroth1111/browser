@@ -21,37 +21,39 @@ const builtin = @import("builtin");
 const Config = @import("../../Config.zig");
 const js = @import("../js/js.zig");
 const Execution = js.Execution;
+const ChimeraProfile = @import("../../chimera/Profile.zig");
 
 const NavigatorUAData = @This();
 
 _pad: bool = false,
 
-const Brand = struct {
-    brand: []const u8,
-    version: []const u8,
-};
+const Brand = ChimeraProfile.Brand;
+const default_form_factor = [_][]const u8{"Desktop"};
 
-pub fn getBrands(_: *const NavigatorUAData) []const Brand {
-    return brandList();
+pub fn getBrands(_: *const NavigatorUAData, exec: *const Execution) []const Brand {
+    return brandList(exec);
 }
 
-pub fn getMobile(_: *const NavigatorUAData) bool {
+pub fn getMobile(_: *const NavigatorUAData, exec: *const Execution) bool {
+    if (chimeraUAData(exec)) |ua| {
+        return ua.mobile;
+    }
     return false;
 }
 
-pub fn getPlatform(_: *const NavigatorUAData) []const u8 {
-    return uaPlatform();
+pub fn getPlatform(_: *const NavigatorUAData, exec: *const Execution) []const u8 {
+    return uaPlatform(exec);
 }
 
-pub fn toJSON(_: *const NavigatorUAData) struct {
+pub fn toJSON(_: *const NavigatorUAData, exec: *const Execution) struct {
     brands: []const Brand,
     mobile: bool,
     platform: []const u8,
 } {
     return .{
-        .mobile = false,
-        .brands = brandList(),
-        .platform = uaPlatform(),
+        .mobile = if (chimeraUAData(exec)) |ua| ua.mobile else false,
+        .brands = brandList(exec),
+        .platform = uaPlatform(exec),
     };
 }
 
@@ -62,22 +64,26 @@ pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8
 
     _ = hints;
 
+    const ua = chimeraUAData(exec);
     return exec.js.local.?.resolvePromise(.{
-        .brands = brandList(),
-        .mobile = false,
-        .platform = uaPlatform(),
-        .architecture = uaArchitecture(),
-        .bitness = uaBitness(),
-        .model = "",
-        .platformVersion = "",
-        .uaFullVersion = "1.0.0.0",
-        .fullVersionList = brandList(),
-        .wow64 = false,
-        .formFactor = [_][]const u8{"Desktop"},
+        .brands = brandList(exec),
+        .mobile = if (ua) |data| data.mobile else false,
+        .platform = uaPlatform(exec),
+        .architecture = if (ua) |data| data.architecture else uaArchitecture(),
+        .bitness = if (ua) |data| data.bitness else uaBitness(),
+        .model = if (ua) |data| data.model else "",
+        .platformVersion = if (ua) |data| data.platform_version else "",
+        .uaFullVersion = if (ua) |data| data.ua_full_version else "1.0.0.0",
+        .fullVersionList = if (ua) |data| data.full_version_list else brandList(exec),
+        .wow64 = if (ua) |data| data.wow64 else false,
+        .formFactor = if (ua) |data| data.form_factor else default_form_factor[0..],
     });
 }
 
-fn brandList() []const Brand {
+fn brandList(exec: *const Execution) []const Brand {
+    if (chimeraUAData(exec)) |ua| {
+        return ua.brands;
+    }
     const out = comptime blk: {
         const src = &Config.HttpHeaders.brands;
         var arr: [src.len]Brand = undefined;
@@ -90,7 +96,10 @@ fn brandList() []const Brand {
     return &out;
 }
 
-fn uaPlatform() []const u8 {
+fn uaPlatform(exec: *const Execution) []const u8 {
+    if (chimeraUAData(exec)) |ua| {
+        return ua.platform;
+    }
     return switch (builtin.os.tag) {
         .macos => "macOS",
         .windows => "Windows",
@@ -98,6 +107,11 @@ fn uaPlatform() []const u8 {
         .freebsd => "FreeBSD",
         else => "Unknown",
     };
+}
+
+fn chimeraUAData(exec: *const Execution) ?*const ChimeraProfile.UAData {
+    const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return null;
+    return &authority.profile.ua_data;
 }
 
 fn uaArchitecture() []const u8 {
