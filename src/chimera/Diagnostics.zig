@@ -39,6 +39,8 @@ pub fn fromConfig(config: anytype) Snapshot {
             profile.transport.requires_curl_impersonate or
             diagnostics.requires_curl_impersonate;
         const impersonation_active = target != null and libcurl.has_curl_impersonate;
+        // Export is seeded, but the 2D context still needs real draw/readback state.
+        const canvas_profile_active = false;
 
         return .{
             .authority_version = loaded.authority_version,
@@ -54,9 +56,14 @@ pub fn fromConfig(config: anytype) Snapshot {
             .navigator_profile_active = true,
             .uadata_profile_active = true,
             .plugin_profile_active = profile.plugins.pdf_enabled,
-            .canvas_profile_active = profile.canvas.enabled,
+            .canvas_profile_active = canvas_profile_active,
             .audio_profile_active = profile.audio.enabled,
-            .degraded_capabilities = degradedCapabilities(requires_curl_impersonate, impersonation_active),
+            .degraded_capabilities = degradedCapabilities(
+                requires_curl_impersonate,
+                impersonation_active,
+                profile.canvas.enabled,
+                canvas_profile_active,
+            ),
         };
     }
 
@@ -75,9 +82,22 @@ pub fn fromConfig(config: anytype) Snapshot {
     };
 }
 
-fn degradedCapabilities(requires_curl_impersonate: bool, impersonation_active: bool) []const []const u8 {
-    if (requires_curl_impersonate and !impersonation_active) {
+fn degradedCapabilities(
+    requires_curl_impersonate: bool,
+    impersonation_active: bool,
+    requires_canvas: bool,
+    canvas_active: bool,
+) []const []const u8 {
+    const curl_degraded = requires_curl_impersonate and !impersonation_active;
+    const canvas_degraded = requires_canvas and !canvas_active;
+    if (curl_degraded and canvas_degraded) {
+        return &.{ "curl_impersonate", "canvas" };
+    }
+    if (curl_degraded) {
         return &.{"curl_impersonate"};
+    }
+    if (canvas_degraded) {
+        return &.{"canvas"};
     }
     return &.{};
 }
