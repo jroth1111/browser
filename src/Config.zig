@@ -28,6 +28,7 @@ const dump = @import("browser/dump.zig");
 const Storage = @import("storage/Storage.zig");
 const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 const ChimeraAuthority = @import("chimera/Authority.zig");
+const Headers = @import("chimera/Headers.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -672,32 +673,37 @@ pub const HttpHeaders = struct {
             user_agent_base;
         errdefer if (user_agent.ptr != user_agent_base.ptr) allocator.free(user_agent);
 
-        const user_agent_header = try std.fmt.allocPrintSentinel(allocator, "User-Agent: {s}", .{user_agent}, 0);
-        errdefer allocator.free(user_agent_header);
+        const profile_headers = if (profile) |p|
+            try Headers.init(allocator, &p.headers)
+        else
+            null;
+        errdefer if (profile_headers) |headers| headers.deinit(allocator);
 
-        const accept_language_header: [:0]const u8 = if (profile) |p|
-            try std.fmt.allocPrintSentinel(allocator, "Accept-Language: {s}", .{p.headers.accept_language}, 0)
+        const user_agent_header = if (profile_headers) |headers|
+            headers.user_agent_header
+        else
+            try std.fmt.allocPrintSentinel(allocator, "User-Agent: {s}", .{user_agent}, 0);
+        errdefer if (profile_headers == null) allocator.free(user_agent_header);
+
+        const accept_language_header: [:0]const u8 = if (profile_headers) |headers|
+            headers.accept_language_header
         else
             accept_language;
-        errdefer if (accept_language_header.ptr != accept_language.ptr) allocator.free(accept_language_header);
 
-        const sec_ch_ua_header: [:0]const u8 = if (profile) |p|
-            try std.fmt.allocPrintSentinel(allocator, "Sec-CH-UA: {s}", .{p.headers.sec_ch_ua}, 0)
+        const sec_ch_ua_header: [:0]const u8 = if (profile_headers) |headers|
+            headers.sec_ch_ua_header
         else
             sec_ch_ua;
-        errdefer if (sec_ch_ua_header.ptr != sec_ch_ua.ptr) allocator.free(sec_ch_ua_header);
 
-        const sec_ch_ua_mobile_header = if (profile) |p|
-            try requiredHeader(allocator, "Sec-CH-UA-Mobile", p.headers.sec_ch_ua_mobile)
+        const sec_ch_ua_mobile_header = if (profile_headers) |headers|
+            headers.sec_ch_ua_mobile_header
         else
             null;
-        errdefer if (sec_ch_ua_mobile_header) |hdr| allocator.free(hdr);
 
-        const sec_ch_ua_platform_header = if (profile) |p|
-            try requiredHeader(allocator, "Sec-CH-UA-Platform", p.headers.sec_ch_ua_platform)
+        const sec_ch_ua_platform_header = if (profile_headers) |headers|
+            headers.sec_ch_ua_platform_header
         else
             null;
-        errdefer if (sec_ch_ua_platform_header) |hdr| allocator.free(hdr);
 
         const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
             try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
@@ -735,10 +741,6 @@ pub const HttpHeaders = struct {
         if (self.user_agent.ptr != user_agent_base.ptr) {
             allocator.free(self.user_agent);
         }
-    }
-
-    fn requiredHeader(allocator: Allocator, comptime name: []const u8, value: []const u8) !?[:0]const u8 {
-        return try std.fmt.allocPrintSentinel(allocator, name ++ ": {s}", .{value}, 0);
     }
 };
 

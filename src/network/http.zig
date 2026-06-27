@@ -117,23 +117,7 @@ pub const Headers = struct {
         if (header_list == null) {
             return error.OutOfMemory;
         }
-        // libcurl leaves the list intact when curl_slist_append fails, so we own it.
-        errdefer libcurl.curl_slist_free_all(header_list);
-
-        // Always add sec-CH-UA header
-        const with_sec_ch_ua = libcurl.curl_slist_append(header_list, Config.HttpHeaders.sec_ch_ua);
-        if (with_sec_ch_ua == null) {
-            return error.OutOfMemory;
-        }
-
-        // Always add Accept-Language. Omitting it triggers bot-protection on
-        // some CDNs (Akamai) when Accept-Encoding is present.
-        const updated_headers = libcurl.curl_slist_append(with_sec_ch_ua, Config.HttpHeaders.accept_language);
-        if (updated_headers == null) {
-            return error.OutOfMemory;
-        }
-
-        return .{ .headers = updated_headers };
+        return .{ .headers = header_list };
     }
 
     pub fn initBrowser(http_headers: *const Config.HttpHeaders, user_agent_header: [:0]const u8) !Headers {
@@ -828,15 +812,19 @@ fn findHeader(headers: Headers, name: []const u8) struct { count: usize, value: 
     return .{ .count = count, .value = value };
 }
 
+fn expectHeader(headers: Headers, name: []const u8, expected: []const u8) !void {
+    const header = findHeader(headers, name);
+    try testing.expectEqual(@as(usize, 1), header.count);
+    try testing.expectString(expected, header.value);
+}
+
 test "Headers.set replaces an existing header instead of duplicating it" {
     var headers = try Headers.init("User-Agent: Lightpanda/1.0");
     defer headers.deinit();
 
     try headers.set("User-Agent: Custom/1.0");
 
-    const ua = findHeader(headers, "User-Agent");
-    try testing.expectEqual(@as(usize, 1), ua.count);
-    try testing.expectString("Custom/1.0", ua.value);
+    try expectHeader(headers, "User-Agent", "Custom/1.0");
 }
 
 test "Headers.set matches header names case-insensitively" {
@@ -845,12 +833,10 @@ test "Headers.set matches header names case-insensitively" {
 
     try headers.set("user-agent: Custom/1.0");
 
-    const ua = findHeader(headers, "User-Agent");
-    try testing.expectEqual(@as(usize, 1), ua.count);
-    try testing.expectString("Custom/1.0", ua.value);
+    try expectHeader(headers, "User-Agent", "Custom/1.0");
 }
 
-test "Headers.set adds a new header and preserves defaults" {
+test "Headers.set adds a new header and preserves existing headers" {
     var headers = try Headers.init("User-Agent: Lightpanda/1.0");
     defer headers.deinit();
 
@@ -858,7 +844,47 @@ test "Headers.set adds a new header and preserves defaults" {
 
     try testing.expectEqual(@as(usize, 1), findHeader(headers, "X-Custom").count);
     try testing.expectEqual(@as(usize, 1), findHeader(headers, "User-Agent").count);
-    try testing.expectEqual(@as(usize, 1), findHeader(headers, "Accept-Language").count);
+    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Accept-Language").count);
+}
+
+test "Headers.initBrowser adds configured browser headers" {
+    const http_headers = Config.HttpHeaders{
+        .user_agent = "Lightpanda/1.0",
+        .user_agent_header = "User-Agent: Lightpanda/1.0",
+        .accept_language_header = "Accept-Language: en-US,en;q=0.9",
+        .sec_ch_ua_header = "Sec-CH-UA: \"Lightpanda\";v=\"1\"",
+        .sec_ch_ua_mobile_header = "Sec-CH-UA-Mobile: ?0",
+        .sec_ch_ua_platform_header = "Sec-CH-UA-Platform: \"macOS\"",
+        .proxy_bearer_header = null,
+    };
+    var headers = try Headers.initBrowser(&http_headers, http_headers.user_agent_header);
+    defer headers.deinit();
+
+    try expectHeader(headers, "User-Agent", "Lightpanda/1.0");
+    try expectHeader(headers, "Accept-Language", "en-US,en;q=0.9");
+    try expectHeader(headers, "Sec-CH-UA", "\"Lightpanda\";v=\"1\"");
+    try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
+    try expectHeader(headers, "Sec-CH-UA-Platform", "\"macOS\"");
+}
+
+test "Headers.initBrowser keeps configured profile headers when user agent is overridden" {
+    const http_headers = Config.HttpHeaders{
+        .user_agent = "Profile/1.0",
+        .user_agent_header = "User-Agent: Profile/1.0",
+        .accept_language_header = "Accept-Language: fr-FR,fr;q=0.9",
+        .sec_ch_ua_header = "Sec-CH-UA: \"Chromium\";v=\"120\", \"Not?A_Brand\";v=\"8\"",
+        .sec_ch_ua_mobile_header = "Sec-CH-UA-Mobile: ?0",
+        .sec_ch_ua_platform_header = "Sec-CH-UA-Platform: \"Windows\"",
+        .proxy_bearer_header = null,
+    };
+    var headers = try Headers.initBrowser(&http_headers, "User-Agent: Override/2.0");
+    defer headers.deinit();
+
+    try expectHeader(headers, "User-Agent", "Override/2.0");
+    try expectHeader(headers, "Accept-Language", "fr-FR,fr;q=0.9");
+    try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"120\", \"Not?A_Brand\";v=\"8\"");
+    try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
+    try expectHeader(headers, "Sec-CH-UA-Platform", "\"Windows\"");
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {
