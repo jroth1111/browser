@@ -126,6 +126,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
+        allowDarwinFrameworkImports(target, exe);
         b.installArtifact(exe);
 
         const exe_check = b.addLibrary(.{
@@ -161,6 +162,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
+        allowDarwinFrameworkImports(target, exe);
         extras_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
 
         const exe_check = b.addLibrary(.{
@@ -199,10 +201,19 @@ pub fn build(b: *Build) !void {
             .use_llvm = true,
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
+        allowDarwinFrameworkImports(target, tests);
         const run_tests = b.addRunArtifact(tests);
         const test_step = b.step("test", "Run unit tests");
         test_step.dependOn(&run_tests.step);
     }
+}
+
+fn allowDarwinFrameworkImports(target: Build.ResolvedTarget, compile: *Build.Step.Compile) void {
+    if (target.result.os.tag != .macos) return;
+    // Zig 0.15.2's Darwin linker can emit unresolved framework symbols from
+    // prebuilt V8/libcurl stubs even when the framework load command is present.
+    // The dynamic linker resolves these imports through the linked frameworks.
+    compile.linker_allow_shlib_undefined = true;
 }
 
 fn linkV8(

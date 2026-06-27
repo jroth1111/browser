@@ -117,7 +117,7 @@ const CommonOptions = .{
     .{ .name = "disable_subframes", .type = bool },
     .{ .name = "disable_workers", .type = bool },
     .{ .name = "enable_external_stylesheets", .type = bool },
-    .{ .name = "chimera_authority_file", .type = ?[]const u8 },
+    .{ .name = "chimera_authority_file", .type = ?[]const u8, .variants = .{.{ .name = "profile_file" }} },
 };
 
 fn dumpValidator(_: Allocator, args: *std.process.ArgIterator) !?DumpFormat {
@@ -852,4 +852,21 @@ pub fn tagJsonArray(comptime E: type) []const u8 {
         s = s ++ (if (i == 0) "\"" else ",\"") ++ f.name ++ "\"";
     }
     return s ++ "]";
+}
+
+test "managed profile file option keeps neutral CLI alias" {
+    var found = false;
+    inline for (CommonOptions) |option| {
+        if (comptime std.mem.eql(u8, option.name, "chimera_authority_file")) {
+            found = true;
+            var has_profile_file_alias = false;
+            inline for (option.variants) |variant| {
+                if (std.mem.eql(u8, variant.name, "profile_file")) {
+                    has_profile_file_alias = true;
+                }
+            }
+            try std.testing.expect(has_profile_file_alias);
+        }
+    }
+    try std.testing.expect(found);
 }
