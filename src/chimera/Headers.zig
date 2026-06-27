@@ -49,7 +49,7 @@ fn format(allocator: Allocator, comptime name: []const u8, value: []const u8) ![
     return try std.fmt.allocPrintSentinel(allocator, name ++ ": {s}", .{value}, 0);
 }
 
-const testing = @import("../testing.zig");
+const testing = std.testing;
 
 test "chimera.Headers.init formats every profile header" {
     var owned = try init(testing.allocator, &.{
@@ -61,9 +61,9 @@ test "chimera.Headers.init formats every profile header" {
     });
     defer owned.deinit(testing.allocator);
 
-    try testing.expectString("User-Agent: Mozilla/5.0 Chimera/120", owned.user_agent_header);
-    try testing.expectString("Accept-Language: en-US,en;q=0.9", owned.accept_language_header);
-    try testing.expectString("Sec-CH-UA: \"Chromium\";v=\"120\", \"Not?A_Brand\";v=\"8\"", owned.sec_ch_ua_header);
-    try testing.expectString("Sec-CH-UA-Mobile: ?0", owned.sec_ch_ua_mobile_header);
-    try testing.expectString("Sec-CH-UA-Platform: \"macOS\"", owned.sec_ch_ua_platform_header);
+    try testing.expectEqualStrings("User-Agent: Mozilla/5.0 Chimera/120", owned.user_agent_header);
+    try testing.expectEqualStrings("Accept-Language: en-US,en;q=0.9", owned.accept_language_header);
+    try testing.expectEqualStrings("Sec-CH-UA: \"Chromium\";v=\"120\", \"Not?A_Brand\";v=\"8\"", owned.sec_ch_ua_header);
+    try testing.expectEqualStrings("Sec-CH-UA-Mobile: ?0", owned.sec_ch_ua_mobile_header);
+    try testing.expectEqualStrings("Sec-CH-UA-Platform: \"macOS\"", owned.sec_ch_ua_platform_header);
 }

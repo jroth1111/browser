@@ -137,7 +137,7 @@ fn optionalBool(obj: std.json.ObjectMap, key: []const u8) !bool {
 }
 
 test "Chimera Authority parses managed launch authority" {
-    const testing = @import("../testing.zig");
+    const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
@@ -224,9 +224,9 @@ test "Chimera Authority parses managed launch authority" {
         \\}
     );
 
-    try testing.expectString("chimera-lightpanda-authority/v1", authority.authority_version);
-    try testing.expectString("lightpanda:sess-1", authority.profile_id);
-    try testing.expectString("http://routejson.token:secret@127.0.0.1:8080", authority.network.proxy_url);
-    try testing.expectString("chrome136", authority.profile.transport.impersonate_target.?);
+    try testing.expectEqualStrings("chimera-lightpanda-authority/v1", authority.authority_version);
+    try testing.expectEqualStrings("lightpanda:sess-1", authority.profile_id);
+    try testing.expectEqualStrings("http://routejson.token:secret@127.0.0.1:8080", authority.network.proxy_url);
+    try testing.expectEqualStrings("chrome136", authority.profile.transport.impersonate_target.?);
     try testing.expect(authority.diagnostics.requires_curl_impersonate);
 }

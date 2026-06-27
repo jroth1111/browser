@@ -289,7 +289,7 @@ fn requiredF64(obj: std.json.ObjectMap, key: []const u8) !f64 {
 }
 
 test "Chimera Profile parses managed browser identity" {
-    const testing = @import("../testing.zig");
+    const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
@@ -361,16 +361,16 @@ test "Chimera Profile parses managed browser identity" {
     , .{});
     const profile = try Profile.fromJsonValue(arena.allocator(), value);
 
-    try testing.expectString("chimera-browser-profile/v1", profile.schema_version);
-    try testing.expectString("lightpanda:sess-1", profile.profile_id);
-    try testing.expectString("Mozilla/5.0", profile.headers.user_agent);
-    try testing.expectString("5.0", profile.app_version);
-    try testing.expectString("en-AU", profile.languages[0]);
-    try testing.expectString("MacIntel", profile.navigator.platform);
-    try testing.expectString("Chromium", profile.ua_data.brands[0].brand);
+    try testing.expectEqualStrings("chimera-browser-profile/v1", profile.schema_version);
+    try testing.expectEqualStrings("lightpanda:sess-1", profile.profile_id);
+    try testing.expectEqualStrings("Mozilla/5.0", profile.headers.user_agent);
+    try testing.expectEqualStrings("5.0", profile.app_version);
+    try testing.expectEqualStrings("en-AU", profile.languages[0]);
+    try testing.expectEqualStrings("MacIntel", profile.navigator.platform);
+    try testing.expectEqualStrings("Chromium", profile.ua_data.brands[0].brand);
     try testing.expectEqual(@as(u64, 111), profile.canvas.seed);
     try testing.expect(profile.plugins.pdf_enabled);
-    try testing.expectString("chrome136", profile.transport.impersonate_target.?);
+    try testing.expectEqualStrings("chrome136", profile.transport.impersonate_target.?);
     try testing.expect(profile.transport.requires_curl_impersonate);
     try testing.expect(profile.capabilities.requires_proxy);
 }

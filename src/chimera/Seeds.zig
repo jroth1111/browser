@@ -33,7 +33,7 @@ pub fn unitF32(seed: u64, value: u64) f32 {
 }
 
 test "Chimera seeds are deterministic and separated" {
-    const testing = @import("../testing.zig");
+    const testing = @import("std").testing;
 
     try testing.expectEqual(byte(111, 1), byte(111, 1));
     try testing.expect(byte(111, 1) != byte(222, 1));

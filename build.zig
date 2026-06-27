@@ -178,6 +178,21 @@ pub fn build(b: *Build) !void {
     }
 
     {
+        // Chimera profile/authority tests are kept separate from the full
+        // browser test graph so they do not require a V8 bootstrap.
+        const chimera_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/chimera/chimera_tests.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        const run_chimera_tests = b.addRunArtifact(chimera_tests);
+        const chimera_test_step = b.step("chimera-test", "Run Chimera managed-profile unit tests");
+        chimera_test_step.dependOn(&run_chimera_tests.step);
+    }
+
+    {
         // test
         const tests = b.addTest(.{
             .root_module = lightpanda_module,
