@@ -165,6 +165,19 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             return .{ .local = local, .handle = handle };
         }
 
+        pub fn values(self: *const Self) []BackingInt {
+            const buffer_handle: *const v8.ArrayBufferView = @ptrCast(self.handle);
+            const byte_len = v8.v8__ArrayBufferView__ByteLength(buffer_handle);
+            const byte_offset = v8.v8__ArrayBufferView__ByteOffset(buffer_handle);
+            const array_buffer = v8.v8__ArrayBufferView__Buffer(buffer_handle).?;
+            const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer);
+            const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
+            const data = v8.v8__BackingStore__Data(backing_store_handle);
+            const base = @as([*]u8, @ptrCast(data)) + byte_offset;
+            const typed_base: [*]BackingInt = @ptrCast(@alignCast(base));
+            return typed_base[0 .. byte_len / @sizeOf(BackingInt)];
+        }
+
         pub fn persist(self: *const Self) !Global {
             var ctx = self.local.ctx;
             var global: v8.Global = undefined;

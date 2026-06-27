@@ -24,6 +24,7 @@ const color = @import("../../color.zig");
 
 const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
+const Seeds = @import("../../../chimera/Seeds.zig");
 
 const Execution = js.Execution;
 
@@ -37,6 +38,24 @@ _canvas: *Canvas,
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
+_filled_rect: ?FilledRect = null,
+
+const FilledRect = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    rgba: color.RGBA,
+
+    fn contains(self: FilledRect, x: i32, y: i32) bool {
+        const xf = @as(f64, @floatFromInt(x)) + 0.5;
+        const yf = @as(f64, @floatFromInt(y)) + 0.5;
+        return xf >= self.x and
+            yf >= self.y and
+            xf < self.x + self.width and
+            yf < self.y + self.height;
+    }
+};
 
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
@@ -88,9 +107,9 @@ pub fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _
 pub fn drawImage(_: *const CanvasRenderingContext2D, _: js.Value, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
 
 pub fn getImageData(
-    _: *const CanvasRenderingContext2D,
-    _: i32, // sx
-    _: i32, // sy
+    self: *const CanvasRenderingContext2D,
+    sx: i32,
+    sy: i32,
     sw: i32,
     sh: i32,
     exec: *Execution,
@@ -98,7 +117,30 @@ pub fn getImageData(
     if (sw <= 0 or sh <= 0) {
         return error.IndexSizeError;
     }
-    return ImageData.init(@intCast(sw), @intCast(sh), null, exec);
+    const width: usize = @intCast(sw);
+    const height: usize = @intCast(sh);
+    const pixel_count = std.math.mul(usize, width, height) catch return error.IndexSizeError;
+    const byte_len = std.math.mul(usize, pixel_count, 4) catch return error.IndexSizeError;
+    const pixels = try exec.call_arena.alloc(u8, byte_len);
+    const seed = canvasSeed(exec);
+
+    var pos: usize = 0;
+    for (0..height) |y| {
+        for (0..width) |x| {
+            const rgba = self.pixelAt(
+                sx + @as(i32, @intCast(x)),
+                sy + @as(i32, @intCast(y)),
+                seed,
+            );
+            pixels[pos + 0] = rgba.r;
+            pixels[pos + 1] = rgba.g;
+            pixels[pos + 2] = rgba.b;
+            pixels[pos + 3] = rgba.a;
+            pos += 4;
+        }
+    }
+
+    return ImageData.initWithPixels(@as(u32, @intCast(width)), @as(u32, @intCast(height)), null, pixels, exec);
 }
 
 pub fn save(_: *CanvasRenderingContext2D) void {}
@@ -110,8 +152,20 @@ pub fn transform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _
 pub fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *CanvasRenderingContext2D) void {}
 pub fn setStrokeStyle(_: *CanvasRenderingContext2D, _: []const u8) void {}
-pub fn clearRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn fillRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+pub fn clearRect(self: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
+    self._filled_rect = null;
+}
+
+pub fn fillRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    if (width <= 0 or height <= 0) return;
+    self._filled_rect = .{
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = height,
+        .rgba = self._fill_style,
+    };
+}
 pub fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn beginPath(_: *CanvasRenderingContext2D) void {}
 pub fn closePath(_: *CanvasRenderingContext2D) void {}
@@ -127,6 +181,66 @@ pub fn stroke(_: *CanvasRenderingContext2D) void {}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
 pub fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 pub fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+
+pub fn pngRawPixels(
+    self: *const CanvasRenderingContext2D,
+    allocator: std.mem.Allocator,
+    seed: u64,
+    width: u32,
+    height: u32,
+    raw_len: usize,
+) ![]const u8 {
+    const out = try allocator.alloc(u8, raw_len);
+    var pos: usize = 0;
+    for (0..height) |y| {
+        out[pos] = 0;
+        pos += 1;
+        for (0..width) |x| {
+            const rgba = self.pixelAt(@intCast(x), @intCast(y), seed);
+            out[pos + 0] = rgba.r;
+            out[pos + 1] = rgba.g;
+            out[pos + 2] = rgba.b;
+            out[pos + 3] = rgba.a;
+            pos += 4;
+        }
+    }
+    return out;
+}
+
+fn pixelAt(self: *const CanvasRenderingContext2D, x: i32, y: i32, seed: u64) color.RGBA {
+    var rgba = self.basePixelAt(x, y);
+    if (seed != 0 and rgba.a != 0) {
+        rgba.r = noisyChannel(rgba.r, seed, x, y, 0);
+        rgba.g = noisyChannel(rgba.g, seed, x, y, 1);
+        rgba.b = noisyChannel(rgba.b, seed, x, y, 2);
+    }
+    return rgba;
+}
+
+fn basePixelAt(self: *const CanvasRenderingContext2D, x: i32, y: i32) color.RGBA {
+    if (self._filled_rect) |rect| {
+        if (rect.contains(x, y)) return rect.rgba;
+    }
+    return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+}
+
+fn noisyChannel(value: u8, seed: u64, x: i32, y: i32, channel: u8) u8 {
+    const ux: u64 = @bitCast(@as(i64, x));
+    const uy: u64 = @bitCast(@as(i64, y));
+    const rotated_y = (uy << 17) | (uy >> 47);
+    const mixed = Seeds.mix(seed, ux ^ rotated_y ^ (@as(u64, channel) << 56));
+    const delta = @as(i16, @intCast(mixed % 3)) - 1;
+    const adjusted = @as(i16, @intCast(value)) + delta;
+    if (adjusted <= 0) return 0;
+    if (adjusted >= 255) return 255;
+    return @intCast(adjusted);
+}
+
+fn canvasSeed(exec: *Execution) u64 {
+    const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
+    if (!authority.profile.canvas.enabled) return 0;
+    return Seeds.surfaceSeed(&authority.profile, .canvas);
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CanvasRenderingContext2D);
@@ -164,8 +278,8 @@ pub const JsApi = struct {
     pub const transform = bridge.function(CanvasRenderingContext2D.transform, .{ .noop = true });
     pub const setTransform = bridge.function(CanvasRenderingContext2D.setTransform, .{ .noop = true });
     pub const resetTransform = bridge.function(CanvasRenderingContext2D.resetTransform, .{ .noop = true });
-    pub const clearRect = bridge.function(CanvasRenderingContext2D.clearRect, .{ .noop = true });
-    pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{ .noop = true });
+    pub const clearRect = bridge.function(CanvasRenderingContext2D.clearRect, .{});
+    pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{});
     pub const strokeRect = bridge.function(CanvasRenderingContext2D.strokeRect, .{ .noop = true });
     pub const beginPath = bridge.function(CanvasRenderingContext2D.beginPath, .{ .noop = true });
     pub const closePath = bridge.function(CanvasRenderingContext2D.closePath, .{ .noop = true });

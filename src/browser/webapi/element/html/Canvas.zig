@@ -123,7 +123,7 @@ pub fn toDataURL(self: *const Canvas, maybe_type: ?[]const u8, frame: *Frame) ![
 
     const raw_len = canvasRawLen(width, height) orelse return "data:,";
     if (raw_len > max_canvas_png_raw_bytes) return "data:,";
-    const raw = try canvasRawPixels(frame.call_arena, seed, width, height, raw_len);
+    const raw = try self.canvasRawPixels(frame.call_arena, seed, width, height, raw_len);
     const png = try canvasPng(frame.call_arena, width, height, raw);
 
     const encoder = std.base64.standard.Encoder;
@@ -148,18 +148,24 @@ fn canvasRawLen(width: u32, height: u32) ?usize {
     return @intCast(raw_len);
 }
 
-fn canvasRawPixels(allocator: std.mem.Allocator, seed: u64, width: u32, height: u32, raw_len: usize) ![]const u8 {
+fn canvasRawPixels(self: *const Canvas, allocator: std.mem.Allocator, seed: u64, width: u32, height: u32, raw_len: usize) ![]const u8 {
+    if (self._cached) |cached| {
+        switch (cached) {
+            .@"2d" => |ctx| return ctx.pngRawPixels(allocator, seed, width, height, raw_len),
+            else => {},
+        }
+    }
+
     const out = try allocator.alloc(u8, raw_len);
     var pos: usize = 0;
     for (0..height) |y| {
         out[pos] = 0;
         pos += 1;
-        for (0..width) |x| {
-            const mixed = Seeds.mix(seed, (@as(u64, @intCast(y)) << 32) | @as(u64, @intCast(x)));
-            out[pos + 0] = @truncate(mixed >> 56);
-            out[pos + 1] = @truncate(mixed >> 48);
-            out[pos + 2] = @truncate(mixed >> 40);
-            out[pos + 3] = 255;
+        for (0..width) |_| {
+            out[pos + 0] = 0;
+            out[pos + 1] = 0;
+            out[pos + 2] = 0;
+            out[pos + 3] = 0;
             pos += 4;
         }
     }

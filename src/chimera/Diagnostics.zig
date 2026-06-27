@@ -39,8 +39,7 @@ pub fn fromConfig(config: anytype) Snapshot {
             profile.transport.requires_curl_impersonate or
             diagnostics.requires_curl_impersonate;
         const impersonation_active = target != null and libcurl.has_curl_impersonate;
-        // Export is seeded, but the 2D context still needs real draw/readback state.
-        const canvas_profile_active = false;
+        const canvas_profile_active = profile.canvas.enabled;
 
         return .{
             .authority_version = loaded.authority_version,

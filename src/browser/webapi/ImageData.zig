@@ -84,6 +84,21 @@ pub fn init(
     });
 }
 
+pub fn initWithPixels(
+    width: u32,
+    height: u32,
+    maybe_settings: ?ConstructorSettings,
+    pixels: []const u8,
+    exec: *Execution,
+) !*ImageData {
+    const image_data = try init(width, height, maybe_settings, exec);
+    const local_data = image_data._data.local(exec.js.local.?);
+    const data = local_data.values();
+    const copy_len = @min(data.len, pixels.len);
+    @memcpy(data[0..copy_len], pixels[0..copy_len]);
+    return image_data;
+}
+
 pub fn getWidth(self: *const ImageData) u32 {
     return self._width;
 }
