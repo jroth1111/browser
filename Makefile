@@ -11,6 +11,10 @@ F=
 #   ZIGFLAGS=-Dprebuilt_v8_path=/path/to/libc_v8.a make test
 ZIGFLAGS ?=
 
+# Extra flags for the focused Chimera profile tests. These run through
+# `zig test` directly to avoid the full browser/V8 build graph.
+CHIMERA_TEST_FLAGS ?=
+
 # OS and ARCH
 kernel = $(shell uname -ms)
 ifeq ($(kernel), Darwin arm64)
@@ -30,6 +34,13 @@ else ifeq ($(kernel), Linux x86_64)
 	ARCH := x86_64
 else
 	$(error "Unhandled kernel: $(kernel)")
+endif
+
+ifeq ($(OS), macos)
+	MACOS_SDK_VERSION := $(shell xcrun --sdk macosx --show-sdk-version 2>/dev/null)
+	ifneq ($(MACOS_SDK_VERSION),)
+		CHIMERA_TEST_FLAGS += -target $(ARCH)-macos.$(MACOS_SDK_VERSION)
+	endif
 endif
 
 
@@ -125,7 +136,7 @@ endif
 
 ## Run Chimera managed-profile unit tests without a built V8 artifact
 chimera-test:
-	@$(ZIG) build $(ZIGFLAGS) chimera-test -freference-trace || (printf "\033[33mChimera test ERROR\033[0m\n"; exit 1;)
+	@$(ZIG) test src/chimera/chimera_tests.zig $(CHIMERA_TEST_FLAGS) -freference-trace || (printf "\033[33mChimera test ERROR\033[0m\n"; exit 1;)
 
 ## Run demo/runner end to end tests
 end2end:
