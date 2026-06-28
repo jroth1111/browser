@@ -56,7 +56,7 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
             .header_profile_active = std.mem.eql(u8, config.http_headers.user_agent, profile.headers.user_agent),
             .navigator_profile_active = true,
             .uadata_profile_active = true,
-            .plugin_profile_active = profile.plugins.pdf_enabled,
+            .plugin_profile_active = true,
             .canvas_profile_active = canvas_profile_active,
             .audio_profile_active = profile.audio.enabled,
             .degraded_capabilities = degradedCapabilities(
@@ -120,7 +120,7 @@ pub fn expectProfileBackedCanvasActiveForTest() !void {
     const brands = [_]Profile.Brand{.{ .brand = "Chromium", .version = "136" }};
     const full_version_list = [_]Profile.Brand{.{ .brand = "Chromium", .version = "136.0.0.0" }};
     const form_factor = [_][]const u8{"Desktop"};
-    const authority = Authority{
+    var authority = Authority{
         .authority_version = Authority.VERSION,
         .profile_schema_version = Profile.VERSION,
         .profile_id = "lightpanda:sess-1",
@@ -206,7 +206,14 @@ pub fn expectProfileBackedCanvasActiveForTest() !void {
     const snapshot = fromConfigWithCurlAvailability(&config, false);
 
     try testing.expect(snapshot.canvas_profile_active);
+    try testing.expect(snapshot.plugin_profile_active);
     try testing.expectEqual(@as(usize, 0), snapshot.degraded_capabilities.len);
+
+    authority.profile.plugins.pdf_enabled = false;
+    const disabled_plugins_snapshot = fromConfigWithCurlAvailability(&config, false);
+
+    try testing.expect(disabled_plugins_snapshot.plugin_profile_active);
+    try testing.expectEqual(@as(usize, 0), disabled_plugins_snapshot.degraded_capabilities.len);
 }
 
 test "Chimera Diagnostics reports profile-backed canvas active" {
