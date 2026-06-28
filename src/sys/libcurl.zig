@@ -36,6 +36,7 @@ pub const CurlSocket = c.curl_socket_t;
 pub const CurlBlob = c.curl_blob;
 pub const CurlOffT = c.curl_off_t;
 pub const has_curl_impersonate = @hasDecl(c, "curl_easy_impersonate");
+pub const has_curl_ws_start_frame = @hasDecl(c, "curl_ws_start_frame");
 
 pub const CurlDebugFunction = fn (*Curl, CurlInfoType, [*c]u8, usize, *anyopaque) c_int;
 pub const CurlHeaderFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
@@ -996,5 +997,16 @@ pub fn curl_ws_meta(easy: *Curl) ?WsFrameMeta {
 }
 
 pub fn curl_ws_start_frame(easy: *Curl, frame_type: WsFrameType, size: CurlOffT) Error!void {
-    try errorCheck(c.curl_ws_start_frame(easy, frame_type.toInt(), size));
+    if (comptime has_curl_ws_start_frame) {
+        try errorCheck(c.curl_ws_start_frame(easy, frame_type.toInt(), size));
+        return;
+    }
+    return curlWsStartFrameNotBuiltIn(easy, frame_type, size);
+}
+
+fn curlWsStartFrameNotBuiltIn(easy: *Curl, frame_type: WsFrameType, size: CurlOffT) Error!void {
+    _ = easy;
+    _ = frame_type;
+    _ = size;
+    return Error.NotBuiltIn;
 }

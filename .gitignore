@@ -1,5 +1,7 @@
 /.zig-cache/
 /.lp-cache/
+/.curl-impersonate/
+/.curl-impersonate-build/
 /.lp-history
 /.lp-history.js
 /.lp-agent.zon

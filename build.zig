@@ -329,23 +329,24 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, curl_impersonate_path:
         const lib_path: Build.LazyPath = .{ .cwd_relative = b.fmt("{s}/lib", .{ci_path}) };
         const include_path: Build.LazyPath = .{ .cwd_relative = b.fmt("{s}/include", .{ci_path}) };
 
-        mod.addObjectFile(lib_path.path(b, "libcurl-impersonate.a"));
-        mod.addObjectFile(lib_path.path(b, "libssl.a"));
-        mod.addObjectFile(lib_path.path(b, "libcrypto.a"));
-        mod.addObjectFile(lib_path.path(b, "libnghttp2.a"));
-        mod.addObjectFile(lib_path.path(b, "libbrotlicommon.a"));
-        mod.addObjectFile(lib_path.path(b, "libbrotlidec.a"));
-        mod.addObjectFile(lib_path.path(b, "libbrotlienc.a"));
-        mod.addObjectFile(lib_path.path(b, "libz.a"));
-        mod.addObjectFile(lib_path.path(b, "libzstd.a"));
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libcurl-impersonate.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libssl.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libcrypto.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libnghttp2.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libbrotlicommon.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libbrotlidec.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libbrotlienc.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libz.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libzstd.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libnghttp3.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libngtcp2.a", true);
+        try addPackagedCurlLibrary(b, mod, lib_path, ci_path, "libngtcp2_crypto_boringssl.a", true);
         mod.addIncludePath(include_path);
         mod.addIncludePath(include_path.path(b, "curl"));
         mod.link_libcpp = true;
         switch (target.result.os.tag) {
             .macos => {
                 addDarwinSystemFrameworks(b, mod);
-                mod.linkSystemLibrary("iconv", .{});
-                mod.linkSystemLibrary("icucore", .{});
             },
             else => {},
         }
@@ -375,6 +376,28 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool, curl_impersonate_path:
         },
         else => {},
     }
+}
+
+fn addPackagedCurlLibrary(
+    b: *Build,
+    mod: *Build.Module,
+    lib_path: Build.LazyPath,
+    ci_path: []const u8,
+    name: []const u8,
+    required: bool,
+) !void {
+    const full_path = try std.fs.path.join(b.allocator, &.{ ci_path, "lib", name });
+    defer b.allocator.free(full_path);
+
+    std.fs.cwd().access(full_path, .{}) catch |err| {
+        if (required) {
+            std.debug.print("missing required curl-impersonate library: {s}\n", .{full_path});
+            return err;
+        }
+        return;
+    };
+
+    mod.addObjectFile(lib_path.path(b, name));
 }
 
 fn addDarwinSystemFrameworks(b: *Build, mod: *Build.Module) void {
