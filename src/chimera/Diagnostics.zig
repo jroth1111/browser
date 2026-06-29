@@ -14,6 +14,9 @@ pub const Snapshot = struct {
     navigator_profile_active: bool,
     uadata_profile_active: bool,
     plugin_profile_active: bool,
+    plugin_mime_profile_active: bool,
+    chrome_profile_active: bool,
+    chrome_runtime_profile_active: bool,
     storage_profile_active: bool,
     storage_estimate_profile_active: bool,
     storage_persistence_profile_active: bool,
@@ -96,6 +99,9 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
             .navigator_profile_active = true,
             .uadata_profile_active = true,
             .plugin_profile_active = true,
+            .plugin_mime_profile_active = true,
+            .chrome_profile_active = true,
+            .chrome_runtime_profile_active = true,
             .storage_profile_active = storage_profile_active,
             .storage_estimate_profile_active = storage_estimate_profile_active,
             .storage_persistence_profile_active = storage_persistence_profile_active,
@@ -140,6 +146,9 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
         .navigator_profile_active = false,
         .uadata_profile_active = false,
         .plugin_profile_active = false,
+        .plugin_mime_profile_active = false,
+        .chrome_profile_active = false,
+        .chrome_runtime_profile_active = false,
         .storage_profile_active = false,
         .storage_estimate_profile_active = false,
         .storage_persistence_profile_active = false,
@@ -317,6 +326,9 @@ pub fn expectProfileEvidenceTiersForTest() !void {
     try testing.expect(snapshot.canvas_blob_profile_active);
     try testing.expect(snapshot.offscreen_canvas_profile_active);
     try testing.expect(snapshot.plugin_profile_active);
+    try testing.expect(snapshot.plugin_mime_profile_active);
+    try testing.expect(snapshot.chrome_profile_active);
+    try testing.expect(snapshot.chrome_runtime_profile_active);
     try testing.expect(!snapshot.storage_profile_active);
     try testing.expect(snapshot.storage_estimate_profile_active);
     try testing.expect(!snapshot.storage_persistence_profile_active);
@@ -338,6 +350,9 @@ pub fn expectProfileEvidenceTiersForTest() !void {
     const disabled_plugins_snapshot = fromConfigWithCurlAvailability(&config, false);
 
     try testing.expect(disabled_plugins_snapshot.plugin_profile_active);
+    try testing.expect(disabled_plugins_snapshot.plugin_mime_profile_active);
+    try testing.expect(disabled_plugins_snapshot.chrome_profile_active);
+    try testing.expect(disabled_plugins_snapshot.chrome_runtime_profile_active);
     try testing.expect(!disabled_plugins_snapshot.storage_profile_active);
     try testing.expect(disabled_plugins_snapshot.storage_estimate_profile_active);
     try testing.expect(!disabled_plugins_snapshot.storage_persistence_profile_active);
