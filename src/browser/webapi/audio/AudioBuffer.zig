@@ -14,6 +14,13 @@ _sample_rate: f64,
 _seed: u64,
 _samples: []f32,
 
+pub const Waveform = enum {
+    sine,
+    square,
+    sawtooth,
+    triangle,
+};
+
 const ConstructorOptions = struct {
     length: u32,
     numberOfChannels: u32 = 1,
@@ -82,6 +89,24 @@ pub fn copyToChannel(self: *AudioBuffer, source: []f32, channel: u32, start_in_c
     @memcpy(destination[0..@min(source.len, available)], source[0..@min(source.len, available)]);
 }
 
+pub fn renderOfflineGraph(self: *AudioBuffer, seed: u64, frequency: f64, gain: f32, waveform: Waveform) void {
+    var channel: u32 = 0;
+    while (channel < self._number_of_channels) : (channel += 1) {
+        const out = channelData(self._samples, self._length, channel);
+        for (out, 0..) |*value, offset| {
+            value.* = graphSample(
+                seed,
+                channel,
+                @intCast(offset),
+                frequency,
+                self._sample_rate,
+                gain,
+                waveform,
+            );
+        }
+    }
+}
+
 fn sampleLen(channels: u32, length: u32) !usize {
     const len = try std.math.mul(u64, channels, length);
     if (len > std.math.maxInt(usize)) return error.Overflow;
@@ -97,6 +122,24 @@ fn fillSamples(out: []f32, seed: u64, channel: u32, start: u32) void {
     for (out, 0..) |*value, offset| {
         value.* = AudioProfile.sample(seed, channel, start + @as(u32, @intCast(offset)));
     }
+}
+
+fn graphSample(seed: u64, channel: u32, index: u32, frequency_: f64, sample_rate: f64, gain: f32, waveform: Waveform) f32 {
+    const nyquist = sample_rate / 2.0;
+    const frequency = if (frequency_ > 0 and frequency_ < nyquist) frequency_ else 440.0;
+    const seed_phase = @as(f64, @floatFromInt((seed ^ (@as(u64, channel) << 17)) & 0xffff)) / 65536.0;
+    const cycles = (@as(f64, @floatFromInt(index)) * frequency / sample_rate) + seed_phase;
+    const phase = cycles - @floor(cycles);
+    const wave: f64 = switch (waveform) {
+        .sine => std.math.sin(phase * 2.0 * std.math.pi),
+        .square => if (phase < 0.5) @as(f64, 1.0) else @as(f64, -1.0),
+        .sawtooth => phase * 2.0 - 1.0,
+        .triangle => if (phase < 0.5) (phase * 4.0 - 1.0) else (3.0 - phase * 4.0),
+    };
+    const noise = @as(f64, @floatCast(AudioProfile.sample(seed, channel, index))) * 0.5;
+    const amplitude = @max(0.0, @min(@as(f64, @floatCast(gain)), 1.0));
+    const sample = wave * amplitude * 0.35 + noise;
+    return @floatCast(@max(-1.0, @min(1.0, sample)));
 }
 
 pub const JsApi = struct {

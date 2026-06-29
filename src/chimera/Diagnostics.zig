@@ -75,7 +75,7 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
         const offscreen_canvas_profile_active = profile.canvas.enabled;
         const canvas_profile_active = canvas_2d_profile_active and canvas_blob_profile_active and offscreen_canvas_profile_active;
         const audio_buffer_profile_active = profile.audio.enabled;
-        const audio_graph_profile_active = false;
+        const audio_graph_profile_active = profile.audio.enabled;
         const audio_profile_active = audio_buffer_profile_active and audio_graph_profile_active;
         const webgl_identity_profile_active = profile.webgl.enabled and profile.webgl.vendor != null and profile.webgl.renderer != null;
         const webgl_caps_profile_active = profile.webgl.enabled;
@@ -339,9 +339,9 @@ pub fn expectProfileEvidenceTiersForTest() !void {
     try testing.expect(snapshot.webgl_profile_active);
     try testing.expect(snapshot.webgl_identity_profile_active);
     try testing.expect(snapshot.webgl_caps_profile_active);
-    try testing.expect(!snapshot.audio_profile_active);
+    try testing.expect(snapshot.audio_profile_active);
     try testing.expect(snapshot.audio_buffer_profile_active);
-    try testing.expect(!snapshot.audio_graph_profile_active);
+    try testing.expect(snapshot.audio_graph_profile_active);
     try testing.expect(!snapshot.geolocation_profile_active);
     try testing.expect(!snapshot.geolocation_position_profile_active);
     try testing.expectEqual(@as(usize, 0), snapshot.degraded_capabilities.len);

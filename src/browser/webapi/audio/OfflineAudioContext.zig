@@ -15,6 +15,8 @@ destination: Nodes.AudioDestinationNode = .{},
 on_complete: ?js.Function.Global = null,
 rendered_buffer: ?*AudioBuffer = null,
 complete_dispatched: bool = false,
+oscillator: ?*Nodes.OscillatorNode = null,
+compressor: ?*Nodes.DynamicsCompressorNode = null,
 
 pub fn constructor(channels: u32, length: u32, sample_rate: f64, exec: *js.Execution) !*OfflineAudioContext {
     if (channels == 0 or channels > 32 or length == 0 or sample_rate <= 0) {
@@ -52,12 +54,16 @@ pub fn createBufferSource(_: *OfflineAudioContext, exec: *js.Execution) !*Nodes.
     return exec._factory.create(Nodes.AudioBufferSourceNode{});
 }
 
-pub fn createOscillator(_: *OfflineAudioContext, exec: *js.Execution) !*Nodes.OscillatorNode {
-    return exec._factory.create(Nodes.OscillatorNode{});
+pub fn createOscillator(self: *OfflineAudioContext, exec: *js.Execution) !*Nodes.OscillatorNode {
+    const oscillator = try exec._factory.create(try Nodes.OscillatorNode.init(exec));
+    self.oscillator = oscillator;
+    return oscillator;
 }
 
-pub fn createDynamicsCompressor(_: *OfflineAudioContext, exec: *js.Execution) !*Nodes.DynamicsCompressorNode {
-    return exec._factory.create(Nodes.DynamicsCompressorNode{});
+pub fn createDynamicsCompressor(self: *OfflineAudioContext, exec: *js.Execution) !*Nodes.DynamicsCompressorNode {
+    const compressor = try exec._factory.create(try Nodes.DynamicsCompressorNode.init(exec));
+    self.compressor = compressor;
+    return compressor;
 }
 
 pub fn createAnalyser(_: *OfflineAudioContext, exec: *js.Execution) !*Nodes.AnalyserNode {
@@ -65,11 +71,11 @@ pub fn createAnalyser(_: *OfflineAudioContext, exec: *js.Execution) !*Nodes.Anal
 }
 
 pub fn createGain(_: *OfflineAudioContext, exec: *js.Execution) !*Nodes.GainNode {
-    return exec._factory.create(Nodes.GainNode{});
+    return exec._factory.create(try Nodes.GainNode.init(exec));
 }
 
 pub fn createBiquadFilter(_: *OfflineAudioContext, exec: *js.Execution) !*Nodes.BiquadFilterNode {
-    return exec._factory.create(Nodes.BiquadFilterNode{});
+    return exec._factory.create(try Nodes.BiquadFilterNode.init(exec));
 }
 
 pub fn createWaveShaper(_: *OfflineAudioContext, exec: *js.Execution) !*Nodes.WaveShaperNode {
@@ -107,13 +113,17 @@ const OfflineAudioCompletionEvent = struct {
 };
 
 pub fn startRendering(self: *OfflineAudioContext, exec: *js.Execution) !js.Promise {
+    const seed = AudioProfile.seed(exec);
     const buffer = try AudioBuffer.init(
         self.number_of_channels,
         self.length,
         self.sample_rate,
-        AudioProfile.seed(exec),
+        seed,
         exec,
     );
+    if (self.graphRenderConfig()) |config| {
+        buffer.renderOfflineGraph(seed, config.frequency, config.gain, config.waveform);
+    }
     self.rendered_buffer = buffer;
     self.complete_dispatched = false;
     if (self.on_complete != null) {
@@ -122,6 +132,31 @@ pub fn startRendering(self: *OfflineAudioContext, exec: *js.Execution) !js.Promi
         };
     }
     return exec.js.local.?.resolvePromise(buffer);
+}
+
+const GraphRenderConfig = struct {
+    frequency: f64,
+    gain: f32,
+    waveform: AudioBuffer.Waveform,
+};
+
+fn graphRenderConfig(self: *const OfflineAudioContext) ?GraphRenderConfig {
+    const oscillator = self.oscillator orelse return null;
+    if (!oscillator.started) return null;
+
+    const direct_destination = oscillator.connected_to_destination;
+    const compressed_destination = if (self.compressor) |compressor|
+        oscillator.connected_to_compressor and compressor.connected_to_destination
+    else
+        false;
+    if (!direct_destination and !compressed_destination) return null;
+
+    const compression_gain: f32 = if (compressed_destination) 0.72 else 1.0;
+    return .{
+        .frequency = oscillator.frequency.value,
+        .gain = compression_gain,
+        .waveform = oscillator.waveform,
+    };
 }
 
 fn dispatchComplete(self: *OfflineAudioContext, exec: *js.Execution) !void {

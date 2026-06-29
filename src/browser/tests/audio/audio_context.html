@@ -162,3 +162,30 @@
   });
 }
 </script>
+
+<script id=OfflineAudioContext#connected-graph-renders type=module>
+{
+  const same = (a, b) => a.length === b.length && a.every((value, index) => Math.abs(value - b[index]) < 0.000001);
+  const render = async (frequency, type = 'triangle') => {
+    const ctx = new OfflineAudioContext(1, 64, 44100);
+    const oscillator = ctx.createOscillator();
+    const compressor = ctx.createDynamicsCompressor();
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, 0);
+    oscillator.connect(compressor);
+    compressor.connect(ctx.destination);
+    oscillator.start(0);
+    return Array.from((await ctx.startRendering()).getChannelData(0).slice(0, 16));
+  };
+
+  const idle = Array.from((await new OfflineAudioContext(1, 64, 44100).startRendering()).getChannelData(0).slice(0, 16));
+  const low = await render(220);
+  const high = await render(880);
+  const sine = await render(220, 'sine');
+
+  testing.expectFalse(same(idle, low));
+  testing.expectFalse(same(low, high));
+  testing.expectFalse(same(low, sine));
+  testing.expectTrue(low.some((value) => Math.abs(value) > 0.00000001));
+}
+</script>

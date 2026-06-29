@@ -38,11 +38,11 @@ pub fn createBufferSource(_: *AudioContext, exec: *js.Execution) !*Nodes.AudioBu
 }
 
 pub fn createOscillator(_: *AudioContext, exec: *js.Execution) !*Nodes.OscillatorNode {
-    return exec._factory.create(Nodes.OscillatorNode{});
+    return exec._factory.create(try Nodes.OscillatorNode.init(exec));
 }
 
 pub fn createDynamicsCompressor(_: *AudioContext, exec: *js.Execution) !*Nodes.DynamicsCompressorNode {
-    return exec._factory.create(Nodes.DynamicsCompressorNode{});
+    return exec._factory.create(try Nodes.DynamicsCompressorNode.init(exec));
 }
 
 pub fn createAnalyser(_: *AudioContext, exec: *js.Execution) !*Nodes.AnalyserNode {
@@ -50,11 +50,11 @@ pub fn createAnalyser(_: *AudioContext, exec: *js.Execution) !*Nodes.AnalyserNod
 }
 
 pub fn createGain(_: *AudioContext, exec: *js.Execution) !*Nodes.GainNode {
-    return exec._factory.create(Nodes.GainNode{});
+    return exec._factory.create(try Nodes.GainNode.init(exec));
 }
 
 pub fn createBiquadFilter(_: *AudioContext, exec: *js.Execution) !*Nodes.BiquadFilterNode {
-    return exec._factory.create(Nodes.BiquadFilterNode{});
+    return exec._factory.create(try Nodes.BiquadFilterNode.init(exec));
 }
 
 pub fn createWaveShaper(_: *AudioContext, exec: *js.Execution) !*Nodes.WaveShaperNode {
