@@ -251,6 +251,9 @@
   element.setAttribute("width", "16");
   element.setAttribute("height", "16");
   const ctx = element.getContext("webgl");
+  testing.expectEqual(ctx.TEXTURE0 + 31, ctx.TEXTURE31);
+  ctx.activeTexture(ctx.TEXTURE31);
+  testing.expectEqual(ctx.TEXTURE31, ctx.getParameter(ctx.ACTIVE_TEXTURE));
 
   const texture0 = ctx.createTexture();
   ctx.activeTexture(ctx.TEXTURE0);

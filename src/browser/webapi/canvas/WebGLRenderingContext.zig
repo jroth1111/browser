@@ -22,6 +22,8 @@ const js = @import("../../js/js.zig");
 const Frame = @import("../../Frame.zig");
 const Profile = @import("../../../chimera/Profile.zig");
 
+const texture_unit_count: usize = 32;
+
 pub fn registerTypes() []const type {
     return &.{
         WebGLRenderingContext,
@@ -53,7 +55,7 @@ draw_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
 has_drawn_pixels: bool = false,
 bound_array_buffer: ?*WebGLBuffer = null,
 bound_framebuffer: ?*WebGLFramebuffer = null,
-texture_units_2d: [2]?*WebGLTexture = .{ null, null },
+texture_units_2d: [texture_unit_count]?*WebGLTexture = .{null} ** texture_unit_count,
 active_texture_unit: usize = 0,
 current_program: ?*WebGLProgram = null,
 attrib0_array_enabled: bool = false,
@@ -113,6 +115,37 @@ pub const FRONT_AND_BACK: u64 = 0x0408;
 pub const TEXTURE_2D: u64 = 0x0DE1;
 pub const TEXTURE0: u64 = 0x84C0;
 pub const TEXTURE1: u64 = 0x84C1;
+pub const TEXTURE2: u64 = 0x84C2;
+pub const TEXTURE3: u64 = 0x84C3;
+pub const TEXTURE4: u64 = 0x84C4;
+pub const TEXTURE5: u64 = 0x84C5;
+pub const TEXTURE6: u64 = 0x84C6;
+pub const TEXTURE7: u64 = 0x84C7;
+pub const TEXTURE8: u64 = 0x84C8;
+pub const TEXTURE9: u64 = 0x84C9;
+pub const TEXTURE10: u64 = 0x84CA;
+pub const TEXTURE11: u64 = 0x84CB;
+pub const TEXTURE12: u64 = 0x84CC;
+pub const TEXTURE13: u64 = 0x84CD;
+pub const TEXTURE14: u64 = 0x84CE;
+pub const TEXTURE15: u64 = 0x84CF;
+pub const TEXTURE16: u64 = 0x84D0;
+pub const TEXTURE17: u64 = 0x84D1;
+pub const TEXTURE18: u64 = 0x84D2;
+pub const TEXTURE19: u64 = 0x84D3;
+pub const TEXTURE20: u64 = 0x84D4;
+pub const TEXTURE21: u64 = 0x84D5;
+pub const TEXTURE22: u64 = 0x84D6;
+pub const TEXTURE23: u64 = 0x84D7;
+pub const TEXTURE24: u64 = 0x84D8;
+pub const TEXTURE25: u64 = 0x84D9;
+pub const TEXTURE26: u64 = 0x84DA;
+pub const TEXTURE27: u64 = 0x84DB;
+pub const TEXTURE28: u64 = 0x84DC;
+pub const TEXTURE29: u64 = 0x84DD;
+pub const TEXTURE30: u64 = 0x84DE;
+pub const TEXTURE31: u64 = 0x84DF;
+pub const ACTIVE_TEXTURE: u64 = 0x84E0;
 pub const TEXTURE_MAG_FILTER: u64 = 0x2800;
 pub const TEXTURE_MIN_FILTER: u64 = 0x2801;
 pub const TEXTURE_WRAP_S: u64 = 0x2802;
@@ -643,6 +676,7 @@ pub fn getParameter(self: *const WebGLRenderingContext, pname: u32) ParameterVal
         SHADING_LANGUAGE_VERSION => .{ .string = chrome_shading_language_version },
         WEBGL_UNMASKED_VENDOR => .{ .string = self.unmasked_vendor },
         WEBGL_UNMASKED_RENDERER => .{ .string = self.unmasked_renderer },
+        ACTIVE_TEXTURE => .{ .int = @intCast(@as(usize, glConst32(TEXTURE0)) + self.active_texture_unit) },
         MAX_TEXTURE_SIZE, MAX_CUBE_MAP_TEXTURE_SIZE, MAX_RENDERBUFFER_SIZE => .{ .int = 16384 },
         MAX_VERTEX_ATTRIBS => .{ .int = 16 },
         MAX_VERTEX_TEXTURE_IMAGE_UNITS => .{ .int = 16 },
@@ -987,9 +1021,9 @@ pub fn bindTexture(self: *WebGLRenderingContext, target: u32, texture: ?*WebGLTe
 pub fn activeTexture(self: *WebGLRenderingContext, texture: u32) void {
     const texture0 = glConst32(TEXTURE0);
     if (texture < texture0) return;
-    const unit = texture - texture0;
+    const unit: usize = @intCast(texture - texture0);
     if (unit >= self.texture_units_2d.len) return;
-    self.active_texture_unit = @intCast(unit);
+    self.active_texture_unit = unit;
 }
 
 pub fn bufferData(self: *WebGLRenderingContext, target: u32, _: ?js.Value, usage: u32) void {
@@ -1161,7 +1195,7 @@ pub fn uniform1i(_: *WebGLRenderingContext, location: ?*WebGLUniformLocation, va
     const program = target.program;
     if (!program.usesTextureSampler() or value < 0) return;
     const unit: usize = @intCast(value);
-    if (unit >= 2) return;
+    if (unit >= texture_unit_count) return;
     program.sampler_2d_texture_unit = unit;
 }
 
@@ -1355,6 +1389,37 @@ pub const JsApi = struct {
     pub const TEXTURE_2D = bridge.property(WebGLRenderingContext.TEXTURE_2D, .{ .template = true });
     pub const TEXTURE0 = bridge.property(WebGLRenderingContext.TEXTURE0, .{ .template = true });
     pub const TEXTURE1 = bridge.property(WebGLRenderingContext.TEXTURE1, .{ .template = true });
+    pub const TEXTURE2 = bridge.property(WebGLRenderingContext.TEXTURE2, .{ .template = true });
+    pub const TEXTURE3 = bridge.property(WebGLRenderingContext.TEXTURE3, .{ .template = true });
+    pub const TEXTURE4 = bridge.property(WebGLRenderingContext.TEXTURE4, .{ .template = true });
+    pub const TEXTURE5 = bridge.property(WebGLRenderingContext.TEXTURE5, .{ .template = true });
+    pub const TEXTURE6 = bridge.property(WebGLRenderingContext.TEXTURE6, .{ .template = true });
+    pub const TEXTURE7 = bridge.property(WebGLRenderingContext.TEXTURE7, .{ .template = true });
+    pub const TEXTURE8 = bridge.property(WebGLRenderingContext.TEXTURE8, .{ .template = true });
+    pub const TEXTURE9 = bridge.property(WebGLRenderingContext.TEXTURE9, .{ .template = true });
+    pub const TEXTURE10 = bridge.property(WebGLRenderingContext.TEXTURE10, .{ .template = true });
+    pub const TEXTURE11 = bridge.property(WebGLRenderingContext.TEXTURE11, .{ .template = true });
+    pub const TEXTURE12 = bridge.property(WebGLRenderingContext.TEXTURE12, .{ .template = true });
+    pub const TEXTURE13 = bridge.property(WebGLRenderingContext.TEXTURE13, .{ .template = true });
+    pub const TEXTURE14 = bridge.property(WebGLRenderingContext.TEXTURE14, .{ .template = true });
+    pub const TEXTURE15 = bridge.property(WebGLRenderingContext.TEXTURE15, .{ .template = true });
+    pub const TEXTURE16 = bridge.property(WebGLRenderingContext.TEXTURE16, .{ .template = true });
+    pub const TEXTURE17 = bridge.property(WebGLRenderingContext.TEXTURE17, .{ .template = true });
+    pub const TEXTURE18 = bridge.property(WebGLRenderingContext.TEXTURE18, .{ .template = true });
+    pub const TEXTURE19 = bridge.property(WebGLRenderingContext.TEXTURE19, .{ .template = true });
+    pub const TEXTURE20 = bridge.property(WebGLRenderingContext.TEXTURE20, .{ .template = true });
+    pub const TEXTURE21 = bridge.property(WebGLRenderingContext.TEXTURE21, .{ .template = true });
+    pub const TEXTURE22 = bridge.property(WebGLRenderingContext.TEXTURE22, .{ .template = true });
+    pub const TEXTURE23 = bridge.property(WebGLRenderingContext.TEXTURE23, .{ .template = true });
+    pub const TEXTURE24 = bridge.property(WebGLRenderingContext.TEXTURE24, .{ .template = true });
+    pub const TEXTURE25 = bridge.property(WebGLRenderingContext.TEXTURE25, .{ .template = true });
+    pub const TEXTURE26 = bridge.property(WebGLRenderingContext.TEXTURE26, .{ .template = true });
+    pub const TEXTURE27 = bridge.property(WebGLRenderingContext.TEXTURE27, .{ .template = true });
+    pub const TEXTURE28 = bridge.property(WebGLRenderingContext.TEXTURE28, .{ .template = true });
+    pub const TEXTURE29 = bridge.property(WebGLRenderingContext.TEXTURE29, .{ .template = true });
+    pub const TEXTURE30 = bridge.property(WebGLRenderingContext.TEXTURE30, .{ .template = true });
+    pub const TEXTURE31 = bridge.property(WebGLRenderingContext.TEXTURE31, .{ .template = true });
+    pub const ACTIVE_TEXTURE = bridge.property(WebGLRenderingContext.ACTIVE_TEXTURE, .{ .template = true });
     pub const TEXTURE_MAG_FILTER = bridge.property(WebGLRenderingContext.TEXTURE_MAG_FILTER, .{ .template = true });
     pub const TEXTURE_MIN_FILTER = bridge.property(WebGLRenderingContext.TEXTURE_MIN_FILTER, .{ .template = true });
     pub const TEXTURE_WRAP_S = bridge.property(WebGLRenderingContext.TEXTURE_WRAP_S, .{ .template = true });
