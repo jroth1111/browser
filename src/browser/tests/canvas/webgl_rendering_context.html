@@ -245,6 +245,83 @@
 }
 </script>
 
+<script id=WebGLRenderingContext#texture_sampler_draw_state>
+{
+  const element = document.createElement("canvas");
+  element.setAttribute("width", "16");
+  element.setAttribute("height", "16");
+  const ctx = element.getContext("webgl");
+
+  const texture0 = ctx.createTexture();
+  ctx.activeTexture(ctx.TEXTURE0);
+  ctx.bindTexture(ctx.TEXTURE_2D, texture0);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MIN_FILTER, ctx.NEAREST);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MAG_FILTER, ctx.NEAREST);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_S, ctx.CLAMP_TO_EDGE);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_T, ctx.CLAMP_TO_EDGE);
+  ctx.texImage2D(ctx.TEXTURE_2D, 0, ctx.RGBA, 1, 1, 0, ctx.RGBA, ctx.UNSIGNED_BYTE, new Uint8Array([9, 19, 29, 255]));
+  const texture1 = ctx.createTexture();
+  ctx.activeTexture(ctx.TEXTURE1);
+  ctx.bindTexture(ctx.TEXTURE_2D, texture1);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MIN_FILTER, ctx.NEAREST);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MAG_FILTER, ctx.NEAREST);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_S, ctx.CLAMP_TO_EDGE);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_T, ctx.CLAMP_TO_EDGE);
+  ctx.texImage2D(ctx.TEXTURE_2D, 0, ctx.RGBA, 1, 1, 0, ctx.RGBA, ctx.UNSIGNED_BYTE, new Uint8Array([37, 47, 57, 255]));
+
+  const vertexShader = ctx.createShader(ctx.VERTEX_SHADER);
+  ctx.shaderSource(vertexShader, "attribute vec2 position; void main() { gl_Position = vec4(position, 0.0, 1.0); }");
+  ctx.compileShader(vertexShader);
+  testing.expectEqual(true, ctx.getShaderParameter(vertexShader, ctx.COMPILE_STATUS));
+
+  const fragmentShader = ctx.createShader(ctx.FRAGMENT_SHADER);
+  ctx.shaderSource(fragmentShader, "precision mediump float; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, vec2(0.5, 0.5)); }");
+  ctx.compileShader(fragmentShader);
+  testing.expectEqual(true, ctx.getShaderParameter(fragmentShader, ctx.COMPILE_STATUS));
+
+  const program = ctx.createProgram();
+  ctx.attachShader(program, vertexShader);
+  ctx.attachShader(program, fragmentShader);
+  ctx.linkProgram(program);
+  testing.expectEqual(true, ctx.getProgramParameter(program, ctx.LINK_STATUS));
+  testing.expectEqual(1, ctx.getProgramParameter(program, ctx.ACTIVE_UNIFORMS));
+  const activeUniform = ctx.getActiveUniform(program, 0);
+  testing.expectEqual(true, activeUniform instanceof WebGLActiveInfo);
+  testing.expectEqual("u_texture", activeUniform.name);
+  testing.expectEqual(ctx.SAMPLER_2D, activeUniform.type);
+  testing.expectEqual(null, ctx.getUniformLocation(program, "missing_texture"));
+  ctx.useProgram(program);
+  const textureUniform = ctx.getUniformLocation(program, "u_texture");
+  testing.expectEqual(true, textureUniform instanceof WebGLUniformLocation);
+  ctx.uniform1i(textureUniform, 1);
+
+  const position = ctx.getAttribLocation(program, "position");
+  const buffer = ctx.createBuffer();
+  ctx.bindBuffer(ctx.ARRAY_BUFFER, buffer);
+  ctx.bufferData(ctx.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 0, 1]), ctx.STATIC_DRAW);
+  ctx.enableVertexAttribArray(position);
+  ctx.vertexAttribPointer(position, 2, ctx.FLOAT, false, 0, 0);
+  ctx.drawArrays(ctx.TRIANGLES, 0, 3);
+
+  const pixels = new Uint8Array(4);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixels);
+  testing.expectEqual(37, pixels[0]);
+  testing.expectEqual(47, pixels[1]);
+  testing.expectEqual(57, pixels[2]);
+  testing.expectEqual(255, pixels[3]);
+
+  ctx.clearColor(0, 0, 0, 1);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+  ctx.uniform1i(textureUniform, 0);
+  ctx.drawArrays(ctx.TRIANGLES, 0, 3);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixels);
+  testing.expectEqual(9, pixels[0]);
+  testing.expectEqual(19, pixels[1]);
+  testing.expectEqual(29, pixels[2]);
+  testing.expectEqual(255, pixels[3]);
+}
+</script>
+
 <script id=WebGLRenderingContext#texture_framebuffer_readback>
 {
   const element = document.createElement("canvas");

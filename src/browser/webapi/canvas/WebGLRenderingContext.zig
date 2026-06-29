@@ -53,7 +53,8 @@ draw_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
 has_drawn_pixels: bool = false,
 bound_array_buffer: ?*WebGLBuffer = null,
 bound_framebuffer: ?*WebGLFramebuffer = null,
-bound_texture_2d: ?*WebGLTexture = null,
+texture_units_2d: [2]?*WebGLTexture = .{ null, null },
+active_texture_unit: usize = 0,
 current_program: ?*WebGLProgram = null,
 attrib0_array_enabled: bool = false,
 attrib0_pointer_enabled: bool = false,
@@ -110,6 +111,8 @@ pub const FRONT: u64 = 0x0404;
 pub const BACK: u64 = 0x0405;
 pub const FRONT_AND_BACK: u64 = 0x0408;
 pub const TEXTURE_2D: u64 = 0x0DE1;
+pub const TEXTURE0: u64 = 0x84C0;
+pub const TEXTURE1: u64 = 0x84C1;
 pub const TEXTURE_MAG_FILTER: u64 = 0x2800;
 pub const TEXTURE_MIN_FILTER: u64 = 0x2801;
 pub const TEXTURE_WRAP_S: u64 = 0x2802;
@@ -220,6 +223,7 @@ pub const ATTACHED_SHADERS: u64 = 0x8B85;
 pub const ACTIVE_UNIFORMS: u64 = 0x8B86;
 pub const ACTIVE_ATTRIBUTES: u64 = 0x8B89;
 pub const SHADING_LANGUAGE_VERSION: u64 = 0x8B8C;
+pub const SAMPLER_2D: u64 = 0x8B5E;
 pub const CURRENT_PROGRAM: u64 = 0x8B8D;
 pub const NEVER: u64 = 0x0200;
 pub const LESS: u64 = 0x0201;
@@ -317,6 +321,20 @@ fn boundFramebufferTexture(self: *const WebGLRenderingContext) ?*WebGLTexture {
     return framebuffer.color_attachment0;
 }
 
+fn boundTexture2D(self: *const WebGLRenderingContext) ?*WebGLTexture {
+    return self.texture_units_2d[self.active_texture_unit];
+}
+
+fn fragmentDrawColor(self: *const WebGLRenderingContext, program: *const WebGLProgram, shader: *const WebGLShader) ?[4]u8 {
+    if (shader.source_uses_texture2d) {
+        if (program.sampler_2d_texture_unit >= self.texture_units_2d.len) return null;
+        const texture = self.texture_units_2d[program.sampler_2d_texture_unit] orelse return null;
+        if (texture.deleted or !texture.has_image) return null;
+        return texture.pixel_values;
+    }
+    return shader.fragment_color;
+}
+
 pub fn initFromProfile(width: u32, height: u32, profile: ?*const Profile) WebGLRenderingContext {
     var ctx = WebGLRenderingContext{
         .drawing_buffer_width = width,
@@ -366,6 +384,7 @@ pub const WebGLFramebuffer = struct {
 pub const WebGLProgram = struct {
     vertex_shader: ?*WebGLShader = null,
     fragment_shader: ?*WebGLShader = null,
+    sampler_2d_texture_unit: usize = 0,
     linked: bool = false,
     validated: bool = false,
     deleted: bool = false,
@@ -377,6 +396,11 @@ pub const WebGLProgram = struct {
         return count;
     }
 
+    fn usesTextureSampler(self: *const WebGLProgram) bool {
+        const shader = self.fragment_shader orelse return false;
+        return self.linked and shader.source_uses_texture2d;
+    }
+
     pub const JsApi = WebGLObjectJsApi(WebGLProgram, "WebGLProgram");
 };
 pub const WebGLRenderbuffer = OpaqueWebGLObject("WebGLRenderbuffer");
@@ -386,6 +410,7 @@ pub const WebGLShader = struct {
     source_has_main: bool = false,
     source_writes_position: bool = false,
     source_writes_color: bool = false,
+    source_uses_texture2d: bool = false,
     fragment_color: [4]u8 = .{ 0, 255, 0, 255 },
     compiled: bool = false,
     deleted: bool = false,
@@ -405,7 +430,11 @@ pub const WebGLTexture = struct {
 
     pub const JsApi = WebGLObjectJsApi(WebGLTexture, "WebGLTexture");
 };
-pub const WebGLUniformLocation = OpaqueWebGLObject("WebGLUniformLocation");
+pub const WebGLUniformLocation = struct {
+    program: *WebGLProgram,
+
+    pub const JsApi = WebGLObjectJsApi(WebGLUniformLocation, "WebGLUniformLocation");
+};
 
 fn OpaqueWebGLObject(comptime js_name: []const u8) type {
     return struct {
@@ -732,6 +761,7 @@ pub fn shaderSource(_: *WebGLRenderingContext, shader: ?*WebGLShader, source: []
     target.source_has_main = containsCompact(source, "voidmain(");
     target.source_writes_position = containsCompact(source, "gl_Position");
     target.source_writes_color = containsCompact(source, "gl_FragColor");
+    target.source_uses_texture2d = containsCompact(source, "texture2D(") or containsCompact(source, "sampler2D");
     target.fragment_color = fragmentColorFromSource(source);
     target.compiled = false;
 }
@@ -804,6 +834,7 @@ pub fn linkProgram(_: *WebGLRenderingContext, program: ?*WebGLProgram) void {
         fragment_shader.compiled and
         !fragment_shader.deleted;
     target.validated = target.linked;
+    target.sampler_2d_texture_unit = 0;
 }
 
 pub fn validateProgram(_: *WebGLRenderingContext, program: ?*WebGLProgram) void {
@@ -831,7 +862,7 @@ pub fn getProgramParameter(_: *const WebGLRenderingContext, program: ?*WebGLProg
         VALIDATE_STATUS => .{ .bool = target.validated },
         DELETE_STATUS => .{ .bool = target.deleted },
         ACTIVE_ATTRIBUTES => .{ .int = if (target.linked) 1 else 0 },
-        ACTIVE_UNIFORMS => .{ .int = 0 },
+        ACTIVE_UNIFORMS => .{ .int = if (target.usesTextureSampler()) 1 else 0 },
         ATTACHED_SHADERS => .{ .int = target.attachedShaderCount() },
         else => .{ .int = 0 },
     };
@@ -855,8 +886,10 @@ pub fn getAttribLocation(_: *const WebGLRenderingContext, _: ?*WebGLProgram, _: 
     return 0;
 }
 
-pub fn getUniformLocation(_: *const WebGLRenderingContext, _: ?*WebGLProgram, _: []const u8, frame: *Frame) !*WebGLUniformLocation {
-    return frame._factory.create(WebGLUniformLocation{});
+pub fn getUniformLocation(_: *const WebGLRenderingContext, program: ?*WebGLProgram, name: []const u8, frame: *Frame) !?*WebGLUniformLocation {
+    const target = program orelse return null;
+    if (!target.usesTextureSampler() or !std.mem.eql(u8, name, "u_texture")) return null;
+    return frame._factory.create(WebGLUniformLocation{ .program = target });
 }
 
 pub fn getActiveAttrib(_: *const WebGLRenderingContext, program: ?*WebGLProgram, index: u32, frame: *Frame) !?*WebGLActiveInfo {
@@ -869,8 +902,15 @@ pub fn getActiveAttrib(_: *const WebGLRenderingContext, program: ?*WebGLProgram,
     });
 }
 
-pub fn getActiveUniform(_: *const WebGLRenderingContext, _: ?*WebGLProgram, _: u32) ?*WebGLActiveInfo {
-    return null;
+pub fn getActiveUniform(_: *const WebGLRenderingContext, program: ?*WebGLProgram, index: u32, frame: *Frame) !?*WebGLActiveInfo {
+    const target = program orelse return null;
+    const fragment_shader = target.fragment_shader orelse return null;
+    if (!target.linked or index != 0 or !fragment_shader.source_uses_texture2d) return null;
+    return frame._factory.create(WebGLActiveInfo{
+        .name = "u_texture",
+        .size = 1,
+        .type = glConst32(SAMPLER_2D),
+    });
 }
 
 pub fn clearColor(self: *WebGLRenderingContext, r: f64, g: f64, b: f64, a: f64) void {
@@ -941,7 +981,15 @@ pub fn bindFramebuffer(self: *WebGLRenderingContext, target: u32, framebuffer: ?
 
 pub fn bindTexture(self: *WebGLRenderingContext, target: u32, texture: ?*WebGLTexture) void {
     if (target != glConst32(TEXTURE_2D)) return;
-    self.bound_texture_2d = texture;
+    self.texture_units_2d[self.active_texture_unit] = texture;
+}
+
+pub fn activeTexture(self: *WebGLRenderingContext, texture: u32) void {
+    const texture0 = glConst32(TEXTURE0);
+    if (texture < texture0) return;
+    const unit = texture - texture0;
+    if (unit >= self.texture_units_2d.len) return;
+    self.active_texture_unit = @intCast(unit);
 }
 
 pub fn bufferData(self: *WebGLRenderingContext, target: u32, _: ?js.Value, usage: u32) void {
@@ -978,14 +1026,15 @@ pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i3
     const fragment_shader = program.fragment_shader orelse return;
     if (!fragment_shader.compiled or fragment_shader.deleted) return;
 
+    const pixel_values = self.fragmentDrawColor(program, fragment_shader) orelse return;
     if (self.bound_framebuffer != null) {
         if (self.boundFramebufferTexture()) |texture| {
-            texture.pixel_values = fragment_shader.fragment_color;
+            texture.pixel_values = pixel_values;
             texture.has_image = true;
         }
         return;
     }
-    self.draw_pixel_values = fragment_shader.fragment_color;
+    self.draw_pixel_values = pixel_values;
     self.has_drawn_pixels = true;
 }
 
@@ -1005,7 +1054,7 @@ pub fn texImage2D(
     if (typ != glConst32(UNSIGNED_BYTE)) return;
     if (internal_format != glConst32(RGBA) and internal_format != glConst32(RGB)) return;
     if (format != glConst32(RGBA) and format != glConst32(RGB)) return;
-    const texture = self.bound_texture_2d orelse return;
+    const texture = self.boundTexture2D() orelse return;
     if (texture.deleted) return;
 
     texture.width = width;
@@ -1020,7 +1069,7 @@ pub fn texImage2D(
 
 pub fn texParameteri(self: *WebGLRenderingContext, target: u32, pname: u32, param: u32) void {
     if (target != glConst32(TEXTURE_2D)) return;
-    const texture = self.bound_texture_2d orelse return;
+    const texture = self.boundTexture2D() orelse return;
     if (texture.deleted) return;
     switch (pname) {
         glConst32(TEXTURE_MIN_FILTER) => texture.min_filter = param,
@@ -1085,6 +1134,7 @@ pub fn deleteProgram(self: *WebGLRenderingContext, program: ?*WebGLProgram) void
     target.deleted = true;
     target.linked = false;
     target.validated = false;
+    target.sampler_2d_texture_unit = 0;
     if (self.current_program == target) self.current_program = null;
 }
 
@@ -1098,10 +1148,21 @@ pub fn deleteTexture(self: *WebGLRenderingContext, texture: ?*WebGLTexture) void
     const target = texture orelse return;
     target.deleted = true;
     target.has_image = false;
-    if (self.bound_texture_2d == target) self.bound_texture_2d = null;
+    for (&self.texture_units_2d) |*unit| {
+        if (unit.* == target) unit.* = null;
+    }
     if (self.bound_framebuffer) |framebuffer| {
         if (framebuffer.color_attachment0 == target) framebuffer.color_attachment0 = null;
     }
+}
+
+pub fn uniform1i(_: *WebGLRenderingContext, location: ?*WebGLUniformLocation, value: i32) void {
+    const target = location orelse return;
+    const program = target.program;
+    if (!program.usesTextureSampler() or value < 0) return;
+    const unit: usize = @intCast(value);
+    if (unit >= 2) return;
+    program.sampler_2d_texture_unit = unit;
 }
 
 pub fn noop(_: *const WebGLRenderingContext) void {}
@@ -1148,7 +1209,7 @@ pub const JsApi = struct {
     pub const getActiveUniform = bridge.function(WebGLRenderingContext.getActiveUniform, .{ .null_as_undefined = true });
     pub const isFramebuffer = bridge.function(WebGLRenderingContext.isFramebuffer, .{});
     pub const isTexture = bridge.function(WebGLRenderingContext.isTexture, .{});
-    pub const activeTexture = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
+    pub const activeTexture = bridge.function(WebGLRenderingContext.activeTexture, .{});
     pub const attachShader = bridge.function(WebGLRenderingContext.attachShader, .{});
     pub const bindAttribLocation = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
     pub const bindBuffer = bridge.function(WebGLRenderingContext.bindBuffer, .{});
@@ -1216,7 +1277,7 @@ pub const JsApi = struct {
     pub const texParameteri = bridge.function(WebGLRenderingContext.texParameteri, .{});
     pub const texSubImage2D = bridge.function(WebGLRenderingContext.noop9, .{ .noop = true });
     pub const uniform1f = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
-    pub const uniform1i = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
+    pub const uniform1i = bridge.function(WebGLRenderingContext.uniform1i, .{});
     pub const uniform2f = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
     pub const uniform2i = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
     pub const uniform3f = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
@@ -1292,6 +1353,8 @@ pub const JsApi = struct {
     pub const UNSIGNED_BYTE = bridge.property(WebGLRenderingContext.UNSIGNED_BYTE, .{ .template = true });
     pub const UNSIGNED_SHORT = bridge.property(WebGLRenderingContext.UNSIGNED_SHORT, .{ .template = true });
     pub const TEXTURE_2D = bridge.property(WebGLRenderingContext.TEXTURE_2D, .{ .template = true });
+    pub const TEXTURE0 = bridge.property(WebGLRenderingContext.TEXTURE0, .{ .template = true });
+    pub const TEXTURE1 = bridge.property(WebGLRenderingContext.TEXTURE1, .{ .template = true });
     pub const TEXTURE_MAG_FILTER = bridge.property(WebGLRenderingContext.TEXTURE_MAG_FILTER, .{ .template = true });
     pub const TEXTURE_MIN_FILTER = bridge.property(WebGLRenderingContext.TEXTURE_MIN_FILTER, .{ .template = true });
     pub const TEXTURE_WRAP_S = bridge.property(WebGLRenderingContext.TEXTURE_WRAP_S, .{ .template = true });
@@ -1308,6 +1371,7 @@ pub const JsApi = struct {
     pub const RGBA = bridge.property(WebGLRenderingContext.RGBA, .{ .template = true });
     pub const RGB = bridge.property(WebGLRenderingContext.RGB, .{ .template = true });
     pub const TRIANGLES = bridge.property(WebGLRenderingContext.TRIANGLES, .{ .template = true });
+    pub const SAMPLER_2D = bridge.property(WebGLRenderingContext.SAMPLER_2D, .{ .template = true });
 };
 
 const testing = @import("../../../testing.zig");
