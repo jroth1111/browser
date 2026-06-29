@@ -49,11 +49,36 @@ pub const FilledPath = struct {
 pub const Paint = union(enum) {
     rect: FilledRect,
     path: FilledPath,
+    image: ImagePatch,
 
     fn pixelAt(self: *const Paint, x: i64, y: i64) ?color.RGBA {
         return switch (self.*) {
             .rect => |rect| if (rect.contains(x, y)) rect.rgba else null,
             .path => |path| if (path.contains(x, y)) path.rgba else null,
+            .image => |image| image.pixelAt(x, y),
+        };
+    }
+};
+
+pub const ImagePatch = struct {
+    x: i64,
+    y: i64,
+    width: u32,
+    height: u32,
+    data: []const u8,
+
+    fn pixelAt(self: ImagePatch, x: i64, y: i64) ?color.RGBA {
+        if (x < self.x or y < self.y) return null;
+        const rel_x: u64 = @intCast(x - self.x);
+        const rel_y: u64 = @intCast(y - self.y);
+        if (rel_x >= @as(u64, self.width) or rel_y >= @as(u64, self.height)) return null;
+
+        const pos: usize = @intCast(((rel_y * self.width) + rel_x) * 4);
+        return .{
+            .r = self.data[pos + 0],
+            .g = self.data[pos + 1],
+            .b = self.data[pos + 2],
+            .a = self.data[pos + 3],
         };
     }
 };
@@ -81,6 +106,34 @@ pub const PaintStack = struct {
         self.append(.{ .path = FilledPath.init(path, rgba, maybe_fill_rule) });
     }
 
+    pub fn appendImagePatch(
+        self: *PaintStack,
+        allocator: std.mem.Allocator,
+        image_width: u32,
+        image_height: u32,
+        pixels: []const u8,
+        dx: f64,
+        dy: f64,
+        dirty_x: ?f64,
+        dirty_y: ?f64,
+        dirty_width: ?f64,
+        dirty_height: ?f64,
+    ) !void {
+        const patch = try imagePatch(
+            allocator,
+            image_width,
+            image_height,
+            pixels,
+            dx,
+            dy,
+            dirty_x,
+            dirty_y,
+            dirty_width,
+            dirty_height,
+        ) orelse return;
+        self.append(.{ .image = patch });
+    }
+
     fn append(self: *PaintStack, paint: Paint) void {
         if (self.count < max_paint_ops) {
             self.ops[self.count] = paint;
@@ -104,6 +157,76 @@ pub const PaintStack = struct {
         return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
     }
 };
+
+pub fn imagePatch(
+    allocator: std.mem.Allocator,
+    image_width: u32,
+    image_height: u32,
+    pixels: []const u8,
+    dx: f64,
+    dy: f64,
+    dirty_x: ?f64,
+    dirty_y: ?f64,
+    dirty_width: ?f64,
+    dirty_height: ?f64,
+) !?ImagePatch {
+    const dest_x = finiteInteger(dx) orelse return null;
+    const dest_y = finiteInteger(dy) orelse return null;
+    const required_len = try pixelBytesLen(image_width, image_height);
+    if (pixels.len < required_len) return null;
+
+    var source_x: i64 = 0;
+    var source_y: i64 = 0;
+    var source_width: i64 = @intCast(image_width);
+    var source_height: i64 = @intCast(image_height);
+
+    if (dirty_x != null or dirty_y != null or dirty_width != null or dirty_height != null) {
+        source_x = finiteInteger(dirty_x orelse return null) orelse return null;
+        source_y = finiteInteger(dirty_y orelse return null) orelse return null;
+        source_width = finiteInteger(dirty_width orelse return null) orelse return null;
+        source_height = finiteInteger(dirty_height orelse return null) orelse return null;
+    }
+
+    if (source_width < 0) {
+        source_x += source_width;
+        source_width = -source_width;
+    }
+    if (source_height < 0) {
+        source_y += source_height;
+        source_height = -source_height;
+    }
+    if (source_width == 0 or source_height == 0) return null;
+
+    const left = @max(source_x, 0);
+    const top = @max(source_y, 0);
+    const right = @min(source_x + source_width, @as(i64, image_width));
+    const bottom = @min(source_y + source_height, @as(i64, image_height));
+    if (right <= left or bottom <= top) return null;
+
+    const patch_width: u32 = @intCast(right - left);
+    const patch_height: u32 = @intCast(bottom - top);
+    const patch_len = try pixelBytesLen(patch_width, patch_height);
+    const data = try allocator.alloc(u8, patch_len);
+
+    const image_stride = @as(usize, image_width) * 4;
+    const patch_stride = @as(usize, patch_width) * 4;
+    var row: usize = 0;
+    while (row < patch_height) : (row += 1) {
+        const src_y = @as(usize, @intCast(top)) + row;
+        const src_x = @as(usize, @intCast(left));
+        const src_pos = src_y * image_stride + src_x * 4;
+        const dst_pos = row * patch_stride;
+        @memcpy(data[dst_pos..][0..patch_stride], pixels[src_pos..][0..patch_stride]);
+    }
+
+    return .{
+        .x = dest_x + left,
+        .y = dest_y + top,
+        .width = patch_width,
+        .height = patch_height,
+        .data = data,
+    };
+}
 
 pub fn parsedFontPixelSize(font: []const u8) ?f64 {
     var i: usize = 0;
@@ -171,8 +294,22 @@ pub fn rawLen(width: u32, height: u32) ?usize {
     return @intCast(raw_len);
 }
 
+fn pixelBytesLen(width: u32, height: u32) !usize {
+    const pixels = try std.math.mul(u64, width, height);
+    const bytes = try std.math.mul(u64, pixels, 4);
+    if (bytes > std.math.maxInt(usize)) return error.Overflow;
+    return @intCast(bytes);
+}
+
 fn finite(value: f64) bool {
     return !std.math.isNan(value) and !std.math.isInf(value);
+}
+
+fn finiteInteger(value: f64) ?i64 {
+    if (!finite(value)) return null;
+    if (value < @as(f64, @floatFromInt(std.math.minInt(i64)))) return null;
+    if (value > @as(f64, @floatFromInt(std.math.maxInt(i64)))) return null;
+    return @intFromFloat(@trunc(value));
 }
 
 fn hasFontFamily(font: []const u8, after_px: usize) bool {

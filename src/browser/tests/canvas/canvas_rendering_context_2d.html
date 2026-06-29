@@ -81,11 +81,32 @@
   imageData.data[2] = 0;
   imageData.data[3] = 255;
 
-  // putImageData should not throw.
   ctx.putImageData(imageData, 0, 0);
+  imageData.data[0] = 0;
+  imageData.data[3] = 0;
+  const copied = ctx.getImageData(0, 0, 1, 1).data;
+  testing.expectEqual(255, copied[0]);
+  testing.expectEqual(0, copied[1]);
+  testing.expectEqual(0, copied[2]);
+  testing.expectEqual(255, copied[3]);
+
+  // Out-of-range writes should not throw.
   ctx.putImageData(imageData, 10, 20);
-  // With dirty rect parameters.
-  ctx.putImageData(imageData, 0, 0, 0, 0, 5, 5);
+
+  const dirty = ctx.createImageData(3, 3);
+  const dirtyPixel = ((1 * 3) + 1) * 4;
+  dirty.data[dirtyPixel + 0] = 0;
+  dirty.data[dirtyPixel + 1] = 0;
+  dirty.data[dirtyPixel + 2] = 255;
+  dirty.data[dirtyPixel + 3] = 255;
+  ctx.putImageData(dirty, 4, 5, 1, 1, 1, 1);
+  const dirtyCopied = ctx.getImageData(5, 6, 1, 1).data;
+  const dirtyOutside = ctx.getImageData(4, 5, 1, 1).data;
+  testing.expectEqual(0, dirtyCopied[0]);
+  testing.expectEqual(0, dirtyCopied[1]);
+  testing.expectEqual(255, dirtyCopied[2]);
+  testing.expectEqual(255, dirtyCopied[3]);
+  testing.expectEqual(0, dirtyOutside[3]);
 }
 </script>
 

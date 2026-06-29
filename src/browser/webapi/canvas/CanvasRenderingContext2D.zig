@@ -97,7 +97,30 @@ pub fn createImageData(
     }
 }
 
-pub fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+pub fn putImageData(
+    self: *CanvasRenderingContext2D,
+    image_data: *ImageData,
+    dx: f64,
+    dy: f64,
+    dirty_x: ?f64,
+    dirty_y: ?f64,
+    dirty_width: ?f64,
+    dirty_height: ?f64,
+    exec: *Execution,
+) !void {
+    try self._paint_stack.appendImagePatch(
+        exec.arena,
+        image_data._width,
+        image_data._height,
+        image_data.pixelData(exec),
+        dx,
+        dy,
+        dirty_x,
+        dirty_y,
+        dirty_width,
+        dirty_height,
+    );
+}
 
 // CanvasImageSource (HTMLImageElement, HTMLCanvasElement, ImageBitmap, ...) is
 // just taken as a js.Value for now since we don't use it, and that's much easier.
@@ -246,7 +269,7 @@ pub const JsApi = struct {
     pub const fillStyle = bridge.accessor(CanvasRenderingContext2D.getFillStyle, CanvasRenderingContext2D.setFillStyle, .{});
     pub const createImageData = bridge.function(CanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
 
-    pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{ .noop = true });
+    pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{});
     pub const drawImage = bridge.function(CanvasRenderingContext2D.drawImage, .{ .noop = true });
     pub const getImageData = bridge.function(CanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
     pub const save = bridge.function(CanvasRenderingContext2D.save, .{ .noop = true });
