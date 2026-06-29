@@ -21,7 +21,10 @@ const lp = @import("lightpanda");
 
 const CDP = @import("../CDP.zig");
 const Config = @import("../../Config.zig");
+const Frame = @import("../../browser/Frame.zig");
 const HttpClient = @import("../../browser/HttpClient.zig");
+const Viewport = @import("../../browser/Viewport.zig");
+const js = @import("../../browser/js/js.zig");
 const Http = @import("../../network/http.zig");
 
 const log = lp.log;
@@ -127,13 +130,24 @@ fn setDeviceMetricsOverride(cmd: *CDP.Command) !void {
         .width = if (params.width > 0) params.width else current.width,
         .height = if (params.height > 0) params.height else current.height,
     };
+    try dispatchMediaQueryListViewportChanges(cmd, current, browser.getViewport());
 
     return cmd.sendResult(null, .{});
 }
 
 fn clearDeviceMetricsOverride(cmd: *CDP.Command) !void {
+    const current = cmd.cdp.browser.getViewport();
     cmd.cdp.browser.viewport_override = null;
+    try dispatchMediaQueryListViewportChanges(cmd, current, cmd.cdp.browser.getViewport());
     return cmd.sendResult(null, .{});
+}
+
+fn dispatchMediaQueryListViewportChanges(cmd: *CDP.Command, previous: Viewport, next: Viewport) !void {
+    if (previous.width == next.width and previous.height == next.height) {
+        return;
+    }
+    const bc = cmd.browser_context orelse return;
+    try bc.session.dispatchMediaQueryListViewportChanges();
 }
 
 // TODO: noop method
@@ -419,6 +433,91 @@ test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     try ctx.expectSentResult(null, .{ .id = 9 });
     try testing.expectEqual(1920, page.getViewport().width);
     try testing.expectEqual(1080, page.getViewport().height);
+}
+
+test "cdp.Emulation: setDeviceMetricsOverride dispatches MediaQueryList change" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-DM2" });
+    _ = try bc.session.createPage();
+    const page = bc.mainPage().?;
+    const frame = &page.frame;
+
+    try evalInFrame(frame,
+        \\globalThis.__mql = matchMedia('(max-width: 1000px)');
+        \\globalThis.__mqlStates = [];
+        \\globalThis.__recordMql = function(prefix, event) {
+        \\  __mqlStates.push(prefix + ':' + [
+        \\    __mql.matches,
+        \\    event.matches,
+        \\    event.media,
+        \\    event.isTrusted,
+        \\    event instanceof MediaQueryListEvent,
+        \\    event.target === __mql,
+        \\    event.currentTarget === __mql,
+        \\    this === __mql
+        \\  ].join(','));
+        \\};
+        \\__mql.addEventListener('change', function(event) {
+        \\  __recordMql.call(this, 'listener', event);
+        \\});
+        \\__mql.onchange = function(event) {
+        \\  __recordMql.call(this, 'onchange', event);
+        \\};
+    );
+    try expectFrameEvalTrue(frame, "__mql.matches === false && __mqlStates.length === 0");
+
+    try ctx.processMessage(.{
+        .id = 10,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 800, .height = 812 },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 10 });
+    try expectFrameEvalTrue(frame,
+        \\__mql.matches === true &&
+        \\__mqlStates.length === 2 &&
+        \\__mqlStates.indexOf('onchange:true,true,(max-width: 1000px),true,true,true,true,true') !== -1 &&
+        \\__mqlStates.indexOf('listener:true,true,(max-width: 1000px),true,true,true,true,true') !== -1
+    );
+
+    try ctx.processMessage(.{
+        .id = 11,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 700, .height = 812 },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 11 });
+    try expectFrameEvalTrue(frame, "__mql.matches === true && __mqlStates.length === 2");
+
+    try ctx.processMessage(.{
+        .id = 12,
+        .method = "Emulation.clearDeviceMetricsOverride",
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 12 });
+    try expectFrameEvalTrue(frame,
+        \\__mql.matches === false &&
+        \\__mqlStates.length === 4 &&
+        \\__mqlStates.indexOf('onchange:false,false,(max-width: 1000px),true,true,true,true,true') !== -1 &&
+        \\__mqlStates.indexOf('listener:false,false,(max-width: 1000px),true,true,true,true,true') !== -1
+    );
+}
+
+fn evalInFrame(frame: *Frame, source: []const u8) !void {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try ls.local.eval(source, "emulation.matchMedia.test");
+}
+
+fn expectFrameEvalTrue(frame: *Frame, source: []const u8) !void {
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    const value = try ls.local.exec(source, "emulation.matchMedia.assert");
+    try testing.expect(value.isTrue());
 }
 
 fn expectRequestHeader(headers: Http.Headers, name: []const u8, expected: []const u8) !void {

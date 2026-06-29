@@ -61,9 +61,8 @@ pub fn setOnChange(self: *MediaQueryList, cb_: ?js.Function) !void {
     }
 }
 
-// TODO: `change` events need to fire when a viewport override crosses the
-// breakpoint that flips `matches`. Legacy listener aliases are real EventTarget
-// registrations so manual dispatch and eventual viewport dispatch share state.
+// Legacy aliases use the same EventTarget registration path as `change`
+// listeners; Window tracks instances and dispatches viewport-crossing changes.
 pub fn addListener(self: *MediaQueryList, callback: js.Function, exec: *js.Execution) !void {
     try self._proto.addEventListener("change", .{ .function = callback }, null, exec);
 }

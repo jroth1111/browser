@@ -494,6 +494,12 @@ pub fn scheduleNavigation(_: *Session, frame: *Frame) !void {
     return frame._page.scheduleNavigation(frame);
 }
 
+pub fn dispatchMediaQueryListViewportChanges(self: *Session) !void {
+    for (self.pages.items) |page| {
+        try page.frame.dispatchMediaQueryListViewportChanges();
+    }
+}
+
 // Drain one page's queued navigations and return whether any page had work.
 // Processing a root navigation mutates self.pages, so it's safer to do this
 // just once, signal the caller, and have them call again. We use a cursor

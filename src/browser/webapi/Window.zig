@@ -43,6 +43,7 @@ const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
+const MediaQueryListEvent = @import("event/MediaQueryListEvent.zig");
 const MessagePort = @import("MessagePort.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
@@ -65,6 +66,11 @@ pub fn registerTypes() []const type {
 }
 
 const Window = @This();
+
+const MediaQueryRegistration = struct {
+    list: *MediaQueryList,
+    matches: bool,
+};
 
 _proto: *EventTarget,
 _frame: *Frame,
@@ -90,6 +96,7 @@ _on_rejection_handled: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null,
 _current_event: ?*Event = null,
 _location: *Location,
+_media_query_lists: std.ArrayList(MediaQueryRegistration) = .{},
 _timers: Timers = .{},
 _custom_elements: CustomElementRegistry = .{},
 _scroll_pos: struct {
@@ -530,11 +537,40 @@ pub fn reportError(self: *Window, err: js.Value, frame: *Frame) !void {
     }
 }
 
-pub fn matchMedia(_: *const Window, query: []const u8, frame: *Frame) !*MediaQueryList {
-    return frame._factory.eventTarget(MediaQueryList{
+pub fn matchMedia(self: *Window, query: []const u8, frame: *Frame) !*MediaQueryList {
+    const list = try frame._factory.eventTarget(MediaQueryList{
         ._proto = undefined,
         ._media = try frame.dupeString(query),
     });
+    try self._media_query_lists.append(frame.arena, .{
+        .list = list,
+        .matches = list.getMatches(frame),
+    });
+    return list;
+}
+
+pub fn dispatchMediaQueryListViewportChanges(self: *Window, frame: *Frame) !void {
+    const initial_len = self._media_query_lists.items.len;
+    var i: usize = 0;
+    while (i < initial_len) : (i += 1) {
+        const list = self._media_query_lists.items[i].list;
+        const next = list.getMatches(frame);
+        if (next == self._media_query_lists.items[i].matches) {
+            continue;
+        }
+        self._media_query_lists.items[i].matches = next;
+
+        const target = list.asEventTarget();
+        if (!frame._event_manager.hasDirectListeners(target, "change", list.getOnChange())) {
+            continue;
+        }
+
+        const event = (try MediaQueryListEvent.initTrusted(comptime .wrap("change"), .{
+            .matches = next,
+            .media = list.getMedia(),
+        }, frame)).asEvent();
+        try frame._event_manager.dispatch(target, event);
+    }
 }
 
 pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, frame: *Frame) !*CSSStyleProperties {

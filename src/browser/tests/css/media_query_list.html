@@ -184,3 +184,22 @@
   testing.expectEqual(1, onchangeHits);
 }
 </script>
+
+<script id=media_query_list_event_constructor>
+{
+  const event = new MediaQueryListEvent('change', {
+    media: '(max-width: 1000px)',
+    matches: true,
+    bubbles: true,
+    cancelable: true,
+  });
+
+  testing.expectEqual('change', event.type);
+  testing.expectEqual('(max-width: 1000px)', event.media);
+  testing.expectEqual(true, event.matches);
+  testing.expectEqual(true, event.bubbles);
+  testing.expectEqual(true, event.cancelable);
+  testing.expectTrue(event instanceof Event);
+  testing.expectTrue(event instanceof MediaQueryListEvent);
+}
+</script>

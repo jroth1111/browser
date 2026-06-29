@@ -486,6 +486,17 @@ pub fn deinit(self: *Frame) void {
     page.releaseArena(self.call_arena);
 }
 
+pub fn dispatchMediaQueryListViewportChanges(self: *Frame) !void {
+    var hs: JS.HandleScope = undefined;
+    const entered = self.js.enter(&hs);
+    defer entered.exit();
+
+    try self.window.dispatchMediaQueryListViewportChanges(self);
+    for (self.child_frames.items) |frame| {
+        try frame.dispatchMediaQueryListViewportChanges();
+    }
+}
+
 pub fn trackWorker(self: *Frame, worker: *Worker) !void {
     try self.workers.append(self.arena, worker);
 }
