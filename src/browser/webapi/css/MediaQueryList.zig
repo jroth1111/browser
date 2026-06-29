@@ -26,9 +26,10 @@ const MediaQueryList = @This();
 
 _proto: *EventTarget,
 _media: []const u8,
+_on_change: ?js.Function.Global = null,
 
 pub fn deinit(self: *MediaQueryList) void {
-    _ = self;
+    if (self._on_change) |func| func.release();
 }
 
 pub fn asEventTarget(self: *MediaQueryList) *EventTarget {
@@ -45,6 +46,15 @@ pub fn getMedia(self: *const MediaQueryList) []const u8 {
 /// matching `Window.innerWidth` / `innerHeight`.
 pub fn getMatches(self: *const MediaQueryList, frame: *Frame) bool {
     return MediaQuery.matches(self._media, frame._page.getViewport());
+}
+
+pub fn getOnChange(self: *const MediaQueryList) ?js.Function.Global {
+    return self._on_change;
+}
+
+pub fn setOnChange(self: *MediaQueryList, cb: ?js.Function.Global) !void {
+    if (self._on_change) |func| func.release();
+    self._on_change = cb;
 }
 
 // TODO: `change` events need to fire on every listener registered here (and
@@ -65,6 +75,7 @@ pub const JsApi = struct {
 
     pub const media = bridge.accessor(MediaQueryList.getMedia, null, .{});
     pub const matches = bridge.accessor(MediaQueryList.getMatches, null, .{});
+    pub const onchange = bridge.accessor(MediaQueryList.getOnChange, MediaQueryList.setOnChange, .{});
     pub const addListener = bridge.function(MediaQueryList.addListener, .{ .noop = true });
     pub const removeListener = bridge.function(MediaQueryList.removeListener, .{ .noop = true });
 };

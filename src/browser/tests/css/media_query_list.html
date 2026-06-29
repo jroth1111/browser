@@ -148,6 +148,14 @@
 <script id=matchMedia_event_target>
 {
   const mql = window.matchMedia('(orientation: portrait)');
+  testing.expectEqual('[object MediaQueryList]', Object.prototype.toString.call(mql));
+  testing.expectEqual(true, mql instanceof MediaQueryList);
+  testing.expectEqual(null, mql.onchange);
+  const onchange = () => {};
+  mql.onchange = onchange;
+  testing.expectEqual(onchange, mql.onchange);
+  mql.onchange = null;
+  testing.expectEqual(null, mql.onchange);
   testing.expectEqual('function', typeof mql.addEventListener);
   testing.expectEqual('function', typeof mql.removeEventListener);
   testing.expectEqual('function', typeof mql.dispatchEvent);
