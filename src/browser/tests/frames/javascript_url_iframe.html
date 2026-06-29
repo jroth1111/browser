@@ -19,3 +19,31 @@
     });
   }
 </script>
+
+<script id=sandboxed_javascript_url_iframe_blocks_script type=module>
+  {
+    const state = await testing.async();
+    let received = false;
+    const handler = (event) => {
+      if (event.data && event.data.messageSource === 'sandboxedJsUrlCollect') {
+        received = true;
+      }
+    };
+    window.addEventListener('message', handler);
+
+    const iframe = document.createElement('iframe');
+    iframe.sandbox = 'allow-same-origin';
+    iframe.src = "javascript:parent.postMessage({ messageSource: 'sandboxedJsUrlCollect' }, '*')";
+    document.documentElement.appendChild(iframe);
+
+    setTimeout(() => {
+      window.removeEventListener('message', handler);
+      state.resolve(received);
+    }, 20);
+
+    await state.done((didReceiveMessage) => {
+      testing.expectEqual(false, didReceiveMessage);
+      testing.expectEqual('about:blank', iframe.contentWindow.location.href);
+    });
+  }
+</script>

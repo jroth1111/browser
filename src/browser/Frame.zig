@@ -840,15 +840,17 @@ pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateO
 // might change inside the function. So the code should be explicit about the
 // frame that it's acting on.
 fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
-    const target = switch (nt) {
-        .form, .anchor => |p| p,
-        .script => |p| p orelse originator,
-        .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
+    const target, const scripts_allowed = switch (nt) {
+        .form, .anchor => |p| .{ p, true },
+        .script => |p| .{ p orelse originator, true },
+        .iframe => |iframe| .{ iframe._window.?._frame, iframe.sandboxAllowsScripts() }, // only an frame with existing content (i.e. a window) can be navigated
     };
 
     if (isJavaScriptURL(request_url)) {
         defer originator._session.releaseArena(arena);
-        try target.executeJavaScriptURL(request_url);
+        if (scripts_allowed) {
+            try target.executeJavaScriptURL(request_url);
+        }
         return;
     }
 
@@ -1770,7 +1772,7 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         iframe._window = null;
         return error.IFrameLoadError;
     };
-    if (is_javascript_url) {
+    if (is_javascript_url and iframe.sandboxAllowsScripts()) {
         try new_frame.executeJavaScriptURL(src);
     }
 

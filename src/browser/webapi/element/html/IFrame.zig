@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const lp = @import("lightpanda");
+const std = @import("std");
 
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
@@ -92,6 +93,17 @@ pub fn getSandbox(self: *IFrame, frame: *Frame) !*collections.DOMTokenList {
 pub fn setSandbox(self: *IFrame, value: String, frame: *Frame) !void {
     const sandbox = try self.getSandbox(frame);
     try sandbox.setValue(value, frame);
+}
+
+pub fn sandboxAllowsScripts(self: *IFrame) bool {
+    const raw = self.asElement().getAttributeSafe(comptime .wrap("sandbox")) orelse return true;
+    var it = std.mem.tokenizeAny(u8, raw, " \t\n\r\x0C");
+    while (it.next()) |token| {
+        if (std.ascii.eqlIgnoreCase(token, "allow-scripts")) {
+            return true;
+        }
+    }
+    return false;
 }
 
 pub const JsApi = struct {
