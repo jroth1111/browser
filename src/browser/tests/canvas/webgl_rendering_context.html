@@ -283,7 +283,7 @@
   testing.expectEqual(true, ctx.getShaderParameter(vertexShader, ctx.COMPILE_STATUS));
 
   const fragmentShader = ctx.createShader(ctx.FRAGMENT_SHADER);
-  ctx.shaderSource(fragmentShader, "precision mediump float; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, vec2(0.5, 0.5)); }");
+  ctx.shaderSource(fragmentShader, "precision mediump float; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, vec2(0.25, 0.25)); }");
   ctx.compileShader(fragmentShader);
   testing.expectEqual(true, ctx.getShaderParameter(fragmentShader, ctx.COMPILE_STATUS));
 
@@ -352,6 +352,32 @@
   testing.expectEqual(97, pixels[0]);
   testing.expectEqual(107, pixels[1]);
   testing.expectEqual(117, pixels[2]);
+  testing.expectEqual(255, pixels[3]);
+
+  const coordinateFragmentShaderTopLeft = ctx.createShader(ctx.FRAGMENT_SHADER);
+  ctx.shaderSource(coordinateFragmentShaderTopLeft, "precision mediump float; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, vec2(0.25, 0.75)); }");
+  ctx.compileShader(coordinateFragmentShaderTopLeft);
+  testing.expectEqual(true, ctx.getShaderParameter(coordinateFragmentShaderTopLeft, ctx.COMPILE_STATUS));
+
+  const coordinateProgramTopLeft = ctx.createProgram();
+  ctx.attachShader(coordinateProgramTopLeft, vertexShader);
+  ctx.attachShader(coordinateProgramTopLeft, coordinateFragmentShaderTopLeft);
+  ctx.linkProgram(coordinateProgramTopLeft);
+  testing.expectEqual(true, ctx.getProgramParameter(coordinateProgramTopLeft, ctx.LINK_STATUS));
+  ctx.useProgram(coordinateProgramTopLeft);
+  const coordinateTopLeftUniform = ctx.getUniformLocation(coordinateProgramTopLeft, "u_texture");
+  testing.expectEqual(true, coordinateTopLeftUniform instanceof WebGLUniformLocation);
+  ctx.uniform1i(coordinateTopLeftUniform, 1);
+  const coordinateTopLeftPosition = ctx.getAttribLocation(coordinateProgramTopLeft, "position");
+  ctx.enableVertexAttribArray(coordinateTopLeftPosition);
+  ctx.vertexAttribPointer(coordinateTopLeftPosition, 2, ctx.FLOAT, false, 0, 0);
+  ctx.clearColor(0, 0, 0, 1);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+  ctx.drawArrays(ctx.TRIANGLES, 0, 3);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixels);
+  testing.expectEqual(71, pixels[0]);
+  testing.expectEqual(81, pixels[1]);
+  testing.expectEqual(91, pixels[2]);
   testing.expectEqual(255, pixels[3]);
 }
 </script>

@@ -23,7 +23,7 @@ const Frame = @import("../../Frame.zig");
 const Profile = @import("../../../chimera/Profile.zig");
 
 const texture_unit_count: usize = 32;
-const texture_sample_texel_count: usize = 4;
+const texture_sample_texel_count: usize = 16;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -301,8 +301,8 @@ fn glConst32(comptime value: u64) u32 {
 }
 
 const TextureSampleCoord = struct {
-    x: usize = 0,
-    y: usize = 0,
+    u: f64 = 0.0,
+    v: f64 = 0.0,
 };
 
 fn containsCompact(source: []const u8, comptime needle: []const u8) bool {
@@ -331,10 +331,48 @@ fn fragmentColorFromSource(source: []const u8) [4]u8 {
     return .{ 0, 255, 0, 255 };
 }
 
+fn skipAsciiWhitespace(source: []const u8, index: *usize) void {
+    while (index.* < source.len and std.ascii.isWhitespace(source[index.*])) : (index.* += 1) {}
+}
+
+fn isFloatLiteralByte(byte: u8) bool {
+    return (byte >= '0' and byte <= '9') or byte == '.' or byte == '-' or byte == '+' or byte == 'e' or byte == 'E';
+}
+
+fn parseFloatLiteral(source: []const u8, index: *usize) ?f64 {
+    skipAsciiWhitespace(source, index);
+    const start = index.*;
+    while (index.* < source.len and isFloatLiteralByte(source[index.*])) : (index.* += 1) {}
+    if (start == index.*) return null;
+    return std.fmt.parseFloat(f64, source[start..index.*]) catch return null;
+}
+
 fn textureSampleCoordFromSource(source: []const u8) TextureSampleCoord {
-    if (containsCompact(source, "vec2(0.75,0.75)")) return .{ .x = 1, .y = 1 };
-    if (containsCompact(source, "vec2(0.25,0.75)")) return .{ .x = 0, .y = 1 };
-    if (containsCompact(source, "vec2(0.75,0.25)")) return .{ .x = 1, .y = 0 };
+    var search_index = std.mem.indexOf(u8, source, "texture2D") orelse return .{};
+    while (std.mem.indexOfPos(u8, source, search_index, "vec2")) |pos| {
+        var index = pos + "vec2".len;
+        skipAsciiWhitespace(source, &index);
+        if (index >= source.len or source[index] != '(') {
+            search_index = pos + "vec2".len;
+            continue;
+        }
+        index += 1;
+        const u = parseFloatLiteral(source, &index) orelse {
+            search_index = pos + "vec2".len;
+            continue;
+        };
+        skipAsciiWhitespace(source, &index);
+        if (index >= source.len or source[index] != ',') {
+            search_index = pos + "vec2".len;
+            continue;
+        }
+        index += 1;
+        const v = parseFloatLiteral(source, &index) orelse {
+            search_index = pos + "vec2".len;
+            continue;
+        };
+        return .{ .u = u, .v = v };
+    }
     return .{};
 }
 
@@ -391,12 +429,20 @@ fn uploadTexturePixels(texture: *WebGLTexture, value: js.Value, format: u32) voi
     } else |_| {}
 }
 
+fn textureCoordIndex(coord: f64, length: usize) usize {
+    if (length == 0 or std.math.isNan(coord) or coord <= 0.0) return 0;
+    const max_index = length - 1;
+    if (coord >= 1.0) return max_index;
+    const scaled = coord * @as(f64, @floatFromInt(length));
+    return @min(@as(usize, @intFromFloat(@floor(scaled))), max_index);
+}
+
 fn sampleTexturePixel(texture: *const WebGLTexture, coord: TextureSampleCoord) [4]u8 {
     if (texture.width <= 0 or texture.height <= 0) return texture.pixel_values;
     const width: usize = @intCast(texture.width);
     const height: usize = @intCast(texture.height);
-    const x = @min(coord.x, width - 1);
-    const y = @min(coord.y, height - 1);
+    const x = textureCoordIndex(coord.u, width);
+    const y = textureCoordIndex(coord.v, height);
     const index = y * width + x;
     if (index >= texture_sample_texel_count) return texture.pixel_values;
     return texture.texel_values[index];
