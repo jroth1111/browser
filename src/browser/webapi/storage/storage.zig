@@ -56,19 +56,49 @@ pub const Shed = struct {
 };
 
 pub const Bucket = struct {
+    _allocator: Allocator,
     local: Lookup,
     session: Lookup,
+    caches: std.StringArrayHashMapUnmanaged(void) = .empty,
 
     pub fn init(allocator: Allocator) Bucket {
         return .{
+            ._allocator = allocator,
             .local = .{ ._allocator = allocator },
             .session = .{ ._allocator = allocator },
         };
     }
 
     pub fn deinit(self: *Bucket) void {
+        for (self.caches.keys()) |key| {
+            self._allocator.free(key);
+        }
+        self.caches.deinit(self._allocator);
         self.local.deinit();
         self.session.deinit();
+    }
+
+    pub fn openCache(self: *Bucket, name: []const u8) !void {
+        if (self.caches.contains(name)) return;
+        const owned = try self._allocator.dupe(u8, name);
+        errdefer self._allocator.free(owned);
+        try self.caches.put(self._allocator, owned, {});
+    }
+
+    pub fn hasCache(self: *const Bucket, name: []const u8) bool {
+        return self.caches.contains(name);
+    }
+
+    pub fn deleteCache(self: *Bucket, name: []const u8) bool {
+        const index = self.caches.getIndex(name) orelse return false;
+        const owned = self.caches.keys()[index];
+        _ = self.caches.orderedRemove(name);
+        self._allocator.free(owned);
+        return true;
+    }
+
+    pub fn cacheNames(self: *const Bucket) []const []const u8 {
+        return self.caches.keys();
     }
 };
 
@@ -176,4 +206,20 @@ pub const Lookup = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: Storage" {
     try testing.htmlRunner("storage.html", .{});
+}
+
+test "WebApi: storage bucket tracks CacheStorage names" {
+    var bucket = Bucket.init(testing.allocator);
+    defer bucket.deinit();
+
+    try std.testing.expect(!bucket.hasCache("asset-cache-a"));
+    try bucket.openCache("asset-cache-a");
+    try bucket.openCache("asset-cache-a");
+
+    try std.testing.expect(bucket.hasCache("asset-cache-a"));
+    try std.testing.expectEqual(@as(usize, 1), bucket.cacheNames().len);
+    try std.testing.expectEqualStrings("asset-cache-a", bucket.cacheNames()[0]);
+    try std.testing.expect(bucket.deleteCache("asset-cache-a"));
+    try std.testing.expect(!bucket.deleteCache("asset-cache-a"));
+    try std.testing.expectEqual(@as(usize, 0), bucket.cacheNames().len);
 }

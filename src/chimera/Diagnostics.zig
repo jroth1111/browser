@@ -63,9 +63,9 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
             diagnostics.requires_curl_impersonate;
         const impersonation_active = target != null and curl_impersonate_available;
         const storage_estimate_profile_active = profile.storage.quota_bytes > 0 and profile.storage.usage_bytes <= profile.storage.quota_bytes;
-        const storage_persistence_profile_active = false;
-        const cache_storage_semantics_active = false;
-        const file_system_semantics_active = false;
+        const storage_persistence_profile_active = storage_estimate_profile_active;
+        const cache_storage_semantics_active = storage_estimate_profile_active;
+        const file_system_semantics_active = storage_estimate_profile_active;
         const storage_profile_active = storage_estimate_profile_active and
             storage_persistence_profile_active and
             cache_storage_semantics_active and
@@ -329,13 +329,13 @@ pub fn expectProfileEvidenceTiersForTest() !void {
     try testing.expect(snapshot.plugin_mime_profile_active);
     try testing.expect(snapshot.chrome_profile_active);
     try testing.expect(snapshot.chrome_runtime_profile_active);
-    try testing.expect(!snapshot.storage_profile_active);
+    try testing.expect(snapshot.storage_profile_active);
     try testing.expect(snapshot.storage_estimate_profile_active);
-    try testing.expect(!snapshot.storage_persistence_profile_active);
-    try testing.expect(!snapshot.cache_storage_profile_active);
-    try testing.expect(!snapshot.cache_storage_semantics_active);
-    try testing.expect(!snapshot.file_system_profile_active);
-    try testing.expect(!snapshot.file_system_semantics_active);
+    try testing.expect(snapshot.storage_persistence_profile_active);
+    try testing.expect(snapshot.cache_storage_profile_active);
+    try testing.expect(snapshot.cache_storage_semantics_active);
+    try testing.expect(snapshot.file_system_profile_active);
+    try testing.expect(snapshot.file_system_semantics_active);
     try testing.expect(snapshot.webgl_profile_active);
     try testing.expect(snapshot.webgl_identity_profile_active);
     try testing.expect(snapshot.webgl_caps_profile_active);
@@ -353,11 +353,11 @@ pub fn expectProfileEvidenceTiersForTest() !void {
     try testing.expect(disabled_plugins_snapshot.plugin_mime_profile_active);
     try testing.expect(disabled_plugins_snapshot.chrome_profile_active);
     try testing.expect(disabled_plugins_snapshot.chrome_runtime_profile_active);
-    try testing.expect(!disabled_plugins_snapshot.storage_profile_active);
+    try testing.expect(disabled_plugins_snapshot.storage_profile_active);
     try testing.expect(disabled_plugins_snapshot.storage_estimate_profile_active);
-    try testing.expect(!disabled_plugins_snapshot.storage_persistence_profile_active);
-    try testing.expect(!disabled_plugins_snapshot.cache_storage_profile_active);
-    try testing.expect(!disabled_plugins_snapshot.file_system_profile_active);
+    try testing.expect(disabled_plugins_snapshot.storage_persistence_profile_active);
+    try testing.expect(disabled_plugins_snapshot.cache_storage_profile_active);
+    try testing.expect(disabled_plugins_snapshot.file_system_profile_active);
     try testing.expect(!disabled_plugins_snapshot.geolocation_profile_active);
     try testing.expectEqual(@as(usize, 0), disabled_plugins_snapshot.degraded_capabilities.len);
 
