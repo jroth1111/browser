@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=AudioContext#createAnalyser>
+{
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+
+  testing.expectEqual(true, analyser instanceof AnalyserNode);
+  testing.expectEqual("function", typeof analyser.connect);
+  testing.expectEqual(2048, analyser.fftSize);
+  testing.expectEqual(1024, analyser.frequencyBinCount);
+  testing.expectEqual(-100, analyser.minDecibels);
+  testing.expectEqual(-30, analyser.maxDecibels);
+  testing.expectEqual(0.8, analyser.smoothingTimeConstant);
+
+  analyser.fftSize = 1024;
+  testing.expectEqual(1024, analyser.fftSize);
+  testing.expectEqual(512, analyser.frequencyBinCount);
+  analyser.minDecibels = -110;
+  analyser.maxDecibels = -20;
+  analyser.smoothingTimeConstant = 0.25;
+  testing.expectEqual(-110, analyser.minDecibels);
+  testing.expectEqual(-20, analyser.maxDecibels);
+  testing.expectEqual(0.25, analyser.smoothingTimeConstant);
+
+  const frequencies = new Uint8Array(4);
+  analyser.getByteFrequencyData(frequencies);
+  testing.expectTrue(frequencies[0] !== 0 || frequencies[1] !== 0);
+
+  const floatFrequencies = new Float32Array(4);
+  analyser.getFloatFrequencyData(floatFrequencies);
+  testing.expectTrue(floatFrequencies[0] < 0);
+
+  const waveform = new Uint8Array(4);
+  analyser.getByteTimeDomainData(waveform);
+  testing.expectEqual(128, waveform[0]);
+  testing.expectEqual(127, waveform[1]);
+
+  const floatWaveform = new Float32Array(4);
+  analyser.getFloatTimeDomainData(floatWaveform);
+  testing.expectTrue(floatWaveform[0] > 0);
+  testing.expectTrue(floatWaveform[1] < 0);
+
+  testing.expectError("IndexSizeError", () => {
+    analyser.fftSize = 1000;
+  });
+  testing.expectError("IndexSizeError", () => {
+    analyser.minDecibels = -10;
+  });
+  testing.expectError("IndexSizeError", () => {
+    analyser.maxDecibels = -120;
+  });
+  testing.expectError("IndexSizeError", () => {
+    analyser.smoothingTimeConstant = 1.5;
+  });
+
+  const gain = ctx.createGain();
+  testing.expectEqual(true, gain instanceof GainNode);
+  const gainParam = gain.gain;
+  testing.expectEqual(true, gainParam instanceof AudioParam);
+  testing.expectEqual(true, gainParam === gain.gain);
+  testing.expectEqual(1, gainParam.value);
+  gainParam.value = 0.5;
+  testing.expectEqual(0.5, gain.gain.value);
+  testing.expectEqual(0.5, gainParam.value);
+  testing.expectEqual(gainParam, gainParam.setValueAtTime(0.25, 0));
+  testing.expectEqual(0.25, gainParam.value);
+
+  const filter = ctx.createBiquadFilter();
+  testing.expectEqual(true, filter instanceof BiquadFilterNode);
+  testing.expectEqual("lowpass", filter.type);
+  testing.expectEqual(true, filter.frequency instanceof AudioParam);
+  testing.expectEqual(350, filter.frequency.value);
+  testing.expectEqual(true, filter.Q instanceof AudioParam);
+  testing.expectEqual(true, filter.Q === filter.Q);
+  testing.expectEqual(1, filter.Q.value);
+
+  const shaper = ctx.createWaveShaper();
+  testing.expectEqual(true, shaper instanceof WaveShaperNode);
+  testing.expectEqual("none", shaper.oversample);
+  testing.expectEqual(null, shaper.curve);
+  const curve = new Float32Array([0, 0.5, 1]);
+  shaper.curve = curve;
+  testing.expectEqual(true, curve === shaper.curve);
+  testing.expectEqual(true, shaper.curve instanceof Float32Array);
+  testing.expectEqual(3, shaper.curve.length);
+  testing.expectError("TypeError", () => {
+    shaper.curve = new Uint8Array([1]);
+  });
+}
+</script>
+
+<script id=OfflineAudioContext#createAnalyser>
+{
+  const ctx = new OfflineAudioContext(1, 128, 48000);
+  const analyser = ctx.createAnalyser();
+
+  testing.expectEqual(true, analyser instanceof AnalyserNode);
+  testing.expectEqual(1024, analyser.frequencyBinCount);
+  testing.expectEqual(true, ctx.createGain() instanceof GainNode);
+  testing.expectEqual(true, ctx.createBiquadFilter() instanceof BiquadFilterNode);
+  testing.expectEqual(true, ctx.createWaveShaper() instanceof WaveShaperNode);
+}
+</script>
+
+<script id=OfflineAudioContext#oncomplete-before type=module>
+{
+  const before = await testing.async();
+  const ctxBefore = new OfflineAudioContext(1, 64, 44100);
+  ctxBefore.oncomplete = (event) => before.resolve(event.renderedBuffer);
+  const renderedBefore = await ctxBefore.startRendering();
+  await before.done((buffer) => {
+    testing.expectEqual(renderedBefore, buffer);
+    testing.expectEqual(64, buffer.length);
+  });
+}
+</script>
+
+<script id=OfflineAudioContext#oncomplete-after type=module>
+{
+  const after = await testing.async();
+  const ctxAfter = new OfflineAudioContext(1, 64, 44100);
+  const renderedAfter = await ctxAfter.startRendering();
+  ctxAfter.oncomplete = (event) => after.resolve(event.renderedBuffer);
+  await after.done((buffer) => {
+    testing.expectEqual(renderedAfter, buffer);
+    testing.expectEqual(64, buffer.length);
+  });
+}
+</script>

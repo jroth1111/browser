@@ -45,6 +45,22 @@ pub fn createDynamicsCompressor(_: *AudioContext, exec: *js.Execution) !*Nodes.D
     return exec._factory.create(Nodes.DynamicsCompressorNode{});
 }
 
+pub fn createAnalyser(_: *AudioContext, exec: *js.Execution) !*Nodes.AnalyserNode {
+    return exec._factory.create(Nodes.AnalyserNode{});
+}
+
+pub fn createGain(_: *AudioContext, exec: *js.Execution) !*Nodes.GainNode {
+    return exec._factory.create(Nodes.GainNode{});
+}
+
+pub fn createBiquadFilter(_: *AudioContext, exec: *js.Execution) !*Nodes.BiquadFilterNode {
+    return exec._factory.create(Nodes.BiquadFilterNode{});
+}
+
+pub fn createWaveShaper(_: *AudioContext, exec: *js.Execution) !*Nodes.WaveShaperNode {
+    return exec._factory.create(Nodes.WaveShaperNode{});
+}
+
 pub fn @"resume"(_: *AudioContext, exec: *js.Execution) !js.Promise {
     return exec.js.local.?.resolvePromise(js.Undefined{});
 }
@@ -75,7 +91,16 @@ pub const JsApi = struct {
     pub const createBufferSource = bridge.function(AudioContext.createBufferSource, .{});
     pub const createOscillator = bridge.function(AudioContext.createOscillator, .{});
     pub const createDynamicsCompressor = bridge.function(AudioContext.createDynamicsCompressor, .{});
+    pub const createAnalyser = bridge.function(AudioContext.createAnalyser, .{});
+    pub const createGain = bridge.function(AudioContext.createGain, .{});
+    pub const createBiquadFilter = bridge.function(AudioContext.createBiquadFilter, .{});
+    pub const createWaveShaper = bridge.function(AudioContext.createWaveShaper, .{});
     pub const @"resume" = bridge.function(AudioContext.@"resume", .{});
     pub const @"suspend" = bridge.function(AudioContext.@"suspend", .{});
     pub const close = bridge.function(AudioContext.close, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: AudioContext" {
+    try testing.htmlRunner("audio/audio_context.html", .{});
+}
