@@ -38,7 +38,9 @@ pub const pageTest = base.pageTest;
 pub const newString = base.newString;
 pub const LogFilter = base.LogFilter;
 
-const test_allocator = @import("root").tracking_allocator;
+fn testAllocator() std.mem.Allocator {
+    return @import("root").tracking_allocator;
+}
 
 pub const ManagedAuthorityGuard = struct {
     config: *Config,
@@ -46,7 +48,7 @@ pub const ManagedAuthorityGuard = struct {
     previous_headers: Config.HttpHeaders,
 
     pub fn deinit(self: *ManagedAuthorityGuard) void {
-        self.config.http_headers.deinit(test_allocator);
+        self.config.http_headers.deinit(testAllocator());
         self.config.http_headers = self.previous_headers;
         self.config.chimera_authority = self.previous_authority;
     }
@@ -85,7 +87,7 @@ const TestContext = struct {
         config.chimera_authority = authority;
         errdefer config.chimera_authority = previous_authority;
 
-        const managed_headers = try Config.HttpHeaders.init(test_allocator, config);
+        const managed_headers = try Config.HttpHeaders.init(testAllocator(), config);
         config.http_headers = managed_headers;
 
         return .{

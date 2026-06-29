@@ -26,6 +26,7 @@ pub const allocator = std.testing.allocator;
 pub const expectError = std.testing.expectError;
 pub const expect = std.testing.expect;
 pub const expectString = std.testing.expectEqualStrings;
+pub const expectEqualStrings = std.testing.expectEqualStrings;
 pub const expectEqualSlices = std.testing.expectEqualSlices;
 
 // sometimes it's super useful to have an arena you don't really care about
