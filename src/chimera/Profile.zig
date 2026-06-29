@@ -265,7 +265,7 @@ fn validateIdentityCoherence(allocator: Allocator, profile: *const Profile) !voi
     if (!std.mem.eql(u8, profile.accept_language, profile.headers.accept_language)) {
         return error.InvalidChimeraProfile;
     }
-    try validateAcceptLanguageList(profile.accept_language, profile.languages);
+    try expectAcceptLanguageValue(allocator, profile.accept_language, profile.languages);
     try expectBrandListValue(allocator, profile.headers.sec_ch_ua, profile.ua_data.brands);
     try expectBrandListValue(allocator, profile.headers.sec_ch_ua_full_version_list, profile.ua_data.full_version_list);
     try expectQuotedValue(allocator, profile.headers.sec_ch_ua_platform, profile.ua_data.platform);
@@ -279,19 +279,31 @@ fn validateIdentityCoherence(allocator: Allocator, profile: *const Profile) !voi
     }
 }
 
-fn validateAcceptLanguageList(accept_language: []const u8, languages: []const []const u8) !void {
-    var count: usize = 0;
-    var it = std.mem.splitScalar(u8, accept_language, ',');
-    while (it.next()) |part| {
-        const end = std.mem.indexOfScalar(u8, part, ';') orelse part.len;
-        const language = std.mem.trim(u8, part[0..end], " \t");
-        if (language.len == 0) continue;
-        if (count >= languages.len or !std.mem.eql(u8, language, languages[count])) {
-            return error.InvalidChimeraProfile;
-        }
-        count += 1;
+fn expectAcceptLanguageValue(allocator: Allocator, actual: []const u8, languages: []const []const u8) !void {
+    const expected = try formatAcceptLanguageValue(allocator, languages);
+    defer allocator.free(expected);
+    if (!std.mem.eql(u8, actual, expected)) {
+        return error.InvalidChimeraProfile;
     }
-    if (count != languages.len) return error.InvalidChimeraProfile;
+}
+
+fn formatAcceptLanguageValue(allocator: Allocator, languages: []const []const u8) ![]const u8 {
+    if (languages.len == 0) return error.InvalidChimeraProfile;
+
+    var value = try std.ArrayList(u8).initCapacity(allocator, languages.len * 16);
+    errdefer value.deinit(allocator);
+    var writer = value.writer(allocator);
+
+    for (languages, 0..) |language, index| {
+        try validateProfileString(language);
+        if (index == 0) {
+            try writer.writeAll(language);
+            continue;
+        }
+        const q_digit: usize = if (index >= 9) 1 else 10 - index;
+        try writer.print(",{s};q=0.{d}", .{ language, q_digit });
+    }
+    return try value.toOwnedSlice(allocator);
 }
 
 fn expectBrandListValue(allocator: Allocator, actual: []const u8, brands: []const Brand) !void {
@@ -351,7 +363,7 @@ fn object(value: std.json.Value) !std.json.ObjectMap {
 fn requiredString(obj: std.json.ObjectMap, key: []const u8) ![]const u8 {
     const value = obj.get(key) orelse return error.InvalidChimeraProfile;
     return switch (value) {
-        .string => |str| if (str.len > 0) str else error.InvalidChimeraProfile,
+        .string => |str| try validatedRequiredString(str),
         else => error.InvalidChimeraProfile,
     };
 }
@@ -359,10 +371,24 @@ fn requiredString(obj: std.json.ObjectMap, key: []const u8) ![]const u8 {
 fn optionalString(obj: std.json.ObjectMap, key: []const u8) !?[]const u8 {
     const value = obj.get(key) orelse return null;
     return switch (value) {
-        .string => |str| if (str.len > 0) str else null,
+        .string => |str| if (str.len > 0) try validatedRequiredString(str) else null,
         .null => null,
         else => error.InvalidChimeraProfile,
     };
+}
+
+fn validatedRequiredString(value: []const u8) ![]const u8 {
+    if (value.len == 0) return error.InvalidChimeraProfile;
+    try validateProfileString(value);
+    return value;
+}
+
+fn validateProfileString(value: []const u8) !void {
+    for (value) |ch| {
+        if (ch < 0x20 or ch == 0x7f) {
+            return error.InvalidChimeraProfile;
+        }
+    }
 }
 
 fn requiredStringList(allocator: Allocator, obj: std.json.ObjectMap, key: []const u8) ![]const []const u8 {
@@ -376,7 +402,7 @@ fn requiredStringList(allocator: Allocator, obj: std.json.ObjectMap, key: []cons
     const out = try allocator.alloc([]const u8, items.len);
     for (items, 0..) |item, i| {
         out[i] = switch (item) {
-            .string => |str| if (str.len > 0) str else return error.InvalidChimeraProfile,
+            .string => |str| try validatedRequiredString(str),
             else => return error.InvalidChimeraProfile,
         };
     }
@@ -617,6 +643,26 @@ test "Chimera Profile rejects unsafe UA-CH structured values" {
         error.InvalidChimeraProfile,
         "\"architecture\":\"arm\"",
         "\"architecture\":\"ar\\nm\"",
+    );
+}
+
+test "Chimera Profile rejects unsafe User-Agent control characters" {
+    try expectDoubleMutatedProfileError(
+        error.InvalidChimeraProfile,
+        "\"user_agent\":\"Mozilla/5.0\"",
+        "\"user_agent\":\"Mozilla/5.0\\r\\nX-Chimera-Leak: 1\"",
+        "\"User-Agent\":\"Mozilla/5.0\"",
+        "\"User-Agent\":\"Mozilla/5.0\\r\\nX-Chimera-Leak: 1\"",
+    );
+}
+
+test "Chimera Profile rejects Accept-Language q-value drift" {
+    try expectDoubleMutatedProfileError(
+        error.InvalidChimeraProfile,
+        "\"accept_language\":\"en-AU,en;q=0.9\"",
+        "\"accept_language\":\"en-AU;q=0.1,en;q=0.9\"",
+        "\"Accept-Language\":\"en-AU,en;q=0.9\"",
+        "\"Accept-Language\":\"en-AU;q=0.1,en;q=0.9\"",
     );
 }
 
