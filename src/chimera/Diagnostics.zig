@@ -82,8 +82,8 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
         const webgl_profile_active = webgl_identity_profile_active and webgl_caps_profile_active;
         const geolocation_position_profile_active = profile.geolocation != null;
         const webrtc_supported = profile.webrtc.enabled;
-        const webrtc_candidate_profile_active = profile.webrtc.exit_ip != null;
-        const webrtc_exit_ip_active = false;
+        const webrtc_candidate_profile_active = profile.webrtc.enabled and profile.webrtc.exit_ip != null;
+        const webrtc_exit_ip_active = webrtc_candidate_profile_active;
 
         return .{
             .authority_version = loaded.authority_version,
@@ -372,10 +372,9 @@ pub fn expectProfileEvidenceTiersForTest() !void {
 
     try testing.expect(webrtc_candidate_snapshot.webrtc_supported);
     try testing.expect(webrtc_candidate_snapshot.webrtc_candidate_profile_active);
-    try testing.expect(!webrtc_candidate_snapshot.webrtc_exit_ip_active);
+    try testing.expect(webrtc_candidate_snapshot.webrtc_exit_ip_active);
     try testing.expectEqualStrings("203.0.113.10", webrtc_candidate_snapshot.webrtc_exit_ip.?);
-    try testing.expectEqual(@as(usize, 1), webrtc_candidate_snapshot.degraded_capabilities.len);
-    try testing.expect(std.mem.eql(u8, "webrtc_exit_ip", webrtc_candidate_snapshot.degraded_capabilities[0]));
+    try testing.expectEqual(@as(usize, 0), webrtc_candidate_snapshot.degraded_capabilities.len);
 }
 
 test "Chimera Diagnostics reports profile evidence tiers" {
