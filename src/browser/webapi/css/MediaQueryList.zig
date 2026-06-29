@@ -26,7 +26,7 @@ const MediaQueryList = @This();
 
 _proto: *EventTarget,
 _media: []const u8,
-_on_change: ?js.Function.Global = null,
+_on_change: ?js.Function.Temp = null,
 
 pub fn deinit(self: *MediaQueryList) void {
     if (self._on_change) |func| func.release();
@@ -48,21 +48,29 @@ pub fn getMatches(self: *const MediaQueryList, frame: *Frame) bool {
     return MediaQuery.matches(self._media, frame._page.getViewport());
 }
 
-pub fn getOnChange(self: *const MediaQueryList) ?js.Function.Global {
+pub fn getOnChange(self: *const MediaQueryList) ?js.Function.Temp {
     return self._on_change;
 }
 
-pub fn setOnChange(self: *MediaQueryList, cb: ?js.Function.Global) !void {
+pub fn setOnChange(self: *MediaQueryList, cb_: ?js.Function) !void {
     if (self._on_change) |func| func.release();
-    self._on_change = cb;
+    if (cb_) |cb| {
+        self._on_change = try cb.tempWithThis(self);
+    } else {
+        self._on_change = null;
+    }
 }
 
-// TODO: `change` events need to fire on every listener registered here (and
-// via `addEventListener("change", ...)` through the EventTarget proto) when a
-// viewport override crosses the breakpoint that flips `matches`. Today these
-// registrations are no-ops rather than stored hooks.
-pub fn addListener(_: *const MediaQueryList, _: js.Function) void {}
-pub fn removeListener(_: *const MediaQueryList, _: js.Function) void {}
+// TODO: `change` events need to fire when a viewport override crosses the
+// breakpoint that flips `matches`. Legacy listener aliases are real EventTarget
+// registrations so manual dispatch and eventual viewport dispatch share state.
+pub fn addListener(self: *MediaQueryList, callback: js.Function, exec: *js.Execution) !void {
+    try self._proto.addEventListener("change", .{ .function = callback }, null, exec);
+}
+
+pub fn removeListener(self: *MediaQueryList, callback: js.Function, exec: *js.Execution) !void {
+    try self._proto.removeEventListener("change", .{ .function = callback }, null, exec);
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(MediaQueryList);
@@ -76,8 +84,8 @@ pub const JsApi = struct {
     pub const media = bridge.accessor(MediaQueryList.getMedia, null, .{});
     pub const matches = bridge.accessor(MediaQueryList.getMatches, null, .{});
     pub const onchange = bridge.accessor(MediaQueryList.getOnChange, MediaQueryList.setOnChange, .{});
-    pub const addListener = bridge.function(MediaQueryList.addListener, .{ .noop = true });
-    pub const removeListener = bridge.function(MediaQueryList.removeListener, .{ .noop = true });
+    pub const addListener = bridge.function(MediaQueryList.addListener, .{});
+    pub const removeListener = bridge.function(MediaQueryList.removeListener, .{});
 };
 
 const testing = @import("../../../testing.zig");

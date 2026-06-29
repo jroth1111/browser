@@ -159,5 +159,28 @@
   testing.expectEqual('function', typeof mql.addEventListener);
   testing.expectEqual('function', typeof mql.removeEventListener);
   testing.expectEqual('function', typeof mql.dispatchEvent);
+
+  let listenerHits = 0;
+  const listener = function(event) {
+    if (this === mql && event.type === 'change' && event.target === mql) {
+      listenerHits += 1;
+    }
+  };
+  mql.addListener(listener);
+  mql.dispatchEvent(new Event('change'));
+  mql.removeListener(listener);
+  mql.dispatchEvent(new Event('change'));
+  testing.expectEqual(1, listenerHits);
+
+  let onchangeHits = 0;
+  mql.onchange = function(event) {
+    if (this === mql && event.type === 'change' && event.target === mql) {
+      onchangeHits += 1;
+    }
+  };
+  mql.dispatchEvent(new Event('change'));
+  mql.onchange = null;
+  mql.dispatchEvent(new Event('change'));
+  testing.expectEqual(1, onchangeHits);
 }
 </script>

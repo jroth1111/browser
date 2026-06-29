@@ -111,6 +111,13 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event, opts),
+        .media_query_list => |mql| {
+            if (event._type_string.eql(comptime .wrap("change"))) {
+                try self.dispatchDirect(target, event, mql.getOnChange(), .{ .context = "dispatch" });
+            } else {
+                try self.dispatchDirect(target, event, null, .{ .context = "dispatch" });
+            }
+        },
         else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
 }
