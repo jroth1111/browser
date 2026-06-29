@@ -189,6 +189,11 @@ pub const StrokedRect = struct {
     fn contains(self: StrokedRect, x: i64, y: i64) bool {
         const xf = @as(f64, @floatFromInt(x)) + 0.5;
         const yf = @as(f64, @floatFromInt(y)) + 0.5;
+        return self.containsPoint(xf, yf);
+    }
+
+    pub fn containsPoint(self: StrokedRect, xf: f64, yf: f64) bool {
+        if (!finite(xf) or !finite(yf)) return false;
         const left = @min(self.x, self.x + self.width);
         const right = @max(self.x, self.x + self.width);
         const top = @min(self.y, self.y + self.height);
@@ -296,6 +301,19 @@ pub const PaintStack = struct {
     pub fn appendStrokeRect(self: *PaintStack, x: f64, y: f64, width: f64, height: f64, line_width: f64, rgba: color.RGBA) void {
         if (StrokedRect.init(x, y, width, height, line_width, rgba)) |rect| {
             self.append(.{ .stroke_rect = rect });
+        }
+    }
+
+    pub fn appendStrokePath(self: *PaintStack, path: CanvasPath, line_width: f64, rgba: color.RGBA) void {
+        for (path.items()) |path_rect| {
+            self.appendStrokeRect(
+                path_rect.left,
+                path_rect.top,
+                path_rect.right - path_rect.left,
+                path_rect.bottom - path_rect.top,
+                line_width,
+                rgba,
+            );
         }
     }
 
@@ -465,6 +483,22 @@ pub fn fontPixelSize(font: []const u8) f64 {
 
 pub fn isValidLineWidth(value: f64) bool {
     return finite(value) and value > 0;
+}
+
+pub fn pathStrokeContains(path: CanvasPath, x: f64, y: f64, line_width: f64) bool {
+    const transparent = color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    for (path.items()) |path_rect| {
+        const stroked_rect = StrokedRect.init(
+            path_rect.left,
+            path_rect.top,
+            path_rect.right - path_rect.left,
+            path_rect.bottom - path_rect.top,
+            line_width,
+            transparent,
+        ) orelse continue;
+        if (stroked_rect.containsPoint(x, y)) return true;
+    }
+    return false;
 }
 
 pub fn textWidth(text: []const u8, font: []const u8) f64 {
@@ -785,6 +819,22 @@ test "CanvasBitmap stroke rect paints outline only" {
 
     stack.appendStrokeRect(0, 0, 10, 10, 0, blue);
     try testing.expectEqual(@as(usize, 1), stack.count);
+}
+
+test "CanvasBitmap path stroke reuses stroke rect outline" {
+    var stack = PaintStack{};
+    var path = CanvasPath{};
+    const blue = color.RGBA{ .r = 0, .g = 51, .b = 255, .a = 255 };
+
+    path.rect(4, 4, 8, 6);
+    stack.appendStrokePath(path, 2, blue);
+
+    try testing.expectEqual(blue, paintStackPixelAt(&stack, 4, 4, 0));
+    try testing.expectEqual(blue, paintStackPixelAt(&stack, 11, 9, 0));
+    try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&stack, 8, 7, 0));
+    try testing.expect(pathStrokeContains(path, 4, 4, 2));
+    try testing.expect(!pathStrokeContains(path, 8, 7, 2));
+    try testing.expect(!pathStrokeContains(path, 4, 4, 0));
 }
 
 test "CanvasBitmap clear rect overrides only covered pixels" {

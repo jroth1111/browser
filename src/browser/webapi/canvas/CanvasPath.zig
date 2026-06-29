@@ -30,7 +30,7 @@ pub const FillRule = enum {
     evenodd,
 };
 
-const Rect = struct {
+pub const Rect = struct {
     left: f64,
     top: f64,
     right: f64,
@@ -47,6 +47,10 @@ pub fn begin(self: *CanvasPath) void {
 
 pub fn isEmpty(self: *const CanvasPath) bool {
     return self.rect_count == 0;
+}
+
+pub fn items(self: *const CanvasPath) []const Rect {
+    return self.rects[0..self.rect_count];
 }
 
 pub fn rect(self: *CanvasPath, x: f64, y: f64, width: f64, height: f64) void {

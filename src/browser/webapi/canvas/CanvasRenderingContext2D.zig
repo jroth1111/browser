@@ -250,7 +250,9 @@ pub fn rect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height:
 pub fn fill(self: *CanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void {
     self._paint_stack.appendPath(self._path, self._fill_style, maybe_fill_rule);
 }
-pub fn stroke(_: *CanvasRenderingContext2D) void {}
+pub fn stroke(self: *CanvasRenderingContext2D) void {
+    self._paint_stack.appendStrokePath(self._path, self._line_width * self._transform.strokeScale(), self._stroke_style);
+}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
 pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
     const text_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font) orelse return;
@@ -271,8 +273,8 @@ pub fn measureText(self: *const CanvasRenderingContext2D, text: []const u8, exec
 pub fn isPointInPath(self: *const CanvasRenderingContext2D, x: f64, y: f64, maybe_fill_rule: ?[]const u8) bool {
     return self._path.isPointInPath(x, y, maybe_fill_rule);
 }
-pub fn isPointInStroke(_: *const CanvasRenderingContext2D, _: f64, _: f64) bool {
-    return false;
+pub fn isPointInStroke(self: *const CanvasRenderingContext2D, x: f64, y: f64) bool {
+    return CanvasBitmap.pathStrokeContains(self._path, x, y, self._line_width * self._transform.strokeScale());
 }
 
 pub fn pngRawPixels(
@@ -345,7 +347,7 @@ pub const JsApi = struct {
     pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{ .noop = true });
     pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{});
     pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{});
-    pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{ .noop = true });
+    pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{});
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
     pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{});
