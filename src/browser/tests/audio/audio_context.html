@@ -95,6 +95,35 @@
 }
 </script>
 
+<script id=AudioBuffer#copyToChannel>
+{
+  const buffer = new AudioBuffer({numberOfChannels: 1, length: 8, sampleRate: 44100});
+  const write = new Float32Array([0.25, -0.5, 0.75]);
+  buffer.copyToChannel(write, 0, 2);
+
+  const copied = new Float32Array(3);
+  buffer.copyFromChannel(copied, 0, 2);
+  testing.expectEqual(0.25, copied[0]);
+  testing.expectEqual(-0.5, copied[1]);
+  testing.expectEqual(0.75, copied[2]);
+
+  const data = buffer.getChannelData(0);
+  testing.expectEqual(0.25, data[2]);
+  testing.expectEqual(-0.5, data[3]);
+  testing.expectEqual(0.75, data[4]);
+
+  const ignored = new Float32Array([1]);
+  buffer.copyToChannel(ignored, 0, 99);
+  const afterIgnored = new Float32Array(1);
+  buffer.copyFromChannel(afterIgnored, 0, 7);
+  testing.expectFalse(afterIgnored[0] === 1);
+
+  testing.expectError("IndexSizeError", () => {
+    buffer.copyToChannel(write, 2, 0);
+  });
+}
+</script>
+
 <script id=OfflineAudioContext#createAnalyser>
 {
   const ctx = new OfflineAudioContext(1, 128, 48000);
