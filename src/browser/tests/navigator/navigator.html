@@ -27,6 +27,7 @@
   testing.expectEqual('Gecko', navigator.product);
   testing.expectEqual(false, navigator.javaEnabled());
   testing.expectEqual(false, navigator.webdriver);
+  testing.expectEqual(false, navigator.pdfViewerEnabled);
 
   testing.expectEqual(null, navigator.doNotTrack);
 
@@ -41,7 +42,7 @@
     'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
     'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
     'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
-    'plugins', 'doNotTrack', 'globalPrivacyControl',
+    'plugins', 'mimeTypes', 'pdfViewerEnabled', 'doNotTrack', 'globalPrivacyControl',
     'webkitTemporaryStorage', 'webkitPersistentStorage',
   ]) {
     const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);

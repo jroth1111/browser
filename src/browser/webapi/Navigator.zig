@@ -185,6 +185,10 @@ pub fn getMimeTypes(self: *Navigator) *MimeTypeArray {
     return &self._mime_types;
 }
 
+pub fn getPdfViewerEnabled(_: *const Navigator, exec: *const Execution) bool {
+    return PluginArray.pdfEnabled(exec);
+}
+
 pub fn getPermissions(self: *Navigator) *Permissions {
     return &self._permissions;
 }
@@ -324,6 +328,7 @@ pub const JsApi = struct {
     // window only
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
     pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{ .exposed = .window });
+    pub const pdfViewerEnabled = bridge.accessor(Navigator.getPdfViewerEnabled, null, .{ .exposed = .window });
     pub const webkitTemporaryStorage = bridge.accessor(Navigator.getWebkitTemporaryStorage, null, .{ .exposed = .window });
     pub const webkitPersistentStorage = bridge.accessor(Navigator.getWebkitPersistentStorage, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });

@@ -220,7 +220,7 @@ fn chimeraProfile(exec: *const Execution) ?*const ChimeraProfile {
     return &authority.profile;
 }
 
-fn pdfEnabled(exec: *const Execution) bool {
+pub fn pdfEnabled(exec: *const Execution) bool {
     const profile = chimeraProfile(exec) orelse return false;
     return profile.plugins.pdf_enabled;
 }
