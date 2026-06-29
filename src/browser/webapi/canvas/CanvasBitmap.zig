@@ -24,10 +24,10 @@ pub const FilledRect = struct {
     }
 };
 
-pub fn fontPixelSize(font: []const u8) f64 {
+pub fn parsedFontPixelSize(font: []const u8) ?f64 {
     var i: usize = 0;
     while (i + 1 < font.len) : (i += 1) {
-        if (font[i] != 'p' or font[i + 1] != 'x') continue;
+        if (asciiLower(font[i]) != 'p' or asciiLower(font[i + 1]) != 'x') continue;
         var start = i;
         while (start > 0) {
             const ch = font[start - 1];
@@ -35,10 +35,19 @@ pub fn fontPixelSize(font: []const u8) f64 {
             start -= 1;
         }
         if (start == i) continue;
+        if (!hasFontSizeTokenBoundary(font, start)) continue;
         const parsed = std.fmt.parseFloat(f64, font[start..i]) catch continue;
-        if (finite(parsed) and parsed > 0) return parsed;
+        if (finite(parsed) and parsed > 0 and hasFontFamily(font, i + 2)) return parsed;
     }
-    return 10.0;
+    return null;
+}
+
+pub fn isValidFont(font: []const u8) bool {
+    return parsedFontPixelSize(font) != null;
+}
+
+pub fn fontPixelSize(font: []const u8) f64 {
+    return parsedFontPixelSize(font) orelse 10.0;
 }
 
 pub fn textWidth(text: []const u8, font: []const u8) f64 {
@@ -83,6 +92,48 @@ pub fn rawLen(width: u32, height: u32) ?usize {
 
 fn finite(value: f64) bool {
     return !std.math.isNan(value) and !std.math.isInf(value);
+}
+
+fn hasFontFamily(font: []const u8, after_px: usize) bool {
+    if (after_px >= font.len) return false;
+
+    var i = after_px;
+    if (font[i] != '/' and !asciiWhitespace(font[i])) return false;
+
+    while (i < font.len and asciiWhitespace(font[i])) : (i += 1) {}
+    if (i < font.len and font[i] == '/') {
+        i = skipLineHeight(font, i + 1) orelse return false;
+    }
+
+    while (i < font.len and asciiWhitespace(font[i])) : (i += 1) {}
+    return i < font.len;
+}
+
+fn hasFontSizeTokenBoundary(font: []const u8, start: usize) bool {
+    return start == 0 or asciiWhitespace(font[start - 1]);
+}
+
+fn skipLineHeight(font: []const u8, after_slash: usize) ?usize {
+    var i = after_slash;
+    while (i < font.len and asciiWhitespace(font[i])) : (i += 1) {}
+    const start = i;
+    while (i < font.len and !asciiWhitespace(font[i])) : (i += 1) {}
+    if (i == start) return null;
+    return i;
+}
+
+fn asciiLower(byte: u8) u8 {
+    return switch (byte) {
+        'A'...'Z' => byte + ('a' - 'A'),
+        else => byte,
+    };
+}
+
+fn asciiWhitespace(byte: u8) bool {
+    return switch (byte) {
+        ' ', '\t', '\n', '\r', 0x0c => true,
+        else => false,
+    };
 }
 
 pub fn transparentRawPixels(allocator: std.mem.Allocator, width: u32, height: u32, raw_len: usize) ![]const u8 {
@@ -245,7 +296,17 @@ test "CanvasBitmap text metrics follow pixel font size" {
 
     try testing.expect(small > 0);
     try testing.expect(large > small);
-    try testing.expectEqual(@as(f64, 48.0), fontPixelSize("bold 48px serif"));
+    try testing.expectEqual(@as(?f64, 48.0), parsedFontPixelSize("bold 48px serif"));
+    try testing.expectEqual(@as(?f64, 16.0), parsedFontPixelSize("16px/1.2 Arial"));
+    try testing.expectEqual(@as(?f64, 16.0), parsedFontPixelSize("16px /1.2 Arial"));
+    try testing.expectEqual(@as(?f64, 18.0), parsedFontPixelSize("18PX / 1.2 Arial"));
+    try testing.expectEqual(@as(?f64, null), parsedFontPixelSize("bold 1.2em serif"));
+    try testing.expectEqual(@as(?f64, null), parsedFontPixelSize("16px"));
+    try testing.expectEqual(@as(?f64, null), parsedFontPixelSize("16px /1.2"));
+    try testing.expectEqual(@as(?f64, null), parsedFontPixelSize("16px / 1.2"));
+    try testing.expectEqual(@as(?f64, null), parsedFontPixelSize("16pxArial"));
+    try testing.expectEqual(@as(?f64, null), parsedFontPixelSize("12pt/16px Arial"));
+    try testing.expectEqual(@as(?f64, null), parsedFontPixelSize("bold48px serif"));
     try testing.expectEqual(@as(f64, 10.0), fontPixelSize("bold 1.2em serif"));
 }
 

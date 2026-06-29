@@ -235,6 +235,13 @@
   testing.expectEqual(true, largeMetrics.width > metrics.width);
   testing.expectEqual(true, largeMetrics.actualBoundingBoxAscent > metrics.actualBoundingBoxAscent);
   ctx.font = "16px Arial";
+  testing.expectEqual("16px Arial", ctx.font);
+  ctx.font = "16px";
+  testing.expectEqual("16px Arial", ctx.font);
+  ctx.font = "not-a-font";
+  testing.expectEqual("16px Arial", ctx.font);
+  ctx.font = "18px/1.2 Arial";
+  testing.expectEqual("18px/1.2 Arial", ctx.font);
 
   const before = ctx.getImageData(2, 12, 1, 1).data;
   testing.expectEqual(0, before[3]);

@@ -65,7 +65,7 @@ pub fn getFont(self: *const OffscreenCanvasRenderingContext2D) []const u8 {
 }
 
 pub fn setFont(self: *OffscreenCanvasRenderingContext2D, value: []const u8, exec: *const Execution) !void {
-    if (value.len == 0) return;
+    if (!CanvasBitmap.isValidFont(value)) return;
     self._font = try exec.dupeString(value);
 }
 
