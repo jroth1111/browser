@@ -52,6 +52,8 @@ clear_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
 draw_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
 has_drawn_pixels: bool = false,
 bound_array_buffer: ?*WebGLBuffer = null,
+bound_framebuffer: ?*WebGLFramebuffer = null,
+bound_texture_2d: ?*WebGLTexture = null,
 current_program: ?*WebGLProgram = null,
 attrib0_array_enabled: bool = false,
 attrib0_pointer_enabled: bool = false,
@@ -108,6 +110,13 @@ pub const FRONT: u64 = 0x0404;
 pub const BACK: u64 = 0x0405;
 pub const FRONT_AND_BACK: u64 = 0x0408;
 pub const TEXTURE_2D: u64 = 0x0DE1;
+pub const TEXTURE_MAG_FILTER: u64 = 0x2800;
+pub const TEXTURE_MIN_FILTER: u64 = 0x2801;
+pub const TEXTURE_WRAP_S: u64 = 0x2802;
+pub const TEXTURE_WRAP_T: u64 = 0x2803;
+pub const NEAREST: u64 = 0x2600;
+pub const LINEAR: u64 = 0x2601;
+pub const CLAMP_TO_EDGE: u64 = 0x812F;
 pub const CULL_FACE: u64 = 0x0B44;
 pub const BLEND: u64 = 0x0BE2;
 pub const DITHER: u64 = 0x0BD0;
@@ -166,6 +175,13 @@ pub const SAMPLES: u64 = 0x80A9;
 pub const SAMPLE_COVERAGE_VALUE: u64 = 0x80AA;
 pub const SAMPLE_COVERAGE_INVERT: u64 = 0x80AB;
 pub const COMPRESSED_TEXTURE_FORMATS: u64 = 0x86A3;
+pub const FRAMEBUFFER: u64 = 0x8D40;
+pub const RENDERBUFFER: u64 = 0x8D41;
+pub const FRAMEBUFFER_BINDING: u64 = 0x8CA6;
+pub const COLOR_ATTACHMENT0: u64 = 0x8CE0;
+pub const FRAMEBUFFER_COMPLETE: u64 = 0x8CD5;
+pub const FRAMEBUFFER_INCOMPLETE_ATTACHMENT: u64 = 0x8CD6;
+pub const FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT: u64 = 0x8CD7;
 pub const DONT_CARE: u64 = 0x1100;
 pub const FASTEST: u64 = 0x1101;
 pub const NICEST: u64 = 0x1102;
@@ -281,6 +297,26 @@ fn colorByte(value: f32) u8 {
     return @intFromFloat(std.math.clamp(value, 0.0, 1.0) * 255.0);
 }
 
+fn firstPixelFromValue(value: js.Value, format: u32, fallback: [4]u8) [4]u8 {
+    if (value.isNullOrUndefined()) return fallback;
+    if (value.toZig(js.TypedArray(u8))) |typed| {
+        const values = typed.values;
+        if (format == glConst32(RGBA) and values.len >= 4) {
+            return .{ values[0], values[1], values[2], values[3] };
+        }
+        if (format == glConst32(RGB) and values.len >= 3) {
+            return .{ values[0], values[1], values[2], 255 };
+        }
+    } else |_| {}
+    return fallback;
+}
+
+fn boundFramebufferTexture(self: *const WebGLRenderingContext) ?*WebGLTexture {
+    const framebuffer = self.bound_framebuffer orelse return null;
+    if (!framebuffer.isComplete()) return null;
+    return framebuffer.color_attachment0;
+}
+
 pub fn initFromProfile(width: u32, height: u32, profile: ?*const Profile) WebGLRenderingContext {
     var ctx = WebGLRenderingContext{
         .drawing_buffer_width = width,
@@ -316,7 +352,17 @@ pub const WebGLBuffer = struct {
 
     pub const JsApi = WebGLObjectJsApi(WebGLBuffer, "WebGLBuffer");
 };
-pub const WebGLFramebuffer = OpaqueWebGLObject("WebGLFramebuffer");
+pub const WebGLFramebuffer = struct {
+    color_attachment0: ?*WebGLTexture = null,
+    deleted: bool = false,
+
+    fn isComplete(self: *const WebGLFramebuffer) bool {
+        const texture = self.color_attachment0 orelse return false;
+        return !self.deleted and !texture.deleted and texture.has_image;
+    }
+
+    pub const JsApi = WebGLObjectJsApi(WebGLFramebuffer, "WebGLFramebuffer");
+};
 pub const WebGLProgram = struct {
     vertex_shader: ?*WebGLShader = null,
     fragment_shader: ?*WebGLShader = null,
@@ -346,7 +392,19 @@ pub const WebGLShader = struct {
 
     pub const JsApi = WebGLObjectJsApi(WebGLShader, "WebGLShader");
 };
-pub const WebGLTexture = OpaqueWebGLObject("WebGLTexture");
+pub const WebGLTexture = struct {
+    width: i32 = 0,
+    height: i32 = 0,
+    pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
+    min_filter: u32 = glConst32(NEAREST),
+    mag_filter: u32 = glConst32(NEAREST),
+    wrap_s: u32 = glConst32(CLAMP_TO_EDGE),
+    wrap_t: u32 = glConst32(CLAMP_TO_EDGE),
+    has_image: bool = false,
+    deleted: bool = false,
+
+    pub const JsApi = WebGLObjectJsApi(WebGLTexture, "WebGLTexture");
+};
 pub const WebGLUniformLocation = OpaqueWebGLObject("WebGLUniformLocation");
 
 fn OpaqueWebGLObject(comptime js_name: []const u8) type {
@@ -826,12 +884,19 @@ pub fn clearColor(self: *WebGLRenderingContext, r: f64, g: f64, b: f64, a: f64) 
 
 pub fn clear(self: *WebGLRenderingContext, mask: u64) void {
     if ((mask & COLOR_BUFFER_BIT) == 0) return;
-    self.clear_pixel_values = .{
+    const pixel_values: [4]u8 = .{
         colorByte(self.clear_color_values[0]),
         colorByte(self.clear_color_values[1]),
         colorByte(self.clear_color_values[2]),
         colorByte(self.clear_color_values[3]),
     };
+    if (self.bound_framebuffer != null) {
+        if (self.boundFramebufferTexture()) |texture| {
+            texture.pixel_values = pixel_values;
+        }
+        return;
+    }
+    self.clear_pixel_values = pixel_values;
     self.has_drawn_pixels = false;
 }
 
@@ -849,7 +914,12 @@ pub fn readPixels(self: *const WebGLRenderingContext, _: i32, _: i32, width: i32
     if (width <= 0 or height <= 0) return;
     const pixel_count: usize = @intCast(width * height);
     const byte_count = @min(pixels.len, pixel_count * 4);
-    const source = if (self.has_drawn_pixels) self.draw_pixel_values else self.clear_pixel_values;
+    const source = if (self.bound_framebuffer != null)
+        if (self.boundFramebufferTexture()) |texture| texture.pixel_values else return
+    else if (self.has_drawn_pixels)
+        self.draw_pixel_values
+    else
+        self.clear_pixel_values;
     var i: usize = 0;
     while (i < byte_count) : (i += 4) {
         pixels[i] = source[0];
@@ -862,6 +932,16 @@ pub fn readPixels(self: *const WebGLRenderingContext, _: i32, _: i32, width: i32
 pub fn bindBuffer(self: *WebGLRenderingContext, target: u32, buffer: ?*WebGLBuffer) void {
     if (target != glConst32(ARRAY_BUFFER)) return;
     self.bound_array_buffer = buffer;
+}
+
+pub fn bindFramebuffer(self: *WebGLRenderingContext, target: u32, framebuffer: ?*WebGLFramebuffer) void {
+    if (target != glConst32(FRAMEBUFFER)) return;
+    self.bound_framebuffer = framebuffer;
+}
+
+pub fn bindTexture(self: *WebGLRenderingContext, target: u32, texture: ?*WebGLTexture) void {
+    if (target != glConst32(TEXTURE_2D)) return;
+    self.bound_texture_2d = texture;
 }
 
 pub fn bufferData(self: *WebGLRenderingContext, target: u32, _: ?js.Value, usage: u32) void {
@@ -898,8 +978,92 @@ pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i3
     const fragment_shader = program.fragment_shader orelse return;
     if (!fragment_shader.compiled or fragment_shader.deleted) return;
 
+    if (self.bound_framebuffer != null) {
+        if (self.boundFramebufferTexture()) |texture| {
+            texture.pixel_values = fragment_shader.fragment_color;
+            texture.has_image = true;
+        }
+        return;
+    }
     self.draw_pixel_values = fragment_shader.fragment_color;
     self.has_drawn_pixels = true;
+}
+
+pub fn texImage2D(
+    self: *WebGLRenderingContext,
+    target: u32,
+    level: i32,
+    internal_format: u32,
+    width: i32,
+    height: i32,
+    border: i32,
+    format: u32,
+    typ: u32,
+    pixels: ?js.Value,
+) void {
+    if (target != glConst32(TEXTURE_2D) or level != 0 or width <= 0 or height <= 0 or border != 0) return;
+    if (typ != glConst32(UNSIGNED_BYTE)) return;
+    if (internal_format != glConst32(RGBA) and internal_format != glConst32(RGB)) return;
+    if (format != glConst32(RGBA) and format != glConst32(RGB)) return;
+    const texture = self.bound_texture_2d orelse return;
+    if (texture.deleted) return;
+
+    texture.width = width;
+    texture.height = height;
+    if (pixels) |value| {
+        texture.pixel_values = firstPixelFromValue(value, format, texture.pixel_values);
+    } else {
+        texture.pixel_values = .{ 0, 0, 0, 0 };
+    }
+    texture.has_image = true;
+}
+
+pub fn texParameteri(self: *WebGLRenderingContext, target: u32, pname: u32, param: u32) void {
+    if (target != glConst32(TEXTURE_2D)) return;
+    const texture = self.bound_texture_2d orelse return;
+    if (texture.deleted) return;
+    switch (pname) {
+        glConst32(TEXTURE_MIN_FILTER) => texture.min_filter = param,
+        glConst32(TEXTURE_MAG_FILTER) => texture.mag_filter = param,
+        glConst32(TEXTURE_WRAP_S) => texture.wrap_s = param,
+        glConst32(TEXTURE_WRAP_T) => texture.wrap_t = param,
+        else => return,
+    }
+}
+
+pub fn framebufferTexture2D(
+    self: *WebGLRenderingContext,
+    target: u32,
+    attachment: u32,
+    textarget: u32,
+    texture: ?*WebGLTexture,
+    level: i32,
+) void {
+    if (target != glConst32(FRAMEBUFFER) or attachment != glConst32(COLOR_ATTACHMENT0)) return;
+    if (textarget != glConst32(TEXTURE_2D) or level != 0) return;
+    const framebuffer = self.bound_framebuffer orelse return;
+    if (framebuffer.deleted) return;
+    framebuffer.color_attachment0 = texture;
+}
+
+pub fn checkFramebufferStatus(self: *const WebGLRenderingContext, target: u32) u32 {
+    if (target != glConst32(FRAMEBUFFER)) return glConst32(FRAMEBUFFER_INCOMPLETE_ATTACHMENT);
+    const framebuffer = self.bound_framebuffer orelse return glConst32(FRAMEBUFFER_COMPLETE);
+    const texture = framebuffer.color_attachment0 orelse return glConst32(FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT);
+    if (framebuffer.deleted or texture.deleted or !texture.has_image) {
+        return glConst32(FRAMEBUFFER_INCOMPLETE_ATTACHMENT);
+    }
+    return glConst32(FRAMEBUFFER_COMPLETE);
+}
+
+pub fn isFramebuffer(_: *const WebGLRenderingContext, framebuffer: ?*WebGLFramebuffer) bool {
+    const target = framebuffer orelse return false;
+    return !target.deleted;
+}
+
+pub fn isTexture(_: *const WebGLRenderingContext, texture: ?*WebGLTexture) bool {
+    const target = texture orelse return false;
+    return !target.deleted;
 }
 
 pub fn deleteBuffer(self: *WebGLRenderingContext, buffer: ?*WebGLBuffer) void {
@@ -907,6 +1071,13 @@ pub fn deleteBuffer(self: *WebGLRenderingContext, buffer: ?*WebGLBuffer) void {
     target.deleted = true;
     target.byte_length = 0;
     if (self.bound_array_buffer == target) self.bound_array_buffer = null;
+}
+
+pub fn deleteFramebuffer(self: *WebGLRenderingContext, framebuffer: ?*WebGLFramebuffer) void {
+    const target = framebuffer orelse return;
+    target.deleted = true;
+    target.color_attachment0 = null;
+    if (self.bound_framebuffer == target) self.bound_framebuffer = null;
 }
 
 pub fn deleteProgram(self: *WebGLRenderingContext, program: ?*WebGLProgram) void {
@@ -921,6 +1092,16 @@ pub fn deleteShader(_: *WebGLRenderingContext, shader: ?*WebGLShader) void {
     const target = shader orelse return;
     target.deleted = true;
     target.compiled = false;
+}
+
+pub fn deleteTexture(self: *WebGLRenderingContext, texture: ?*WebGLTexture) void {
+    const target = texture orelse return;
+    target.deleted = true;
+    target.has_image = false;
+    if (self.bound_texture_2d == target) self.bound_texture_2d = null;
+    if (self.bound_framebuffer) |framebuffer| {
+        if (framebuffer.color_attachment0 == target) framebuffer.color_attachment0 = null;
+    }
 }
 
 pub fn noop(_: *const WebGLRenderingContext) void {}
@@ -965,13 +1146,15 @@ pub const JsApi = struct {
     pub const getUniformLocation = bridge.function(WebGLRenderingContext.getUniformLocation, .{});
     pub const getActiveAttrib = bridge.function(WebGLRenderingContext.getActiveAttrib, .{ .null_as_undefined = true });
     pub const getActiveUniform = bridge.function(WebGLRenderingContext.getActiveUniform, .{ .null_as_undefined = true });
+    pub const isFramebuffer = bridge.function(WebGLRenderingContext.isFramebuffer, .{});
+    pub const isTexture = bridge.function(WebGLRenderingContext.isTexture, .{});
     pub const activeTexture = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const attachShader = bridge.function(WebGLRenderingContext.attachShader, .{});
     pub const bindAttribLocation = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
     pub const bindBuffer = bridge.function(WebGLRenderingContext.bindBuffer, .{});
-    pub const bindFramebuffer = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
+    pub const bindFramebuffer = bridge.function(WebGLRenderingContext.bindFramebuffer, .{});
     pub const bindRenderbuffer = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
-    pub const bindTexture = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
+    pub const bindTexture = bridge.function(WebGLRenderingContext.bindTexture, .{});
     pub const blendColor = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
     pub const blendEquation = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const blendEquationSeparate = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
@@ -979,6 +1162,7 @@ pub const JsApi = struct {
     pub const blendFuncSeparate = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
     pub const bufferData = bridge.function(WebGLRenderingContext.bufferData, .{});
     pub const bufferSubData = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
+    pub const checkFramebufferStatus = bridge.function(WebGLRenderingContext.checkFramebufferStatus, .{});
     pub const clear = bridge.function(WebGLRenderingContext.clear, .{});
     pub const clearColor = bridge.function(WebGLRenderingContext.clearColor, .{});
     pub const clearDepth = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
@@ -991,11 +1175,11 @@ pub const JsApi = struct {
     pub const copyTexSubImage2D = bridge.function(WebGLRenderingContext.noop8, .{ .noop = true });
     pub const cullFace = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const deleteBuffer = bridge.function(WebGLRenderingContext.deleteBuffer, .{});
-    pub const deleteFramebuffer = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
+    pub const deleteFramebuffer = bridge.function(WebGLRenderingContext.deleteFramebuffer, .{});
     pub const deleteProgram = bridge.function(WebGLRenderingContext.deleteProgram, .{});
     pub const deleteRenderbuffer = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const deleteShader = bridge.function(WebGLRenderingContext.deleteShader, .{});
-    pub const deleteTexture = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
+    pub const deleteTexture = bridge.function(WebGLRenderingContext.deleteTexture, .{});
     pub const depthFunc = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const depthMask = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const depthRange = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
@@ -1009,7 +1193,7 @@ pub const JsApi = struct {
     pub const finish = bridge.function(WebGLRenderingContext.noop, .{ .noop = true });
     pub const flush = bridge.function(WebGLRenderingContext.noop, .{ .noop = true });
     pub const framebufferRenderbuffer = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
-    pub const framebufferTexture2D = bridge.function(WebGLRenderingContext.noop5, .{ .noop = true });
+    pub const framebufferTexture2D = bridge.function(WebGLRenderingContext.framebufferTexture2D, .{});
     pub const frontFace = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const generateMipmap = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const hint = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
@@ -1028,8 +1212,8 @@ pub const JsApi = struct {
     pub const stencilMaskSeparate = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
     pub const stencilOp = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
     pub const stencilOpSeparate = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
-    pub const texImage2D = bridge.function(WebGLRenderingContext.noop9, .{ .noop = true });
-    pub const texParameteri = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
+    pub const texImage2D = bridge.function(WebGLRenderingContext.texImage2D, .{});
+    pub const texParameteri = bridge.function(WebGLRenderingContext.texParameteri, .{});
     pub const texSubImage2D = bridge.function(WebGLRenderingContext.noop9, .{ .noop = true });
     pub const uniform1f = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
     pub const uniform1i = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
@@ -1108,6 +1292,19 @@ pub const JsApi = struct {
     pub const UNSIGNED_BYTE = bridge.property(WebGLRenderingContext.UNSIGNED_BYTE, .{ .template = true });
     pub const UNSIGNED_SHORT = bridge.property(WebGLRenderingContext.UNSIGNED_SHORT, .{ .template = true });
     pub const TEXTURE_2D = bridge.property(WebGLRenderingContext.TEXTURE_2D, .{ .template = true });
+    pub const TEXTURE_MAG_FILTER = bridge.property(WebGLRenderingContext.TEXTURE_MAG_FILTER, .{ .template = true });
+    pub const TEXTURE_MIN_FILTER = bridge.property(WebGLRenderingContext.TEXTURE_MIN_FILTER, .{ .template = true });
+    pub const TEXTURE_WRAP_S = bridge.property(WebGLRenderingContext.TEXTURE_WRAP_S, .{ .template = true });
+    pub const TEXTURE_WRAP_T = bridge.property(WebGLRenderingContext.TEXTURE_WRAP_T, .{ .template = true });
+    pub const NEAREST = bridge.property(WebGLRenderingContext.NEAREST, .{ .template = true });
+    pub const LINEAR = bridge.property(WebGLRenderingContext.LINEAR, .{ .template = true });
+    pub const CLAMP_TO_EDGE = bridge.property(WebGLRenderingContext.CLAMP_TO_EDGE, .{ .template = true });
+    pub const FRAMEBUFFER = bridge.property(WebGLRenderingContext.FRAMEBUFFER, .{ .template = true });
+    pub const FRAMEBUFFER_BINDING = bridge.property(WebGLRenderingContext.FRAMEBUFFER_BINDING, .{ .template = true });
+    pub const COLOR_ATTACHMENT0 = bridge.property(WebGLRenderingContext.COLOR_ATTACHMENT0, .{ .template = true });
+    pub const FRAMEBUFFER_COMPLETE = bridge.property(WebGLRenderingContext.FRAMEBUFFER_COMPLETE, .{ .template = true });
+    pub const FRAMEBUFFER_INCOMPLETE_ATTACHMENT = bridge.property(WebGLRenderingContext.FRAMEBUFFER_INCOMPLETE_ATTACHMENT, .{ .template = true });
+    pub const FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT = bridge.property(WebGLRenderingContext.FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT, .{ .template = true });
     pub const RGBA = bridge.property(WebGLRenderingContext.RGBA, .{ .template = true });
     pub const RGB = bridge.property(WebGLRenderingContext.RGB, .{ .template = true });
     pub const TRIANGLES = bridge.property(WebGLRenderingContext.TRIANGLES, .{ .template = true });

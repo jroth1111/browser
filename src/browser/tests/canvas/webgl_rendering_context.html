@@ -245,6 +245,62 @@
 }
 </script>
 
+<script id=WebGLRenderingContext#texture_framebuffer_readback>
+{
+  const element = document.createElement("canvas");
+  element.setAttribute("width", "16");
+  element.setAttribute("height", "16");
+  const ctx = element.getContext("webgl");
+
+  const framebuffer = ctx.createFramebuffer();
+  ctx.bindFramebuffer(ctx.FRAMEBUFFER, framebuffer);
+  testing.expectEqual(true, ctx.isFramebuffer(framebuffer));
+  testing.expectEqual(ctx.FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT, ctx.checkFramebufferStatus(ctx.FRAMEBUFFER));
+
+  const texture = ctx.createTexture();
+  ctx.bindTexture(ctx.TEXTURE_2D, texture);
+  testing.expectEqual(true, ctx.isTexture(texture));
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MIN_FILTER, ctx.NEAREST);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MAG_FILTER, ctx.NEAREST);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_S, ctx.CLAMP_TO_EDGE);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_T, ctx.CLAMP_TO_EDGE);
+  ctx.texImage2D(ctx.TEXTURE_2D, 0, ctx.RGBA, 1, 1, 0, ctx.RGBA, ctx.UNSIGNED_BYTE, new Uint8Array([17, 34, 51, 255]));
+  ctx.framebufferTexture2D(ctx.FRAMEBUFFER, ctx.COLOR_ATTACHMENT0, ctx.TEXTURE_2D, texture, 0);
+  testing.expectEqual(ctx.FRAMEBUFFER_COMPLETE, ctx.checkFramebufferStatus(ctx.FRAMEBUFFER));
+
+  const uploadedPixels = new Uint8Array(4);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, uploadedPixels);
+  testing.expectEqual(17, uploadedPixels[0]);
+  testing.expectEqual(34, uploadedPixels[1]);
+  testing.expectEqual(51, uploadedPixels[2]);
+  testing.expectEqual(255, uploadedPixels[3]);
+
+  ctx.clearColor(1, 0, 0, 1);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+  const clearedPixels = new Uint8Array(4);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, clearedPixels);
+  testing.expectEqual(255, clearedPixels[0]);
+  testing.expectEqual(0, clearedPixels[1]);
+  testing.expectEqual(0, clearedPixels[2]);
+  testing.expectEqual(255, clearedPixels[3]);
+
+  ctx.bindFramebuffer(ctx.FRAMEBUFFER, null);
+  const defaultPixels = new Uint8Array(4);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, defaultPixels);
+  testing.expectEqual(0, defaultPixels[0]);
+  testing.expectEqual(0, defaultPixels[1]);
+  testing.expectEqual(0, defaultPixels[2]);
+  testing.expectEqual(0, defaultPixels[3]);
+  ctx.bindFramebuffer(ctx.FRAMEBUFFER, framebuffer);
+
+  ctx.deleteTexture(texture);
+  testing.expectEqual(false, ctx.isTexture(texture));
+  testing.expectEqual(ctx.FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT, ctx.checkFramebufferStatus(ctx.FRAMEBUFFER));
+  ctx.deleteFramebuffer(framebuffer);
+  testing.expectEqual(false, ctx.isFramebuffer(framebuffer));
+}
+</script>
+
 <script id=identity>
 {
   const element = document.createElement('canvas');
