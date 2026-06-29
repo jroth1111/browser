@@ -32,17 +32,20 @@ _pad: bool = false,
 
 pub fn refresh(_: *const PluginArray) void {}
 pub fn getLength(_: *const PluginArray, exec: *const Execution) u32 {
-    return if (pdfEnabled(exec)) 1 else 0;
+    return if (pdfEnabled(exec)) pdf_plugins.len else 0;
 }
 
 pub fn getAtIndex(_: *const PluginArray, index: u32, exec: *const Execution) ?*Plugin {
-    if (index == 0 and pdfEnabled(exec)) return &pdf_plugin;
+    if (pdfEnabled(exec) and index < pdf_plugins.len) return &pdf_plugins[index];
     return null;
 }
 
 pub fn getByName(_: *const PluginArray, name: []const u8, exec: *const Execution) ?*Plugin {
-    if (pdfEnabled(exec) and matchesAny(name, &.{ pdf_plugin_name, pdf_plugin_filename })) {
-        return &pdf_plugin;
+    if (!pdfEnabled(exec)) return null;
+    for (&pdf_plugins) |*plugin| {
+        if (pluginNameMatches(plugin, name)) {
+            return plugin;
+        }
     }
     return null;
 }
@@ -51,17 +54,20 @@ pub const MimeTypeArray = struct {
     _pad: bool = false,
 
     pub fn getLength(_: *const MimeTypeArray, exec: *const Execution) u32 {
-        return if (pdfEnabled(exec)) 1 else 0;
+        return if (pdfEnabled(exec)) pdf_mime_types.len else 0;
     }
 
     pub fn getAtIndex(_: *const MimeTypeArray, index: u32, exec: *const Execution) ?*MimeType {
-        if (index == 0 and pdfEnabled(exec)) return &pdf_mime_type;
+        if (pdfEnabled(exec) and index < pdf_mime_types.len) return &pdf_mime_types[index];
         return null;
     }
 
     pub fn getByName(_: *const MimeTypeArray, name: []const u8, exec: *const Execution) ?*MimeType {
-        if (pdfEnabled(exec) and matchesAny(name, &.{pdf_mime_type_name})) {
-            return &pdf_mime_type;
+        if (!pdfEnabled(exec)) return null;
+        for (&pdf_mime_types) |*mime_type| {
+            if (std.mem.eql(u8, name, mime_type.type_name)) {
+                return mime_type;
+            }
         }
         return null;
     }
@@ -92,31 +98,37 @@ pub const MimeTypeArray = struct {
 
 pub const Plugin = struct {
     _pad: bool = false,
+    name: []const u8 = "",
+    filename: []const u8 = "internal-pdf-viewer",
+    description: []const u8 = pdf_plugin_description,
 
-    pub fn getName(_: *const Plugin) []const u8 {
-        return pdf_plugin_name;
+    pub fn getName(self: *const Plugin) []const u8 {
+        return self.name;
     }
 
-    pub fn getFilename(_: *const Plugin) []const u8 {
-        return pdf_plugin_filename;
+    pub fn getFilename(self: *const Plugin) []const u8 {
+        return self.filename;
     }
 
-    pub fn getDescription(_: *const Plugin) []const u8 {
-        return pdf_plugin_description;
+    pub fn getDescription(self: *const Plugin) []const u8 {
+        return self.description;
     }
 
     pub fn getLength(_: *const Plugin, exec: *const Execution) u32 {
-        return if (pdfEnabled(exec)) 1 else 0;
+        return if (pdfEnabled(exec)) pdf_mime_types.len else 0;
     }
 
     pub fn getAtIndex(_: *const Plugin, index: u32, exec: *const Execution) ?*MimeType {
-        if (index == 0 and pdfEnabled(exec)) return &pdf_mime_type;
+        if (pdfEnabled(exec) and index < pdf_mime_types.len) return &pdf_mime_types[index];
         return null;
     }
 
     pub fn getByName(_: *const Plugin, name: []const u8, exec: *const Execution) ?*MimeType {
-        if (pdfEnabled(exec) and matchesAny(name, &.{pdf_mime_type_name})) {
-            return &pdf_mime_type;
+        if (!pdfEnabled(exec)) return null;
+        for (&pdf_mime_types) |*mime_type| {
+            if (std.mem.eql(u8, name, mime_type.type_name)) {
+                return mime_type;
+            }
         }
         return null;
     }
@@ -127,7 +139,6 @@ pub const Plugin = struct {
             pub const name = "Plugin";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
-            pub const empty_with_no_proto = true;
         };
 
         pub const name = bridge.accessor(Plugin.getName, null, .{});
@@ -149,21 +160,24 @@ pub const Plugin = struct {
 
 pub const MimeType = struct {
     _pad: bool = false,
+    type_name: []const u8 = "",
+    suffixes: []const u8 = "pdf",
+    description: []const u8 = pdf_plugin_description,
 
-    pub fn getType(_: *const MimeType) []const u8 {
-        return pdf_mime_type_name;
+    pub fn getType(self: *const MimeType) []const u8 {
+        return self.type_name;
     }
 
-    pub fn getSuffixes(_: *const MimeType) []const u8 {
-        return "pdf";
+    pub fn getSuffixes(self: *const MimeType) []const u8 {
+        return self.suffixes;
     }
 
-    pub fn getDescription(_: *const MimeType) []const u8 {
-        return pdf_plugin_description;
+    pub fn getDescription(self: *const MimeType) []const u8 {
+        return self.description;
     }
 
     pub fn getEnabledPlugin(_: *const MimeType, exec: *const Execution) ?*Plugin {
-        return if (pdfEnabled(exec)) &pdf_plugin else null;
+        return if (pdfEnabled(exec)) &pdf_plugins[0] else null;
     }
 
     pub const JsApi = struct {
@@ -172,7 +186,6 @@ pub const MimeType = struct {
             pub const name = "MimeType";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
-            pub const empty_with_no_proto = true;
         };
 
         pub const @"type" = bridge.accessor(MimeType.getType, null, .{});
@@ -182,13 +195,25 @@ pub const MimeType = struct {
     };
 };
 
-const pdf_plugin_name = "PDF Viewer";
 const pdf_plugin_filename = "internal-pdf-viewer";
 const pdf_plugin_description = "Portable Document Format";
-const pdf_mime_type_name = "application/pdf";
 
-var pdf_plugin: Plugin = .{};
-var pdf_mime_type: MimeType = .{};
+var pdf_plugins = [_]Plugin{
+    .{ .name = "PDF Viewer", .filename = pdf_plugin_filename, .description = pdf_plugin_description },
+    .{ .name = "Chrome PDF Viewer", .filename = pdf_plugin_filename, .description = pdf_plugin_description },
+    .{ .name = "Chromium PDF Viewer", .filename = pdf_plugin_filename, .description = pdf_plugin_description },
+    .{ .name = "Microsoft Edge PDF Viewer", .filename = pdf_plugin_filename, .description = pdf_plugin_description },
+    .{ .name = "WebKit built-in PDF", .filename = pdf_plugin_filename, .description = pdf_plugin_description },
+};
+
+var pdf_mime_types = [_]MimeType{
+    .{ .type_name = "application/pdf", .suffixes = "pdf", .description = pdf_plugin_description },
+    .{ .type_name = "text/pdf", .suffixes = "pdf", .description = pdf_plugin_description },
+};
+
+fn pluginNameMatches(plugin: *const Plugin, name: []const u8) bool {
+    return std.mem.eql(u8, name, plugin.name);
+}
 
 fn chimeraProfile(exec: *const Execution) ?*const ChimeraProfile {
     const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return null;
@@ -200,13 +225,9 @@ fn pdfEnabled(exec: *const Execution) bool {
     return profile.plugins.pdf_enabled;
 }
 
-fn matchesAny(value: []const u8, needles: []const []const u8) bool {
-    for (needles) |needle| {
-        if (std.mem.eql(u8, value, needle)) {
-            return true;
-        }
-    }
-    return false;
+test "WebApi: PluginArray named lookup does not match internal PDF filename" {
+    try std.testing.expect(pluginNameMatches(&pdf_plugins[0], "PDF Viewer"));
+    try std.testing.expect(!pluginNameMatches(&pdf_plugins[0], pdf_plugin_filename));
 }
 
 pub const JsApi = struct {

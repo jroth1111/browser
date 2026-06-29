@@ -62,7 +62,7 @@ const ChromeRuntime = struct {
         var seed = runtimeSeed(exec);
         for (out, 0..) |*ch, index| {
             seed = Seeds.mix(seed, @intCast(index));
-            ch.* = hex_alphabet[@intCast((seed >> 60) & 0xF)];
+            ch.* = runtimeIdChar(@intCast((seed >> 60) & 0xF));
         }
         return out;
     }
@@ -215,8 +215,24 @@ fn chromeArch(architecture: []const u8) []const u8 {
     return "x86-64";
 }
 
-const fallback_runtime_id = "00000000000000000000000000000000";
-const hex_alphabet = "0123456789abcdef";
+const fallback_runtime_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const extension_id_alphabet = "abcdefghijklmnop";
+
+fn runtimeIdChar(nibble: u4) u8 {
+    return extension_id_alphabet[@intCast(nibble)];
+}
+
+test "WebApi: Chrome runtime ids use Chrome extension alphabet" {
+    for (0..16) |index| {
+        const ch = runtimeIdChar(@intCast(index));
+        try std.testing.expect(ch >= 'a');
+        try std.testing.expect(ch <= 'p');
+    }
+    for (fallback_runtime_id) |ch| {
+        try std.testing.expect(ch >= 'a');
+        try std.testing.expect(ch <= 'p');
+    }
+}
 
 const ChromeApp = struct {
     _pad: bool = false,
