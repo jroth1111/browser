@@ -1234,6 +1234,10 @@ pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
     if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
     }
+    switch (self.getTag()) {
+        .html, .body => return @as(f64, @floatFromInt(frame._page.getViewport().width)),
+        else => {},
+    }
     const dims = self.getElementDimensions(frame);
     return dims.width;
 }
@@ -1241,6 +1245,10 @@ pub fn getClientWidth(self: *Element, frame: *Frame) f64 {
 pub fn getClientHeight(self: *Element, frame: *Frame) f64 {
     if (!self.checkVisibilityCached(null, frame)) {
         return 0.0;
+    }
+    switch (self.getTag()) {
+        .html, .body => return @as(f64, @floatFromInt(frame._page.getViewport().height)),
+        else => {},
     }
     const dims = self.getElementDimensions(frame);
     return dims.height;

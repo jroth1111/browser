@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const lp = @import("lightpanda");
+
 const js = @import("../../../js/js.zig");
 const Frame = @import("../../../Frame.zig");
 const Window = @import("../../Window.zig");
@@ -23,6 +25,9 @@ const Document = @import("../../Document.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const collections = @import("../../collections.zig");
+
+const String = lp.String;
 
 const IFrame = @This();
 _proto: *HtmlElement,
@@ -72,6 +77,23 @@ pub fn setName(self: *IFrame, value: []const u8, frame: *Frame) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), frame);
 }
 
+pub fn getSandbox(self: *IFrame, frame: *Frame) !*collections.DOMTokenList {
+    const element = self.asElement();
+    const gop = try frame._element_sandbox_lists.getOrPut(frame.arena, element);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try frame._factory.create(collections.DOMTokenList{
+            ._element = element,
+            ._attribute_name = comptime .wrap("sandbox"),
+        });
+    }
+    return gop.value_ptr.*;
+}
+
+pub fn setSandbox(self: *IFrame, value: String, frame: *Frame) !void {
+    const sandbox = try self.getSandbox(frame);
+    try sandbox.setValue(value, frame);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IFrame);
 
@@ -83,6 +105,7 @@ pub const JsApi = struct {
 
     pub const src = bridge.accessor(IFrame.getSrc, IFrame.setSrc, .{ .ce_reactions = true });
     pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{ .ce_reactions = true });
+    pub const sandbox = bridge.accessor(IFrame.getSandbox, IFrame.setSandbox, .{ .ce_reactions = true });
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
     pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
 };

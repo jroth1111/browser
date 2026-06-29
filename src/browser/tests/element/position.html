@@ -20,6 +20,15 @@
 }
 </script>
 
+<script id="rootClientDimensionsUseViewport">
+{
+  testing.expectEqual(window.innerWidth, document.documentElement.clientWidth);
+  testing.expectEqual(window.innerHeight, document.documentElement.clientHeight);
+  testing.expectEqual(window.innerWidth, document.body.clientWidth);
+  testing.expectEqual(window.innerHeight, document.body.clientHeight);
+}
+</script>
+
 <script id="scrollDimensions">
 {
   const test1 = $('#test1');

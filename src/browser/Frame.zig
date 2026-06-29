@@ -125,6 +125,7 @@ _element_styles: Element.StyleLookup = .empty,
 _element_datasets: Element.DatasetLookup = .empty,
 _element_class_lists: Element.ClassListLookup = .empty,
 _element_rel_lists: Element.RelListLookup = .empty,
+_element_sandbox_lists: Element.ClassListLookup = .empty,
 _element_shadow_roots: Element.ShadowRootLookup = .empty,
 _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
@@ -567,6 +568,58 @@ pub fn isSameOrigin(self: *const Frame, url: [:0]const u8) bool {
     return std.mem.eql(u8, URL.getHost(url), URL.getHost(current_origin));
 }
 
+fn javascriptURLPayload(request_url: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, request_url, &std.ascii.whitespace);
+    if (trimmed.len < "javascript:".len) {
+        return null;
+    }
+    if (!std.ascii.eqlIgnoreCase(trimmed[0.."javascript:".len], "javascript:")) {
+        return null;
+    }
+    return trimmed["javascript:".len..];
+}
+
+fn isJavaScriptURL(request_url: []const u8) bool {
+    return javascriptURLPayload(request_url) != null;
+}
+
+fn executeJavaScriptURL(self: *Frame, request_url: []const u8) !void {
+    const encoded_source = javascriptURLPayload(request_url) orelse return;
+    if (encoded_source.len == 0) {
+        return;
+    }
+    const source = try URL.unescape(self.call_arena, encoded_source);
+
+    var ls: JS.Local.Scope = undefined;
+    self.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: JS.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const ce_checkpoint = self._ce_reactions.push();
+    defer self._ce_reactions.popAndInvoke(ce_checkpoint, self);
+
+    ls.local.eval(source, "javascript:iframe") catch {
+        const caught = try_catch.caughtOrError(self.call_arena, error.Unknown);
+        log.warn(.js, "eval javascript url", .{
+            .url = self.url,
+            .caught = caught,
+            .type = self._type,
+        });
+        return;
+    };
+
+    ls.local.runMacrotasks();
+    self.js.scheduler.run() catch |err| {
+        log.err(.frame, "javascript url scheduler", .{ .err = err, .type = self._type, .url = self.url });
+    };
+    self._session.browser.runMacrotasks() catch |err| {
+        log.err(.frame, "javascript url macrotasks", .{ .err = err, .type = self._type, .url = self.url });
+    };
+}
+
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
     lp.assert(self._load_state == .waiting, "frame.renavigate", .{});
     const session = self._session;
@@ -787,6 +840,18 @@ pub fn scheduleNavigation(self: *Frame, request_url: []const u8, opts: NavigateO
 // might change inside the function. So the code should be explicit about the
 // frame that it's acting on.
 fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
+    const target = switch (nt) {
+        .form, .anchor => |p| p,
+        .script => |p| p orelse originator,
+        .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
+    };
+
+    if (isJavaScriptURL(request_url)) {
+        defer originator._session.releaseArena(arena);
+        try target.executeJavaScriptURL(request_url);
+        return;
+    }
+
     const resolved_url, const is_about_blank = blk: {
         if (URL.isCompleteHTTPUrl(request_url)) {
             break :blk .{ try arena.dupeZ(u8, request_url), false };
@@ -820,12 +885,6 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
             .{ .always_dupe = true, .encoding = originator.charset },
         );
         break :blk .{ u, false };
-    };
-
-    const target = switch (nt) {
-        .form, .anchor => |p| p,
-        .script => |p| p orelse originator,
-        .iframe => |iframe| iframe._window.?._frame, // only an frame with existing content (i.e. a window) can be navigated
     };
 
     const session = target._session;
@@ -1668,8 +1727,9 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         .timestamp = timestamp(.monotonic),
     });
 
+    const is_javascript_url = isJavaScriptURL(src);
     const url = blk: {
-        if (std.mem.eql(u8, src, "about:blank")) {
+        if (std.mem.eql(u8, src, "about:blank") or is_javascript_url) {
             break :blk "about:blank"; // navigate will handle this special case
         }
         break :blk try URL.resolve(
@@ -1710,6 +1770,9 @@ pub fn iframeAddedCallback(self: *Frame, iframe: *IFrame) !void {
         iframe._window = null;
         return error.IFrameLoadError;
     };
+    if (is_javascript_url) {
+        try new_frame.executeJavaScriptURL(src);
+    }
 
     // window[N] is based on document order. We appended above and rely on
     // child_frames_sorted to tell window.getFrame whether it has to sort.

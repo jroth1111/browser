@@ -104,6 +104,27 @@
   }
 </script>
 
+<script id=sandbox_dom_token_list>
+  {
+    const frame = document.createElement('iframe');
+    testing.expectEqual(true, frame.sandbox instanceof DOMTokenList);
+    testing.expectEqual(true, frame.sandbox === frame.sandbox);
+    testing.expectEqual('', frame.sandbox.value);
+
+    frame.sandbox.value = 'allow-same-origin allow-scripts';
+    testing.expectEqual('allow-same-origin allow-scripts', frame.getAttribute('sandbox'));
+    testing.expectEqual(true, frame.sandbox.contains('allow-same-origin'));
+    testing.expectEqual(true, frame.sandbox.contains('allow-scripts'));
+
+    frame.sandbox.add('allow-forms');
+    testing.expectEqual('allow-same-origin allow-scripts allow-forms', frame.sandbox.value);
+
+    frame.sandbox = 'allow-popups';
+    testing.expectEqual('allow-popups', frame.getAttribute('sandbox'));
+    testing.expectEqual(true, frame.sandbox.contains('allow-popups'));
+  }
+</script>
+
 <script id=about_blank_renavigate>
   {
     let f5 = document.createElement('iframe');

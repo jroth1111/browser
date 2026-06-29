@@ -27,6 +27,28 @@
   }
 </script>
 
+<script id=finish_event_listener type=module>
+  {
+    const state = await testing.async();
+    let a = document.createElement('div').animate(null, null);
+    testing.expectEqual('function', typeof a.addEventListener);
+    testing.expectEqual(true, a instanceof EventTarget);
+
+    let calls = [];
+    a.addEventListener('finish', (event) => {
+      calls.push(event.type);
+      calls.push(event.target === a);
+      calls.push(event.currentTarget === a);
+      state.resolve();
+    });
+    a.play();
+
+    await state.done(() => {
+      testing.expectEqual(['finish', true, true], calls);
+    });
+  }
+</script>
+
 <script id=startTime>
   let a2 = document.createElement('div').animate(null, null);
   // startTime defaults to null

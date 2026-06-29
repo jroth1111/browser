@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=javascript_url_iframe_collects_in_child_realm type=module>
+  {
+    const state = await testing.async();
+    window.addEventListener('message', (event) => {
+      state.resolve(event.data);
+    });
+
+    const iframe = document.createElement('iframe');
+    iframe.src = "javascript:parent.postMessage({ messageSource: 'jsUrlCollect', value: top === parent, href: location.href }, '*')";
+    document.documentElement.appendChild(iframe);
+
+    await state.done((data) => {
+      testing.expectEqual('jsUrlCollect', data.messageSource);
+      testing.expectEqual(true, data.value);
+      testing.expectEqual('about:blank', data.href);
+    });
+  }
+</script>

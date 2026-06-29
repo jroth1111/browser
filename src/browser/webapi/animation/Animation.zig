@@ -21,6 +21,8 @@ const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Frame = @import("../../Frame.zig");
+const Event = @import("../Event.zig");
+const EventTarget = @import("../EventTarget.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -35,6 +37,7 @@ const PlayState = enum {
 };
 
 _rc: lp.RC(u32) = .{},
+_proto: *EventTarget,
 _frame: *Frame,
 _arena: Allocator,
 
@@ -55,13 +58,17 @@ pub fn init(frame: *Frame) !*Animation {
     const arena = try frame.getArena(.tiny, "Animation");
     errdefer frame.releaseArena(arena);
 
-    const self = try arena.create(Animation);
-    self.* = .{
+    const self = try frame._factory.eventTargetWithAllocator(arena, Animation{
+        ._proto = undefined,
         ._frame = frame,
         ._arena = arena,
-    };
+    });
 
     return self;
+}
+
+pub fn asEventTarget(self: *Animation) *EventTarget {
+    return self._proto;
 }
 
 pub fn deinit(self: *Animation, page: *Page) void {
@@ -111,17 +118,7 @@ pub fn finish(self: *Animation, frame: *Frame) void {
     }
 
     self._playState = .finished;
-
-    // resolve finished
-    if (self._finished_resolver) |resolver| {
-        frame.js.local.?.toLocal(resolver).resolve("Animation.getFinished", self);
-    }
-    // call onfinish
-    if (self._onFinish) |func| {
-        frame.js.local.?.toLocal(func).call(void, .{}) catch |err| {
-            log.warn(.js, "Animation._onFinish", .{ .err = err });
-        };
-    }
+    self.resolveAndDispatchFinish(frame, frame.js.local.?);
 }
 
 pub fn reverse(_: *Animation) void {
@@ -195,17 +192,7 @@ fn update(ctx: *anyopaque) !?u32 {
             var ls: js.Local.Scope = undefined;
             self._frame.js.localScope(&ls);
             defer ls.deinit();
-
-            // resolve finished
-            if (self._finished_resolver) |resolver| {
-                ls.toLocal(resolver).resolve("Animation.getFinished", self);
-            }
-            // call onfinish
-            if (self._onFinish) |func| {
-                ls.toLocal(func).call(void, .{}) catch |err| {
-                    log.warn(.js, "Animation._onFinish", .{ .err = err });
-                };
-            }
+            self.resolveAndDispatchFinish(self._frame, &ls.local);
         },
         .idle, .paused, .finished => {},
     }
@@ -217,6 +204,26 @@ fn update(ctx: *anyopaque) !?u32 {
 
 pub fn setOnFinish(self: *Animation, cb: ?js.Function.Temp) !void {
     self._onFinish = cb;
+}
+
+fn resolveAndDispatchFinish(self: *Animation, frame: *Frame, local: *const js.Local) void {
+    if (self._finished_resolver) |resolver| {
+        local.toLocal(resolver).resolve("Animation.getFinished", self);
+    }
+
+    const target = self.asEventTarget();
+    if (!frame._event_manager.hasDirectListeners(target, "finish", self._onFinish)) {
+        return;
+    }
+
+    const event = Event.initTrusted(comptime .wrap("finish"), .{}, frame._page) catch |err| {
+        log.warn(.js, "Animation.finishEvent", .{ .err = err });
+        return;
+    };
+
+    frame._event_manager.dispatchDirect(target, event, self._onFinish, .{ .context = "Animation.finish" }) catch |err| {
+        log.warn(.js, "Animation.finishEvent", .{ .err = err });
+    };
 }
 
 pub fn playState(self: *const Animation) []const u8 {
