@@ -19,10 +19,6 @@ const AudioBuffer = @import("AudioBuffer.zig");
 pub const AudioParam = struct {
     value: f64 = 0,
 
-    pub fn constructor(value: ?f64, exec: *js.Execution) !*AudioParam {
-        return exec._factory.create(AudioParam{ .value = value orelse 0 });
-    }
-
     pub fn getValue(self: *const AudioParam) f64 {
         return self.value;
     }
@@ -45,7 +41,6 @@ pub const AudioParam = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const constructor = bridge.constructor(AudioParam.constructor, .{});
         pub const value = bridge.accessor(AudioParam.getValue, AudioParam.setValue, .{});
         pub const defaultValue = bridge.property(0, .{ .template = false });
         pub const minValue = bridge.property(-3.4028234663852886e38, .{ .template = false });

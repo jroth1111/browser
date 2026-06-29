@@ -58,6 +58,10 @@
   const gain = ctx.createGain();
   testing.expectEqual(true, gain instanceof GainNode);
   const gainParam = gain.gain;
+  testing.expectEqual("function", typeof AudioParam);
+  testing.expectError("TypeError", () => {
+    new AudioParam();
+  });
   testing.expectEqual(true, gainParam instanceof AudioParam);
   testing.expectEqual(true, gainParam === gain.gain);
   testing.expectEqual(1, gainParam.value);
