@@ -75,6 +75,20 @@
   }
 </script>
 
+<script id="supports_chrome_coherent_vendor_prefixes">
+  {
+    testing.expectEqual(true, CSS.supports('-webkit-appearance', 'none'));
+    testing.expectEqual(true, CSS.supports('(-webkit-appearance: none)'));
+    testing.expectEqual(true, CSS.supports('(-webkit-appearance: none) and (display: flex)'));
+    testing.expectEqual(true, CSS.supports('selector(:has(*))'));
+    testing.expectEqual(false, CSS.supports('-moz-appearance', 'none'));
+    testing.expectEqual(false, CSS.supports('(-moz-appearance: meterbar) and (display: flex)'));
+    testing.expectEqual(false, CSS.supports('-ms-high-contrast', 'none'));
+    testing.expectEqual(false, CSS.supports('-o-transform', 'scale(1)'));
+    testing.expectEqual(false, CSS.supports('unknown-lightpanda-property', 'yes'));
+  }
+</script>
+
 <script id="escape_null_character">
   {
     testing.expectEqual('\uFFFD', CSS.escape('\x00'));

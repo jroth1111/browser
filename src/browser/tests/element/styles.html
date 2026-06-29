@@ -196,5 +196,9 @@
   testing.expectEqual('inline', anchorStyle.display);
   testing.expectEqual('visible', divStyle.visibility);
   testing.expectEqual('1', divStyle.opacity);
+  testing.expectEqual(true, divStyle.cssText.includes('display: block;'));
+  testing.expectEqual(true, divStyle.cssText.includes('visibility: visible;'));
+  testing.expectEqual(true, divStyle.cssText.includes('opacity: 1;'));
+  testing.expectEqual(true, window.getComputedStyle(document.body).cssText.length > 0);
 }
 </script>

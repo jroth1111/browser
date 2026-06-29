@@ -59,7 +59,25 @@
 {
   // Unknown features evaluate to false per Media Queries Level 4.
   testing.expectEqual(false, window.matchMedia('(prefers-color-scheme: dark)').matches);
-  testing.expectEqual(false, window.matchMedia('(hover: hover)').matches);
+  testing.expectEqual(false, window.matchMedia('(monochrome)').matches);
+}
+</script>
+
+<script id=matchMedia_desktop_input_and_gamut_features>
+{
+  testing.expectEqual(true, window.matchMedia('(hover: hover)').matches);
+  testing.expectEqual(false, window.matchMedia('(hover: none)').matches);
+  testing.expectEqual(true, window.matchMedia('(any-hover: hover)').matches);
+  testing.expectEqual(false, window.matchMedia('(any-hover: none)').matches);
+  testing.expectEqual(true, window.matchMedia('(pointer: fine)').matches);
+  testing.expectEqual(false, window.matchMedia('(pointer: coarse)').matches);
+  testing.expectEqual(false, window.matchMedia('(pointer: none)').matches);
+  testing.expectEqual(true, window.matchMedia('(any-pointer: fine)').matches);
+  testing.expectEqual(false, window.matchMedia('(any-pointer: coarse)').matches);
+  testing.expectEqual(false, window.matchMedia('(any-pointer: none)').matches);
+  testing.expectEqual(true, window.matchMedia('(color-gamut: srgb)').matches);
+  testing.expectEqual(true, window.matchMedia('(color-gamut: p3)').matches);
+  testing.expectEqual(false, window.matchMedia('(color-gamut: rec2020)').matches);
 }
 </script>
 

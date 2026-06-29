@@ -48,6 +48,11 @@
 <script id="document_fonts_check">
 {
     testing.expectTrue(document.fonts.check('16px sans-serif'));
+    testing.expectTrue(document.fonts.check('12px Arial'));
+    testing.expectTrue(document.fonts.check('italic 700 16px/1.5 "Segoe UI", sans-serif'));
+    testing.expectFalse(document.fonts.check('12px ArialFake'));
+    testing.expectFalse(document.fonts.check('italic 16px XX_FAKE_FONT_XX'));
+    testing.expectFalse(document.fonts.check('font-family: "Arial"'));
 }
 </script>
 

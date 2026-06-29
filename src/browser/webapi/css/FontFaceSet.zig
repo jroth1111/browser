@@ -68,10 +68,9 @@ pub fn getReady(_: *FontFaceSet, frame: *Frame) !js.Promise {
     return frame.js.local.?.resolvePromise({});
 }
 
-// check(font, text?) - always true; headless has no real fonts to check.
+// check(font, text?) - conservative profile-owned font availability.
 pub fn check(_: *const FontFaceSet, font: []const u8) bool {
-    _ = font;
-    return true;
+    return fontHasKnownFamily(font);
 }
 
 // load(font, text?) - resolves immediately with an empty array.
@@ -119,6 +118,154 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../../testing.zig");
+
+const whitespace = " \t\r\n\x0c";
+const quote_chars = "\"'";
+
+const known_font_families = [_][]const u8{
+    "Arial",               "Arial Black",       "Arial Narrow",        "Arial Rounded MT Bold",
+    "Helvetica",           "Helvetica Neue",    "Times",               "Times New Roman",
+    "Times Roman",         "Courier",           "Courier New",         "Courier 10 Pitch",
+    "Verdana",             "Tahoma",            "Geneva",              "Lucida",
+    "Lucida Sans",         "Lucida Grande",     "Lucida Sans Unicode", "Trebuchet MS",
+    "Palatino",            "Palatino Linotype", "Palatino LT STD",     "Book Antiqua",
+    "Garamond",            "Georgia",           "Didot",               "Bodoni 72",
+    "Hoefler Text",        "Iowan Old Style",   "Charter",             "Optima",
+    "American Typewriter", "Baskerville",       "Big Caslon",          "Cochin",
+    "Snell Roundhand",     "Copperplate",       "Papyrus",             "Brush Script MT",
+    "Brush Script Std",    "Comic Sans MS",     "Comic Sans",          "Impact",
+    "Marker Felt",         "Chalkduster",       "Chalkboard",          "Noteworthy",
+    "Marker Felt Wide",    "Futura",            "Gill Sans",           "Gill Sans Nova",
+    "Avenir",              "Avenir Next",       "Avenir LT STD",       "PT Sans",
+    "PT Serif",            "PT Mono",           "Roboto",              "Open Sans",
+    "Source Sans Pro",     "Menlo",             "Monaco",              "Andale Mono",
+    "Consolas",            "Inconsolata",       "Source Code Pro",     "Fira Code",
+    "SF Pro",              "SF Pro Text",       "SF Pro Display",      "SF Mono",
+    "San Francisco",       "New York",          "PingFang SC",         "PingFang TC",
+    "PingFang HK",         "Hiragino Sans",     "Apple SD Gothic Neo", "Noto Sans",
+    "Noto Serif",          "Noto Mono",         "Noto Sans CJK SC",    "Noto Sans CJK JP",
+    "Noto Sans CJK KR",    "Liberation Sans",   "Liberation Serif",    "Liberation Mono",
+    "DejaVu Sans",         "DejaVu Serif",      "DejaVu Sans Mono",    "DejaVu Sans Condensed",
+    "Ubuntu",              "Ubuntu Mono",       "Cantarell",           "Open Sans Condensed",
+    "system-ui",           "-apple-system",     "BlinkMacSystemFont",  "sans-serif",
+    "serif",               "monospace",
+};
+
+fn fontHasKnownFamily(font: []const u8) bool {
+    const trimmed = std.mem.trim(u8, font, whitespace);
+    if (trimmed.len == 0) return false;
+    if (std.mem.indexOfScalar(u8, trimmed, ':') != null) return false;
+
+    const family_list = familyListFromFontShorthand(trimmed);
+    if (family_list.len == 0) return knownFontFamily(trimmed);
+    return familyListHasKnownFamily(family_list);
+}
+
+fn familyListFromFontShorthand(font: []const u8) []const u8 {
+    var cursor: usize = 0;
+    while (cursor < font.len) {
+        while (cursor < font.len and isWhitespace(font[cursor])) cursor += 1;
+        const token_start = cursor;
+        while (cursor < font.len and !isWhitespace(font[cursor])) cursor += 1;
+        if (token_start == cursor) break;
+        if (isFontSizeToken(font[token_start..cursor])) {
+            return std.mem.trim(u8, font[cursor..], whitespace);
+        }
+    }
+    return "";
+}
+
+fn isFontSizeToken(token: []const u8) bool {
+    if (token.len == 0) return false;
+    const slash_index = std.mem.indexOfScalar(u8, token, '/') orelse token.len;
+    const size = token[0..slash_index];
+    if (size.len == 0) return false;
+    if (std.ascii.isDigit(size[0]) or size[0] == '.') {
+        return endsWithIgnoreCase(size, "px") or
+            endsWithIgnoreCase(size, "pt") or
+            endsWithIgnoreCase(size, "pc") or
+            endsWithIgnoreCase(size, "em") or
+            endsWithIgnoreCase(size, "rem") or
+            endsWithIgnoreCase(size, "ex") or
+            endsWithIgnoreCase(size, "ch") or
+            endsWithIgnoreCase(size, "cap") or
+            endsWithIgnoreCase(size, "ic") or
+            endsWithIgnoreCase(size, "lh") or
+            endsWithIgnoreCase(size, "rlh") or
+            endsWithIgnoreCase(size, "vw") or
+            endsWithIgnoreCase(size, "vh") or
+            endsWithIgnoreCase(size, "vmin") or
+            endsWithIgnoreCase(size, "vmax") or
+            endsWithIgnoreCase(size, "vi") or
+            endsWithIgnoreCase(size, "vb") or
+            endsWithIgnoreCase(size, "cm") or
+            endsWithIgnoreCase(size, "mm") or
+            endsWithIgnoreCase(size, "q") or
+            endsWithIgnoreCase(size, "in") or
+            endsWithIgnoreCase(size, "%");
+    }
+    return std.ascii.eqlIgnoreCase(size, "xx-small") or
+        std.ascii.eqlIgnoreCase(size, "x-small") or
+        std.ascii.eqlIgnoreCase(size, "small") or
+        std.ascii.eqlIgnoreCase(size, "medium") or
+        std.ascii.eqlIgnoreCase(size, "large") or
+        std.ascii.eqlIgnoreCase(size, "x-large") or
+        std.ascii.eqlIgnoreCase(size, "xx-large") or
+        std.ascii.eqlIgnoreCase(size, "xxx-large");
+}
+
+fn familyListHasKnownFamily(input: []const u8) bool {
+    var start: usize = 0;
+    var quote: u8 = 0;
+    for (input, 0..) |ch, idx| {
+        if (quote != 0) {
+            if (ch == quote) quote = 0;
+            continue;
+        }
+        if (ch == '"' or ch == '\'') {
+            quote = ch;
+            continue;
+        }
+        if (ch == ',') {
+            if (familyPartKnown(input[start..idx])) return true;
+            start = idx + 1;
+        }
+    }
+    return familyPartKnown(input[start..]);
+}
+
+fn familyPartKnown(part: []const u8) bool {
+    var value = std.mem.trim(u8, part, whitespace);
+    value = std.mem.trim(u8, value, quote_chars);
+    value = std.mem.trim(u8, value, whitespace);
+    return knownFontFamily(value);
+}
+
+fn knownFontFamily(family: []const u8) bool {
+    inline for (known_font_families) |known| {
+        if (std.ascii.eqlIgnoreCase(family, known)) return true;
+    }
+    return false;
+}
+
+fn isWhitespace(ch: u8) bool {
+    return ch == ' ' or ch == '\t' or ch == '\r' or ch == '\n' or ch == 0x0c;
+}
+
+fn endsWithIgnoreCase(value: []const u8, suffix: []const u8) bool {
+    if (value.len < suffix.len) return false;
+    return std.ascii.eqlIgnoreCase(value[value.len - suffix.len ..], suffix);
+}
+
+test "WebApi: FontFaceSet check rejects unknown-only font families" {
+    try testing.expect(fontHasKnownFamily("16px sans-serif"));
+    try testing.expect(fontHasKnownFamily("12px Arial"));
+    try testing.expect(fontHasKnownFamily("italic 700 16px/1.5 \"Segoe UI\", sans-serif"));
+    try testing.expect(!fontHasKnownFamily("12px ArialFake"));
+    try testing.expect(!fontHasKnownFamily("italic 16px XX_FAKE_FONT_XX"));
+    try testing.expect(!fontHasKnownFamily("font-family: \"Arial\""));
+}
+
 test "WebApi: FontFaceSet" {
     try testing.htmlRunner("css/font_face_set.html", .{});
 }

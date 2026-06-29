@@ -90,7 +90,7 @@ pub fn getNamed(self: *CSSStyleProperties, name: []const u8, frame: *Frame) ![]c
     return value;
 }
 
-fn isKnownCSSProperty(dash_case: []const u8) bool {
+pub fn isKnownCSSProperty(dash_case: []const u8) bool {
     const known_properties = std.StaticStringMap(void).initComptime(.{
         // Colors & backgrounds
         .{ "color", {} },

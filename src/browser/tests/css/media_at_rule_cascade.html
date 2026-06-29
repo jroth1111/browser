@@ -39,6 +39,11 @@
   @media screen {
     #hidden-by-screen { display: none; }
   }
+  /* Chromium treats an empty media query as matching all. PixelScan uses this
+     as an old-Chrome CSS branch. */
+  @media {
+    #hidden-by-empty-media { display: none; }
+  }
   /* Nested @media — both must match (outer screen + inner min-width). */
   @media screen {
     @media (min-width: 600px) {
@@ -89,6 +94,29 @@
   @MEDIA SCREEN AND (MIN-WIDTH: 100PX) {
     #upper-case { display: none; }
   }
+  /* @supports shares the same Chrome-coherent support model as CSS.supports(). */
+  @supports (-webkit-appearance: none) {
+    #hidden-by-webkit-supports { display: none; }
+  }
+  @supports (display: flex) and (-webkit-appearance: none) {
+    #hidden-by-supports-and { display: none; }
+  }
+  @supports (-moz-appearance: meterbar) and (display: flex) {
+    #not-hidden-by-moz-supports { display: none; }
+  }
+  @supports (-ms-ime-align: auto) {
+    #not-hidden-by-ms-supports { display: none; }
+  }
+  @supports (-webkit-appearance: none) {
+    @media screen {
+      #hidden-by-supports-media { display: none; }
+    }
+  }
+  @media screen {
+    @supports (-webkit-appearance: none) {
+      #hidden-by-media-supports { display: none; }
+    }
+  }
 </style>
 
 <body>
@@ -98,6 +126,7 @@
   <div id="not-hidden-by-or">or-miss</div>
   <div id="hidden-by-not">not-hit</div>
   <div id="hidden-by-screen">screen-hit</div>
+  <div id="hidden-by-empty-media">empty-media-hit</div>
   <div id="hidden-by-nested">nested-hit</div>
   <div id="not-hidden-unsupported">unsupported</div>
   <div id="visibility-hidden-cascade">visibility</div>
@@ -107,6 +136,12 @@
   <div id="nested-inner-miss">nested-inner-miss</div>
   <div id="ws-heavy">ws-heavy</div>
   <div id="upper-case">upper-case</div>
+  <div id="hidden-by-webkit-supports">webkit-supports</div>
+  <div id="hidden-by-supports-and">supports-and</div>
+  <div id="not-hidden-by-moz-supports">moz-supports</div>
+  <div id="not-hidden-by-ms-supports">ms-supports</div>
+  <div id="hidden-by-supports-media">supports-media</div>
+  <div id="hidden-by-media-supports">media-supports</div>
   <div id="dyn-target">dyn-target</div>
   <div id="dyn2-target">dyn2-target</div>
   <div id="deep-nest-target">deep-nest-target</div>
@@ -148,6 +183,12 @@
 <script id=cascade_bare_type_matches>
 {
   testing.expectFalse($('#hidden-by-screen').checkVisibility());
+}
+</script>
+
+<script id=cascade_empty_media_matches>
+{
+  testing.expectFalse($('#hidden-by-empty-media').checkVisibility());
 }
 </script>
 
@@ -250,6 +291,32 @@
   // lower-case form — at-keywords, types, features, and units are all
   // case-insensitive.
   testing.expectFalse($('#upper-case').checkVisibility());
+}
+</script>
+
+<script id=cascade_supports_webkit_matches>
+{
+  testing.expectFalse($('#hidden-by-webkit-supports').checkVisibility());
+}
+</script>
+
+<script id=cascade_supports_and_matches>
+{
+  testing.expectFalse($('#hidden-by-supports-and').checkVisibility());
+}
+</script>
+
+<script id=cascade_supports_rejects_non_chrome_prefixes>
+{
+  testing.expectTrue($('#not-hidden-by-moz-supports').checkVisibility());
+  testing.expectTrue($('#not-hidden-by-ms-supports').checkVisibility());
+}
+</script>
+
+<script id=cascade_supports_media_nesting>
+{
+  testing.expectFalse($('#hidden-by-supports-media').checkVisibility());
+  testing.expectFalse($('#hidden-by-media-supports').checkVisibility());
 }
 </script>
 

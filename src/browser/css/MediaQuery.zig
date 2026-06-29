@@ -25,7 +25,10 @@
 //!   - Media types: `all`, `screen`, `print`, `speech`, `tv`
 //!   - Features: `width` / `min-width` / `max-width`,
 //!               `height` / `min-height` / `max-height`,
-//!               `orientation` (portrait | landscape).
+//!               `orientation` (portrait | landscape),
+//!               desktop input capabilities (`hover`, `any-hover`,
+//!               `pointer`, `any-pointer`),
+//!               and common color gamut capabilities (`srgb`, `p3`).
 //!   - Length values: `<int>px`, `<int>em` (1em = 16px), `<int>rem`,
 //!     and bare `0`.
 //!   - Operators: `,` (OR), `and`, `not`, `only`.
@@ -52,7 +55,9 @@ pub fn matches(query: []const u8, viewport: Viewport) bool {
     if (hasUnterminatedComment(query)) return false;
 
     var rest = trimWsAndComments(query);
-    if (rest.len == 0) return false;
+    // Chromium treats an empty media query list as matching "all". PixelScan's
+    // browser-family CSS hacks rely on `@media { ... }` applying in Chrome.
+    if (rest.len == 0) return true;
 
     while (rest.len > 0) {
         const cut = nextTopLevelComma(rest);
@@ -273,11 +278,11 @@ fn evalFeature(text: []const u8, viewport: Viewport) bool {
 }
 
 fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
-    if (name.len > 16) {
+    if (name.len > 40) {
         return false;
     }
 
-    var buf: [16]u8 = undefined;
+    var buf: [40]u8 = undefined;
     const lname = std.ascii.lowerString(&buf, name);
     if (std.mem.eql(u8, lname, "min-width")) {
         const px = parseLengthPx(value) orelse return false;
@@ -308,20 +313,64 @@ fn evalNameValue(name: []const u8, value: []const u8, viewport: Viewport) bool {
         if (std.ascii.eqlIgnoreCase(value, "portrait")) return viewport.height > viewport.width;
         return false;
     }
+    if (std.mem.eql(u8, lname, "hover") or std.mem.eql(u8, lname, "any-hover")) {
+        if (std.ascii.eqlIgnoreCase(value, "hover")) return true;
+        if (std.ascii.eqlIgnoreCase(value, "none")) return false;
+        return false;
+    }
+    if (std.mem.eql(u8, lname, "pointer") or std.mem.eql(u8, lname, "any-pointer")) {
+        if (std.ascii.eqlIgnoreCase(value, "fine")) return true;
+        if (std.ascii.eqlIgnoreCase(value, "coarse")) return false;
+        if (std.ascii.eqlIgnoreCase(value, "none")) return false;
+        return false;
+    }
+    if (std.mem.eql(u8, lname, "color-gamut")) {
+        if (std.ascii.eqlIgnoreCase(value, "srgb")) return true;
+        if (std.ascii.eqlIgnoreCase(value, "p3")) return true;
+        if (std.ascii.eqlIgnoreCase(value, "rec2020")) return false;
+        return false;
+    }
+    if (std.mem.eql(u8, lname, "-webkit-min-device-pixel-ratio")) {
+        const ratio = parseRatio(value) orelse return false;
+        return DEVICE_PIXEL_RATIO >= ratio;
+    }
+    if (std.mem.eql(u8, lname, "-webkit-max-device-pixel-ratio")) {
+        const ratio = parseRatio(value) orelse return false;
+        return DEVICE_PIXEL_RATIO <= ratio;
+    }
+    if (std.mem.eql(u8, lname, "-webkit-device-pixel-ratio")) {
+        const ratio = parseRatio(value) orelse return false;
+        return DEVICE_PIXEL_RATIO == ratio;
+    }
     return false;
 }
 
 fn evalBoolean(name: []const u8, viewport: Viewport) bool {
-    if (name.len > 16) {
+    if (name.len > 40) {
         return false;
     }
-    var buf: [16]u8 = undefined;
+    var buf: [40]u8 = undefined;
     const lname = std.ascii.lowerString(&buf, name);
 
     if (std.mem.eql(u8, lname, "width")) return viewport.width > 0;
     if (std.mem.eql(u8, lname, "height")) return viewport.height > 0;
     if (std.mem.eql(u8, lname, "orientation")) return true;
+    if (std.mem.eql(u8, lname, "hover")) return true;
+    if (std.mem.eql(u8, lname, "any-hover")) return true;
+    if (std.mem.eql(u8, lname, "pointer")) return true;
+    if (std.mem.eql(u8, lname, "any-pointer")) return true;
+    if (std.mem.eql(u8, lname, "color")) return true;
+    if (std.mem.eql(u8, lname, "color-gamut")) return true;
+    if (std.mem.eql(u8, lname, "-webkit-device-pixel-ratio")) return true;
     return false;
+}
+
+const DEVICE_PIXEL_RATIO: f64 = 1.0;
+
+fn parseRatio(value: []const u8) ?f64 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0 or trimmed[0] == '-') return null;
+    return std.fmt.parseFloat(f64, trimmed) catch null;
 }
 
 /// Parse `<int>px`, `<int>em` (1em=16px), `<int>rem`, or bare `0`.
@@ -355,9 +404,9 @@ fn parseLengthPx(value: []const u8) ?u32 {
 
 const testing = std.testing;
 
-test "MediaQuery: empty query is false" {
-    try testing.expect(!matches("", Viewport.default));
-    try testing.expect(!matches("   ", Viewport.default));
+test "MediaQuery: empty query matches Chromium's all-media behavior" {
+    try testing.expect(matches("", Viewport.default));
+    try testing.expect(matches("   ", Viewport.default));
 }
 
 test "MediaQuery: bare media types" {
@@ -480,8 +529,38 @@ test "MediaQuery: unknown feature is false" {
     try testing.expect(!matches("(monochrome)", v));
     try testing.expect(!matches("(prefers-color-scheme: dark)", v));
     try testing.expect(!matches("(prefers-reduced-motion: reduce)", v));
-    try testing.expect(!matches("(hover: hover)", v));
-    try testing.expect(!matches("(color)", v));
+}
+
+test "MediaQuery: desktop input and color-gamut features" {
+    const v = Viewport.default;
+    try testing.expect(matches("(hover: hover)", v));
+    try testing.expect(!matches("(hover: none)", v));
+    try testing.expect(matches("(any-hover: hover)", v));
+    try testing.expect(!matches("(any-hover: none)", v));
+    try testing.expect(matches("(pointer: fine)", v));
+    try testing.expect(!matches("(pointer: coarse)", v));
+    try testing.expect(!matches("(pointer: none)", v));
+    try testing.expect(matches("(any-pointer: fine)", v));
+    try testing.expect(!matches("(any-pointer: coarse)", v));
+    try testing.expect(!matches("(any-pointer: none)", v));
+    try testing.expect(matches("(hover)", v));
+    try testing.expect(matches("(any-hover)", v));
+    try testing.expect(matches("(pointer)", v));
+    try testing.expect(matches("(any-pointer)", v));
+    try testing.expect(matches("(color)", v));
+    try testing.expect(matches("(color-gamut)", v));
+    try testing.expect(matches("(color-gamut: srgb)", v));
+    try testing.expect(matches("(color-gamut: p3)", v));
+    try testing.expect(!matches("(color-gamut: rec2020)", v));
+}
+
+test "MediaQuery: Chrome WebKit device pixel ratio hacks" {
+    const v = Viewport.default;
+    try testing.expect(matches("screen and (-webkit-min-device-pixel-ratio: 0)", v));
+    try testing.expect(matches("screen and (-webkit-min-device-pixel-ratio: 1)", v));
+    try testing.expect(!matches("screen and (-webkit-min-device-pixel-ratio: 2)", v));
+    try testing.expect(!matches("all and (-webkit-min-device-pixel-ratio: 10000), not all and (-webkit-min-device-pixel-ratio: 0)", v));
+    try testing.expect(!matches("(min--moz-device-pixel-ratio: 0)", v));
 }
 
 test "MediaQuery: malformed value is false" {
@@ -497,8 +576,8 @@ test "MediaQuery: boolean form (feature presence)" {
     try testing.expect(matches("(width)", v));
     try testing.expect(matches("(height)", v));
     try testing.expect(matches("(orientation)", v));
+    try testing.expect(matches("(color)", v));
     try testing.expect(!matches("(monochrome)", v));
-    try testing.expect(!matches("(color)", v));
 }
 
 test "MediaQuery: viewport-default values" {

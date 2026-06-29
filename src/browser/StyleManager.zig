@@ -23,6 +23,7 @@ const Frame = @import("Frame.zig");
 
 const CssParser = @import("css/Parser.zig");
 const MediaQuery = @import("css/MediaQuery.zig");
+const Supports = @import("css/Supports.zig");
 const Element = @import("webapi/Element.zig");
 
 const Selector = @import("webapi/selector/Selector.zig");
@@ -91,6 +92,7 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
                 // `insertRule` / `replaceSync` participates in the cascade
                 // when its query matches the viewport.
                 .media => try self.applyMediaAtRule(rule._text, 0),
+                .supports => try self.applySupportsAtRule(rule._text, 0),
                 else => {},
             }
         }
@@ -105,12 +107,10 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
             switch (parsed_rule) {
                 .style => |s| try self.addRawRule(s.selector, s.block),
                 .at_rule => |a| {
-                    // Only `@media` participates in the cascade here. Other
-                    // at-rules (`@keyframes`, `@supports`, `@font-face`, …)
-                    // don't carry top-level declarations relevant to the
-                    // visibility filter and stay skipped as before.
                     if (std.ascii.eqlIgnoreCase(a.keyword, "media")) {
                         try self.applyMediaAtRule(a.text, 0);
+                    } else if (std.ascii.eqlIgnoreCase(a.keyword, "supports")) {
+                        try self.applySupportsAtRule(a.text, 0);
                     }
                 },
             }
@@ -123,7 +123,7 @@ fn parseSheet(self: *StyleManager, sheet: *CSSStyleSheet) !void {
 /// lived at the top level. Non-matching queries silently drop the inner
 /// rules. Inline-only by design: external `<link rel="stylesheet">` is out
 /// of scope for the headless engine.
-fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) !void {
+fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) Allocator.Error!void {
     if (depth >= MAX_MEDIA_NESTING) return;
 
     // text shape: `@media <query> { <inner> }` for well-formed input.
@@ -131,24 +131,23 @@ fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) !void {
     // at `@`; for unclosed blocks it runs to EOF, so the closing `}` is
     // located explicitly rather than assumed to be the final byte.
 
-    if (text.len < @as(usize, "@media".len) + 2) return;
-    if (!std.ascii.startsWithIgnoreCase(text, "@media")) return;
+    const block = splitConditionalAtRule(text, "@media") orelse return;
 
-    const rest = text["@media".len..];
-    // Use a comment-aware brace finder; a `/* { */` in the prelude would
-    // otherwise split the rule at the wrong place. The inner block's
-    // contents are re-parsed by CssParser below, which has its own trivia
-    // handling, so only this outer boundary needs the special-case scan.
-    const open = indexOfOpenBraceSkippingComments(rest) orelse return;
-    // Search only past the opening brace — the matching `}` lives there, and
-    // any returned position is naturally `> open` (since `rest[open] == '{'`).
-    const close = open + (std.mem.lastIndexOfScalar(u8, rest[open..], '}') orelse return);
+    if (!MediaQuery.matches(block.prelude, self.frame._page.getViewport())) return;
 
-    const query = std.mem.trim(u8, rest[0..open], &std.ascii.whitespace);
-    const inner = rest[open + 1 .. close];
+    try self.applyNestedConditionalStylesheet(block.inner, depth);
+}
 
-    if (!MediaQuery.matches(query, self.frame._page.getViewport())) return;
+fn applySupportsAtRule(self: *StyleManager, text: []const u8, depth: u8) Allocator.Error!void {
+    if (depth >= MAX_MEDIA_NESTING) return;
 
+    const block = splitConditionalAtRule(text, "@supports") orelse return;
+    if (!Supports.conditionMatches(block.prelude)) return;
+
+    try self.applyNestedConditionalStylesheet(block.inner, depth);
+}
+
+fn applyNestedConditionalStylesheet(self: *StyleManager, inner: []const u8, depth: u8) Allocator.Error!void {
     var it = CssParser.parseStylesheet(inner);
     while (it.next()) |nested_rule| {
         switch (nested_rule) {
@@ -156,10 +155,37 @@ fn applyMediaAtRule(self: *StyleManager, text: []const u8, depth: u8) !void {
             .at_rule => |nested| {
                 if (std.ascii.eqlIgnoreCase(nested.keyword, "media")) {
                     try self.applyMediaAtRule(nested.text, depth + 1);
+                } else if (std.ascii.eqlIgnoreCase(nested.keyword, "supports")) {
+                    try self.applySupportsAtRule(nested.text, depth + 1);
                 }
             },
         }
     }
+}
+
+const ConditionalAtRuleBlock = struct {
+    prelude: []const u8,
+    inner: []const u8,
+};
+
+fn splitConditionalAtRule(text: []const u8, keyword: []const u8) ?ConditionalAtRuleBlock {
+    if (text.len < keyword.len + 2) return null;
+    if (!std.ascii.startsWithIgnoreCase(text, keyword)) return null;
+
+    const rest = text[keyword.len..];
+    // Use a comment-aware brace finder; a `/* { */` in the prelude would
+    // otherwise split the rule at the wrong place. The inner block's
+    // contents are re-parsed by CssParser below, which has its own trivia
+    // handling, so only this outer boundary needs the special-case scan.
+    const open = indexOfOpenBraceSkippingComments(rest) orelse return null;
+    // Search only past the opening brace — the matching `}` lives there, and
+    // any returned position is naturally `> open` (since `rest[open] == '{'`).
+    const close = open + (std.mem.lastIndexOfScalar(u8, rest[open..], '}') orelse return null);
+
+    return .{
+        .prelude = std.mem.trim(u8, rest[0..open], &std.ascii.whitespace),
+        .inner = rest[open + 1 .. close],
+    };
 }
 
 /// Find the first `{` in `s` that is not inside a CSS `/* ... */` comment.

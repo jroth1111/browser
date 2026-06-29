@@ -19,6 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 const Frame = @import("../Frame.zig");
+const Supports = @import("../css/Supports.zig");
 
 const CSS = @This();
 _pad: bool = false,
@@ -93,9 +94,7 @@ pub fn escape(value: []const u8, frame: *Frame) ![]const u8 {
 }
 
 pub fn supports(property_or_condition: []const u8, value: ?[]const u8) bool {
-    _ = property_or_condition;
-    _ = value;
-    return true;
+    return Supports.supports(property_or_condition, value);
 }
 
 fn escapeLen(comptime is_first: bool, c: u8) usize {

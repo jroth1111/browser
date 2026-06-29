@@ -188,6 +188,9 @@ pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, frame: *Frame) 
 }
 
 pub fn getCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
+    if (self._is_computed) {
+        return self.getComputedCssText(frame);
+    }
     var buf = std.Io.Writer.Allocating.init(frame.call_arena);
     try self.format(&buf.writer);
     return buf.written();
@@ -222,6 +225,28 @@ pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
         try Property.fromNodeLink(n).format(writer);
         next = n.next;
     }
+}
+
+fn getComputedCssText(self: *const CSSStyleDeclaration, frame: *Frame) ![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(frame.call_arena);
+    const writer = &buf.writer;
+    const properties = [_][]const u8{
+        "display",
+        "visibility",
+        "opacity",
+        "color",
+        "background-color",
+    };
+    for (properties) |property| {
+        const value = self.getPropertyValue(property, frame);
+        if (value.len == 0) continue;
+        try writer.writeAll(property);
+        try writer.writeAll(": ");
+        try writer.writeAll(value);
+        try writer.writeAll("; ");
+    }
+    try writer.writeAll("position: static; float: none; margin-top: 0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; font-size: 16px; line-height: normal;");
+    return buf.written();
 }
 
 pub fn findProperty(self: *const CSSStyleDeclaration, name: String) ?*Property {
