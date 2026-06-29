@@ -23,11 +23,44 @@ pub const FilledRect = struct {
     }
 };
 
+pub fn textWidth(text: []const u8) f64 {
+    var width: f64 = 0;
+    for (text) |byte| {
+        width += switch (byte) {
+            ' ', '\t', '\n', '\r' => 4.0,
+            else => 7.0,
+        };
+    }
+    return width;
+}
+
+pub fn textFilledRect(text: []const u8, x: f64, y: f64, max_width: ?f64, rgba: color.RGBA) ?FilledRect {
+    if (text.len == 0 or !finite(x) or !finite(y)) return null;
+    var width = textWidth(text);
+    if (max_width) |limit| {
+        if (!finite(limit) or limit <= 0) return null;
+        width = @min(width, limit);
+    }
+    if (width <= 0) return null;
+    const height = 12.0;
+    return .{
+        .x = x,
+        .y = y - height,
+        .width = width,
+        .height = height,
+        .rgba = rgba,
+    };
+}
+
 pub fn rawLen(width: u32, height: u32) ?usize {
     const row_len = std.math.mul(u64, width, 4) catch return null;
     const raw_len = std.math.mul(u64, row_len + 1, height) catch return null;
     if (raw_len > std.math.maxInt(usize)) return null;
     return @intCast(raw_len);
+}
+
+fn finite(value: f64) bool {
+    return !std.math.isNan(value) and !std.math.isInf(value);
 }
 
 pub fn transparentRawPixels(allocator: std.mem.Allocator, width: u32, height: u32, raw_len: usize) ![]const u8 {

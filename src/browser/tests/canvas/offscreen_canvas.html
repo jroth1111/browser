@@ -118,3 +118,21 @@
   testing.expectEqual(false, ctx.isPointInStroke(5, 5));
 }
 </script>
+
+<script id=OffscreenCanvasRenderingContext2D#measureText and fillText>
+{
+  const canvas = new OffscreenCanvas(96, 32);
+  const ctx = canvas.getContext("2d");
+  const metrics = ctx.measureText("Chimera");
+  testing.expectEqual(true, metrics instanceof TextMetrics);
+  testing.expectEqual(true, metrics.width > 0);
+  testing.expectEqual(true, metrics.actualBoundingBoxRight > 0);
+
+  const before = ctx.getImageData(2, 12, 1, 1).data;
+  testing.expectEqual(0, before[3]);
+  ctx.fillStyle = "#111111";
+  ctx.fillText("Chimera", 2, 22);
+  const after = ctx.getImageData(2, 12, 1, 1).data;
+  testing.expectEqual(true, after[3] > 0);
+}
+</script>

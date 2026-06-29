@@ -26,6 +26,7 @@ const CanvasPath = @import("CanvasPath.zig");
 const ImageData = @import("../ImageData.zig");
 const OffscreenCanvas = @import("OffscreenCanvas.zig");
 const Seeds = @import("../../../chimera/Seeds.zig");
+const TextMetrics = @import("TextMetrics.zig");
 
 const Execution = js.Execution;
 
@@ -164,8 +165,15 @@ pub fn rect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64
 pub fn fill(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn stroke(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn fillText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
-pub fn strokeText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+pub fn fillText(self: *OffscreenCanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
+    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style);
+}
+pub fn strokeText(self: *OffscreenCanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
+    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style);
+}
+pub fn measureText(_: *const OffscreenCanvasRenderingContext2D, text: []const u8, exec: *Execution) !*TextMetrics {
+    return exec._factory.create(TextMetrics.init(CanvasBitmap.textWidth(text)));
+}
 pub fn isPointInPath(self: *const OffscreenCanvasRenderingContext2D, x: f64, y: f64, maybe_fill_rule: ?[]const u8) bool {
     return self._path.isPointInPath(x, y, maybe_fill_rule);
 }
@@ -245,8 +253,9 @@ pub const JsApi = struct {
     pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{ .noop = true });
     pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{ .noop = true });
     pub const clip = bridge.function(OffscreenCanvasRenderingContext2D.clip, .{ .noop = true });
-    pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{ .noop = true });
-    pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{ .noop = true });
+    pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{});
+    pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{});
+    pub const measureText = bridge.function(OffscreenCanvasRenderingContext2D.measureText, .{});
     pub const isPointInPath = bridge.function(OffscreenCanvasRenderingContext2D.isPointInPath, .{});
     pub const isPointInStroke = bridge.function(OffscreenCanvasRenderingContext2D.isPointInStroke, .{});
 };
