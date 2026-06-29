@@ -215,6 +215,17 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
+    if (try managedWorkerBootstrapSource(self)) |bootstrap| {
+        ls.local.eval(bootstrap, "worker-profile") catch |err| {
+            if (js_context.env.terminatePending()) {
+                return;
+            }
+
+            const caught = try_catch.caughtOrError(self._arena, err);
+            log.warn(.browser, "worker profile bootstrap error", .{ .url = self._url, .caught = caught });
+        };
+    }
+
     // Classic workers evaluate the entry script as a classic script; module
     // workers (`new Worker(url, { type: "module" })`) instantiate it as a
     // module so top-level `import`/`export` work. Static imports load
@@ -243,6 +254,87 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
     }
 
     ls.local.runMacrotasks();
+}
+
+fn managedWorkerBootstrapSource(self: *Worker) !?[]const u8 {
+    const authority = self._frame._session.browser.http_client.network.config.chimeraAuthority() orelse return null;
+    const locale = authority.profile.languages[0];
+    return workerLocaleBootstrapSource(self._arena, locale);
+}
+
+fn workerLocaleBootstrapSource(allocator: Allocator, locale: []const u8) !?[]const u8 {
+    if (!isSafeWorkerLocale(locale)) {
+        return null;
+    }
+
+    const prefix =
+        \\(() => {
+        \\  const locale = "
+    ;
+    const suffix =
+        \\";
+        \\  try {
+        \\    const intl = globalThis.Intl;
+        \\    if (!intl || !intl.DateTimeFormat || !intl.DateTimeFormat.prototype) return;
+        \\    const nativeSources = typeof WeakMap === "function" ? new WeakMap() : null;
+        \\    const originalToString = Function.prototype.toString;
+        \\    const markNative = (fn, source) => {
+        \\      try { if (nativeSources && typeof fn === "function") nativeSources.set(fn, source); } catch (_e) {}
+        \\      return fn;
+        \\    };
+        \\    if (nativeSources) {
+        \\      const toString = markNative(function toString() {
+        \\        try {
+        \\          const source = nativeSources.get(this);
+        \\          if (source) return source;
+        \\        } catch (_e) {}
+        \\        return originalToString.call(this);
+        \\      }, "function toString() { [native code] }");
+        \\      Object.defineProperty(Function.prototype, "toString", {
+        \\        value: toString,
+        \\        writable: true,
+        \\        configurable: true
+        \\      });
+        \\    }
+        \\    const prototype = intl.DateTimeFormat.prototype;
+        \\    const original = prototype.resolvedOptions;
+        \\    if (typeof original !== "function") return;
+        \\    const resolvedOptions = markNative(function resolvedOptions() {
+        \\      const options = original.call(this);
+        \\      try {
+        \\        Object.defineProperty(options, "locale", {
+        \\          value: locale,
+        \\          enumerable: true,
+        \\          writable: true,
+        \\          configurable: true
+        \\        });
+        \\      } catch (_e) {
+        \\        try { options.locale = locale; } catch (_ignored) {}
+        \\      }
+        \\      return options;
+        \\    }, "function resolvedOptions() { [native code] }");
+        \\    Object.defineProperty(prototype, "resolvedOptions", {
+        \\      value: resolvedOptions,
+        \\      writable: true,
+        \\      configurable: true
+        \\    });
+        \\  } catch (_e) {}
+        \\})();
+    ;
+    return try std.mem.concat(allocator, u8, &.{ prefix, locale, suffix });
+}
+
+fn isSafeWorkerLocale(locale: []const u8) bool {
+    if (locale.len == 0 or locale.len > 64) {
+        return false;
+    }
+    for (locale) |ch| {
+        if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '-' or ch == '_') {
+            continue;
+        }
+        return false;
+    }
+    return true;
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -455,6 +547,19 @@ pub const JsApi = struct {
 };
 
 const testing = @import("../../testing.zig");
+
+test "WebApi: Worker managed locale bootstrap source is bounded" {
+    const std_testing = std.testing;
+    const source = (try workerLocaleBootstrapSource(std_testing.allocator, "en-AU")).?;
+    defer std_testing.allocator.free(source);
+
+    try std_testing.expect(std.mem.indexOf(u8, source, "const locale = \"en-AU\";") != null);
+    try std_testing.expect(std.mem.indexOf(u8, source, "resolvedOptions") != null);
+    try std_testing.expect(std.mem.indexOf(u8, source, "__" ++ "chimera") == null);
+    try std_testing.expect(try workerLocaleBootstrapSource(std_testing.allocator, "en\";alert(1)") == null);
+    try std_testing.expect(try workerLocaleBootstrapSource(std_testing.allocator, "") == null);
+}
+
 test "WebApi: Worker" {
     // Worker tests chain a worker-script fetch with a dynamic-import fetch
     // and a cross-context postMessage. The default 2 s assertion budget can
