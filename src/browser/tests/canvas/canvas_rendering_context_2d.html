@@ -301,3 +301,39 @@
   testing.expectEqual(true, ctx.isPointInPath(5, 5));
 }
 </script>
+
+<script id="CanvasRenderingContext2D#fill path">
+{
+  const element = document.createElement("canvas");
+  element.width = 24;
+  element.height = 24;
+  const ctx = element.getContext("2d");
+
+  ctx.fillStyle = "#336699";
+  ctx.fillRect(1, 1, 2, 2);
+  ctx.beginPath();
+  ctx.fill();
+  const retained = ctx.getImageData(1, 1, 1, 1).data;
+  testing.expectEqual(true, retained[3] > 0);
+
+  ctx.beginPath();
+  ctx.rect(4, 4, 8, 8);
+  ctx.fill();
+  const inside = ctx.getImageData(5, 5, 1, 1).data;
+  const outside = ctx.getImageData(15, 15, 1, 1).data;
+  const retainedAfterPathFill = ctx.getImageData(1, 1, 1, 1).data;
+  testing.expectEqual(true, inside[3] > 0);
+  testing.expectEqual(0, outside[3]);
+  testing.expectEqual(true, retainedAfterPathFill[3] > 0);
+
+  ctx.clearRect(0, 0, 24, 24);
+  ctx.beginPath();
+  ctx.rect(0, 0, 12, 12);
+  ctx.rect(2, 2, 6, 6);
+  ctx.fill("evenodd");
+  const edge = ctx.getImageData(1, 1, 1, 1).data;
+  const center = ctx.getImageData(5, 5, 1, 1).data;
+  testing.expectEqual(true, edge[3] > 0);
+  testing.expectEqual(0, center[3]);
+}
+</script>

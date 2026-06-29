@@ -2,8 +2,10 @@ const std = @import("std");
 
 const color = @import("../../color.zig");
 const Seeds = @import("../../../chimera/Seeds.zig");
+const CanvasPath = @import("CanvasPath.zig");
 
 pub const max_png_raw_bytes = 4 * 1024 * 1024;
+pub const max_paint_ops = 32;
 pub const png_signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
 pub const default_font = "10px sans-serif";
 
@@ -21,6 +23,85 @@ pub const FilledRect = struct {
             yf >= self.y and
             xf < self.x + self.width and
             yf < self.y + self.height;
+    }
+};
+
+pub const FilledPath = struct {
+    path: CanvasPath,
+    rgba: color.RGBA,
+    fill_rule: CanvasPath.FillRule,
+
+    pub fn init(path: CanvasPath, rgba: color.RGBA, maybe_fill_rule: ?[]const u8) FilledPath {
+        return .{
+            .path = path,
+            .rgba = rgba,
+            .fill_rule = CanvasPath.parseFillRule(maybe_fill_rule),
+        };
+    }
+
+    fn contains(self: *const FilledPath, x: i64, y: i64) bool {
+        const xf = @as(f64, @floatFromInt(x)) + 0.5;
+        const yf = @as(f64, @floatFromInt(y)) + 0.5;
+        return self.path.contains(xf, yf, self.fill_rule);
+    }
+};
+
+pub const Paint = union(enum) {
+    rect: FilledRect,
+    path: FilledPath,
+
+    fn pixelAt(self: *const Paint, x: i64, y: i64) ?color.RGBA {
+        return switch (self.*) {
+            .rect => |rect| if (rect.contains(x, y)) rect.rgba else null,
+            .path => |path| if (path.contains(x, y)) path.rgba else null,
+        };
+    }
+};
+
+pub const PaintStack = struct {
+    ops: [max_paint_ops]Paint = undefined,
+    count: usize = 0,
+
+    pub fn clear(self: *PaintStack) void {
+        self.count = 0;
+    }
+
+    pub fn appendRect(self: *PaintStack, rect: FilledRect) void {
+        self.append(.{ .rect = rect });
+    }
+
+    pub fn appendText(self: *PaintStack, text: []const u8, x: f64, y: f64, max_width: ?f64, rgba: color.RGBA, font: []const u8) void {
+        if (textFilledRect(text, x, y, max_width, rgba, font)) |rect| {
+            self.appendRect(rect);
+        }
+    }
+
+    pub fn appendPath(self: *PaintStack, path: CanvasPath, rgba: color.RGBA, maybe_fill_rule: ?[]const u8) void {
+        if (path.isEmpty()) return;
+        self.append(.{ .path = FilledPath.init(path, rgba, maybe_fill_rule) });
+    }
+
+    fn append(self: *PaintStack, paint: Paint) void {
+        if (self.count < max_paint_ops) {
+            self.ops[self.count] = paint;
+            self.count += 1;
+            return;
+        }
+
+        var i: usize = 1;
+        while (i < max_paint_ops) : (i += 1) {
+            self.ops[i - 1] = self.ops[i];
+        }
+        self.ops[max_paint_ops - 1] = paint;
+    }
+
+    fn basePixelAt(self: *const PaintStack, x: i64, y: i64) color.RGBA {
+        var i = self.count;
+        while (i > 0) {
+            i -= 1;
+            if (self.ops[i].pixelAt(x, y)) |rgba| return rgba;
+        }
+        return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
     }
 };
 
@@ -161,13 +242,26 @@ pub fn rawPixelsForFilledRect(
     raw_len: usize,
     filled_rect: ?FilledRect,
 ) ![]const u8 {
+    var stack = PaintStack{};
+    if (filled_rect) |rect| stack.appendRect(rect);
+    return rawPixelsForPaintStack(allocator, seed, width, height, raw_len, &stack);
+}
+
+pub fn rawPixelsForPaintStack(
+    allocator: std.mem.Allocator,
+    seed: u64,
+    width: u32,
+    height: u32,
+    raw_len: usize,
+    paint_stack: *const PaintStack,
+) ![]const u8 {
     const out = try allocator.alloc(u8, raw_len);
     var pos: usize = 0;
     for (0..height) |y| {
         out[pos] = 0;
         pos += 1;
         for (0..width) |x| {
-            const rgba = pixelAt(filled_rect, @as(i64, @intCast(x)), @as(i64, @intCast(y)), seed);
+            const rgba = paintStackPixelAt(paint_stack, @as(i64, @intCast(x)), @as(i64, @intCast(y)), seed);
             out[pos + 0] = rgba.r;
             out[pos + 1] = rgba.g;
             out[pos + 2] = rgba.b;
@@ -179,7 +273,13 @@ pub fn rawPixelsForFilledRect(
 }
 
 pub fn pixelAt(filled_rect: ?FilledRect, x: i64, y: i64, seed: u64) color.RGBA {
-    var rgba = basePixelAt(filled_rect, x, y);
+    var stack = PaintStack{};
+    if (filled_rect) |rect| stack.appendRect(rect);
+    return paintStackPixelAt(&stack, x, y, seed);
+}
+
+pub fn paintStackPixelAt(paint_stack: *const PaintStack, x: i64, y: i64, seed: u64) color.RGBA {
+    var rgba = paint_stack.basePixelAt(x, y);
     if (seed != 0 and rgba.a != 0) {
         rgba.r = noisyChannel(rgba.r, seed, x, y, 0);
         rgba.g = noisyChannel(rgba.g, seed, x, y, 1);
@@ -208,13 +308,6 @@ pub fn png(allocator: std.mem.Allocator, width: u32, height: u32, raw: []const u
     appendPngChunk(out, &pos, "IDAT", idat);
     appendPngChunk(out, &pos, "IEND", "");
     return out;
-}
-
-fn basePixelAt(filled_rect: ?FilledRect, x: i64, y: i64) color.RGBA {
-    if (filled_rect) |rect| {
-        if (rect.contains(x, y)) return rect.rgba;
-    }
-    return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 }
 
 fn noisyChannel(value: u8, seed: u64, x: i64, y: i64, channel: u8) u8 {

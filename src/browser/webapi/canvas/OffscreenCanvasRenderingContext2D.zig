@@ -39,7 +39,7 @@ _canvas: *OffscreenCanvas,
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
 _font: []const u8 = CanvasBitmap.default_font,
-_filled_rect: ?CanvasBitmap.FilledRect = null,
+_paint_stack: CanvasBitmap.PaintStack = .{},
 _path: CanvasPath = .{},
 
 pub fn getCanvas(self: *const OffscreenCanvasRenderingContext2D) *OffscreenCanvas {
@@ -118,8 +118,8 @@ pub fn getImageData(
     var pos: usize = 0;
     for (0..height) |y| {
         for (0..width) |x| {
-            const rgba = CanvasBitmap.pixelAt(
-                self._filled_rect,
+            const rgba = CanvasBitmap.paintStackPixelAt(
+                &self._paint_stack,
                 sx_base + @as(i64, @intCast(x)),
                 sy_base + @as(i64, @intCast(y)),
                 seed,
@@ -145,18 +145,18 @@ pub fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f6
 pub fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn setStrokeStyle(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
 pub fn clearRect(self: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
-    self._filled_rect = null;
+    self._paint_stack.clear();
 }
 
 pub fn fillRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     if (width <= 0 or height <= 0) return;
-    self._filled_rect = .{
+    self._paint_stack.appendRect(.{
         .x = x,
         .y = y,
         .width = width,
         .height = height,
         .rgba = self._fill_style,
-    };
+    });
 }
 pub fn strokeRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn beginPath(self: *OffscreenCanvasRenderingContext2D) void {
@@ -172,14 +172,16 @@ pub fn arcTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f
 pub fn rect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     self._path.rect(x, y, width, height);
 }
-pub fn fill(_: *OffscreenCanvasRenderingContext2D) void {}
+pub fn fill(self: *OffscreenCanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void {
+    self._paint_stack.appendPath(self._path, self._fill_style, maybe_fill_rule);
+}
 pub fn stroke(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn fillText(self: *OffscreenCanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
-    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font);
+    self._paint_stack.appendText(text, x, y, max_width, self._fill_style, self._font);
 }
 pub fn strokeText(self: *OffscreenCanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
-    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font);
+    self._paint_stack.appendText(text, x, y, max_width, self._fill_style, self._font);
 }
 pub fn measureText(self: *const OffscreenCanvasRenderingContext2D, text: []const u8, exec: *Execution) !*TextMetrics {
     const font_size = CanvasBitmap.fontPixelSize(self._font);
@@ -193,7 +195,7 @@ pub fn isPointInStroke(_: *const OffscreenCanvasRenderingContext2D, _: f64, _: f
 }
 
 pub fn resetBitmap(self: *OffscreenCanvasRenderingContext2D) void {
-    self._filled_rect = null;
+    self._paint_stack.clear();
     self._path.begin();
 }
 
@@ -205,7 +207,7 @@ pub fn pngRawPixels(
     height: u32,
     raw_len: usize,
 ) ![]const u8 {
-    return CanvasBitmap.rawPixelsForFilledRect(allocator, seed, width, height, raw_len, self._filled_rect);
+    return CanvasBitmap.rawPixelsForPaintStack(allocator, seed, width, height, raw_len, &self._paint_stack);
 }
 
 fn canvasSeed(exec: *Execution) u64 {
@@ -261,7 +263,7 @@ pub const JsApi = struct {
     pub const arc = bridge.function(OffscreenCanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(OffscreenCanvasRenderingContext2D.arcTo, .{ .noop = true });
     pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{});
-    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{ .noop = true });
+    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{});
     pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{ .noop = true });
     pub const clip = bridge.function(OffscreenCanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{});

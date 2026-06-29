@@ -25,6 +25,11 @@ const max_rects = 32;
 rects: [max_rects]Rect = undefined,
 rect_count: usize = 0,
 
+pub const FillRule = enum {
+    nonzero,
+    evenodd,
+};
+
 const Rect = struct {
     left: f64,
     top: f64,
@@ -38,6 +43,10 @@ const Rect = struct {
 
 pub fn begin(self: *CanvasPath) void {
     self.rect_count = 0;
+}
+
+pub fn isEmpty(self: *const CanvasPath) bool {
+    return self.rect_count == 0;
 }
 
 pub fn rect(self: *CanvasPath, x: f64, y: f64, width: f64, height: f64) void {
@@ -54,14 +63,25 @@ pub fn rect(self: *CanvasPath, x: f64, y: f64, width: f64, height: f64) void {
 }
 
 pub fn isPointInPath(self: *const CanvasPath, x: f64, y: f64, maybe_fill_rule: ?[]const u8) bool {
+    return self.contains(x, y, parseFillRule(maybe_fill_rule));
+}
+
+pub fn contains(self: *const CanvasPath, x: f64, y: f64, fill_rule: FillRule) bool {
     var count: usize = 0;
     for (self.rects[0..self.rect_count]) |path_rect| {
         if (path_rect.contains(x, y)) count += 1;
     }
+    return switch (fill_rule) {
+        .evenodd => count % 2 == 1,
+        .nonzero => count > 0,
+    };
+}
+
+pub fn parseFillRule(maybe_fill_rule: ?[]const u8) FillRule {
     if (maybe_fill_rule) |fill_rule| {
-        if (std.mem.eql(u8, fill_rule, "evenodd")) return count % 2 == 1;
+        if (std.mem.eql(u8, fill_rule, "evenodd")) return .evenodd;
     }
-    return count > 0;
+    return .nonzero;
 }
 
 test "CanvasPath: rect winding" {

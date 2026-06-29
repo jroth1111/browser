@@ -42,7 +42,7 @@ _canvas: *Canvas,
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
 _font: []const u8 = CanvasBitmap.default_font,
-_filled_rect: ?CanvasBitmap.FilledRect = null,
+_paint_stack: CanvasBitmap.PaintStack = .{},
 _path: CanvasPath = .{},
 
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
@@ -151,18 +151,18 @@ pub fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64
 pub fn resetTransform(_: *CanvasRenderingContext2D) void {}
 pub fn setStrokeStyle(_: *CanvasRenderingContext2D, _: []const u8) void {}
 pub fn clearRect(self: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
-    self._filled_rect = null;
+    self._paint_stack.clear();
 }
 
 pub fn fillRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     if (width <= 0 or height <= 0) return;
-    self._filled_rect = .{
+    self._paint_stack.appendRect(.{
         .x = x,
         .y = y,
         .width = width,
         .height = height,
         .rgba = self._fill_style,
-    };
+    });
 }
 pub fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn beginPath(self: *CanvasRenderingContext2D) void {
@@ -178,14 +178,16 @@ pub fn arcTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f6
 pub fn rect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     self._path.rect(x, y, width, height);
 }
-pub fn fill(_: *CanvasRenderingContext2D) void {}
+pub fn fill(self: *CanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void {
+    self._paint_stack.appendPath(self._path, self._fill_style, maybe_fill_rule);
+}
 pub fn stroke(_: *CanvasRenderingContext2D) void {}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
 pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
-    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font);
+    self._paint_stack.appendText(text, x, y, max_width, self._fill_style, self._font);
 }
 pub fn strokeText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
-    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font);
+    self._paint_stack.appendText(text, x, y, max_width, self._fill_style, self._font);
 }
 pub fn measureText(self: *const CanvasRenderingContext2D, text: []const u8, exec: *Execution) !*TextMetrics {
     const font_size = CanvasBitmap.fontPixelSize(self._font);
@@ -206,11 +208,11 @@ pub fn pngRawPixels(
     height: u32,
     raw_len: usize,
 ) ![]const u8 {
-    return CanvasBitmap.rawPixelsForFilledRect(allocator, seed, width, height, raw_len, self._filled_rect);
+    return CanvasBitmap.rawPixelsForPaintStack(allocator, seed, width, height, raw_len, &self._paint_stack);
 }
 
 fn pixelAt(self: *const CanvasRenderingContext2D, x: i64, y: i64, seed: u64) color.RGBA {
-    return CanvasBitmap.pixelAt(self._filled_rect, x, y, seed);
+    return CanvasBitmap.paintStackPixelAt(&self._paint_stack, x, y, seed);
 }
 
 fn canvasSeed(exec: *Execution) u64 {
@@ -267,7 +269,7 @@ pub const JsApi = struct {
     pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{ .noop = true });
     pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{});
-    pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{ .noop = true });
+    pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{});
     pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{ .noop = true });
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
