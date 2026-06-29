@@ -47,6 +47,8 @@ drawing_buffer_width: u32 = 300,
 drawing_buffer_height: u32 = 150,
 viewport_values: [4]i32 = .{ 0, 0, 300, 150 },
 scissor_box_values: [4]i32 = .{ 0, 0, 300, 150 },
+clear_color_values: [4]f32 = .{ 0.0, 0.0, 0.0, 0.0 },
+clear_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
 unmasked_vendor: []const u8 = chrome_unmasked_vendor,
 unmasked_renderer: []const u8 = chrome_unmasked_renderer,
 
@@ -233,6 +235,15 @@ const ParameterValue = union(enum) {
     int_array: js.TypedArray(i32),
     float_array: js.TypedArray(f32),
 };
+
+fn clampColorValue(value: f64) f32 {
+    if (std.math.isNan(value)) return 0.0;
+    return @floatCast(std.math.clamp(value, 0.0, 1.0));
+}
+
+fn colorByte(value: f32) u8 {
+    return @intFromFloat(std.math.clamp(value, 0.0, 1.0) * 255.0);
+}
 
 pub fn initFromProfile(width: u32, height: u32, profile: ?*const Profile) WebGLRenderingContext {
     var ctx = WebGLRenderingContext{
@@ -492,7 +503,7 @@ pub fn getParameter(self: *const WebGLRenderingContext, pname: u32) ParameterVal
         VIEWPORT => .{ .int_array = .{ .values = self.viewport_values[0..] } },
         SCISSOR_BOX => .{ .int_array = .{ .values = self.scissor_box_values[0..] } },
         MAX_VIEWPORT_DIMS => .{ .int_array = .{ .values = &.{ 16384, 16384 } } },
-        COLOR_CLEAR_VALUE => .{ .float_array = .{ .values = &.{ 0.0, 0.0, 0.0, 0.0 } } },
+        COLOR_CLEAR_VALUE => .{ .float_array = .{ .values = self.clear_color_values[0..] } },
         COLOR_WRITEMASK => .{ .int_array = .{ .values = &.{ 1, 1, 1, 1 } } },
         DEPTH_WRITEMASK => .{ .bool = true },
         CULL_FACE, BLEND, DITHER, STENCIL_TEST, DEPTH_TEST, SCISSOR_TEST, POLYGON_OFFSET_FILL, SAMPLE_ALPHA_TO_COVERAGE, SAMPLE_COVERAGE => .{ .bool = false },
@@ -625,16 +636,45 @@ pub fn getActiveUniform(_: *const WebGLRenderingContext, _: ?*WebGLProgram, _: u
     return null;
 }
 
-pub fn readPixels(_: *const WebGLRenderingContext, _: i32, _: i32, width: i32, height: i32, _: u32, _: u32, pixels: []u8) void {
+pub fn clearColor(self: *WebGLRenderingContext, r: f64, g: f64, b: f64, a: f64) void {
+    self.clear_color_values = .{
+        clampColorValue(r),
+        clampColorValue(g),
+        clampColorValue(b),
+        clampColorValue(a),
+    };
+}
+
+pub fn clear(self: *WebGLRenderingContext, mask: u64) void {
+    if ((mask & COLOR_BUFFER_BIT) == 0) return;
+    self.clear_pixel_values = .{
+        colorByte(self.clear_color_values[0]),
+        colorByte(self.clear_color_values[1]),
+        colorByte(self.clear_color_values[2]),
+        colorByte(self.clear_color_values[3]),
+    };
+}
+
+pub fn viewport(self: *WebGLRenderingContext, x: i32, y: i32, width: i32, height: i32) void {
+    if (width < 0 or height < 0) return;
+    self.viewport_values = .{ x, y, width, height };
+}
+
+pub fn scissor(self: *WebGLRenderingContext, x: i32, y: i32, width: i32, height: i32) void {
+    if (width < 0 or height < 0) return;
+    self.scissor_box_values = .{ x, y, width, height };
+}
+
+pub fn readPixels(self: *const WebGLRenderingContext, _: i32, _: i32, width: i32, height: i32, _: u32, _: u32, pixels: []u8) void {
     if (width <= 0 or height <= 0) return;
     const pixel_count: usize = @intCast(width * height);
     const byte_count = @min(pixels.len, pixel_count * 4);
     var i: usize = 0;
     while (i < byte_count) : (i += 4) {
-        pixels[i] = @intCast((i / 4) % 251);
-        if (i + 1 < byte_count) pixels[i + 1] = @intCast((i / 2 + 17) % 251);
-        if (i + 2 < byte_count) pixels[i + 2] = @intCast((i + 43) % 251);
-        if (i + 3 < byte_count) pixels[i + 3] = 255;
+        pixels[i] = self.clear_pixel_values[0];
+        if (i + 1 < byte_count) pixels[i + 1] = self.clear_pixel_values[1];
+        if (i + 2 < byte_count) pixels[i + 2] = self.clear_pixel_values[2];
+        if (i + 3 < byte_count) pixels[i + 3] = self.clear_pixel_values[3];
     }
 }
 
@@ -694,8 +734,8 @@ pub const JsApi = struct {
     pub const blendFuncSeparate = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
     pub const bufferData = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
     pub const bufferSubData = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
-    pub const clear = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
-    pub const clearColor = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
+    pub const clear = bridge.function(WebGLRenderingContext.clear, .{});
+    pub const clearColor = bridge.function(WebGLRenderingContext.clearColor, .{});
     pub const clearDepth = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const clearStencil = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const colorMask = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
@@ -735,7 +775,7 @@ pub const JsApi = struct {
     pub const readPixels = bridge.function(WebGLRenderingContext.readPixels, .{});
     pub const renderbufferStorage = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
     pub const sampleCoverage = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
-    pub const scissor = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
+    pub const scissor = bridge.function(WebGLRenderingContext.scissor, .{});
     pub const shaderSource = bridge.function(WebGLRenderingContext.noop2, .{ .noop = true });
     pub const stencilFunc = bridge.function(WebGLRenderingContext.noop3, .{ .noop = true });
     pub const stencilFuncSeparate = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
@@ -757,7 +797,7 @@ pub const JsApi = struct {
     pub const useProgram = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const validateProgram = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const vertexAttribPointer = bridge.function(WebGLRenderingContext.noop6, .{ .noop = true });
-    pub const viewport = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
+    pub const viewport = bridge.function(WebGLRenderingContext.viewport, .{});
     pub const drawingBufferWidth = bridge.accessor(WebGLRenderingContext.getDrawingBufferWidth, null, .{});
     pub const drawingBufferHeight = bridge.accessor(WebGLRenderingContext.getDrawingBufferHeight, null, .{});
     pub const VENDOR = bridge.property(WebGLRenderingContext.VENDOR, .{ .template = true });
