@@ -47,6 +47,7 @@ _font: []const u8 = CanvasBitmap.default_font,
 _paint_stack: CanvasBitmap.PaintStack = .{},
 _path: CanvasPath = .{},
 _transform: CanvasBitmap.Transform = .{},
+_state_stack: CanvasBitmap.DrawingStateStack = .{},
 
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
@@ -190,8 +191,15 @@ pub fn getImageData(
     return image_data;
 }
 
-pub fn save(_: *CanvasRenderingContext2D) void {}
-pub fn restore(_: *CanvasRenderingContext2D) void {}
+pub fn save(self: *CanvasRenderingContext2D, exec: *const Execution) !void {
+    try self._state_stack.push(exec.arena, CanvasBitmap.drawingState(self));
+}
+
+pub fn restore(self: *CanvasRenderingContext2D) void {
+    if (self._state_stack.pop()) |state| {
+        CanvasBitmap.applyDrawingState(self, state);
+    }
+}
 pub fn scale(self: *CanvasRenderingContext2D, x: f64, y: f64) void {
     self._transform.scale(x, y);
 }
@@ -326,8 +334,8 @@ pub const JsApi = struct {
     pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{});
     pub const drawImage = bridge.function(CanvasRenderingContext2D.drawImage, .{ .noop = true });
     pub const getImageData = bridge.function(CanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
-    pub const save = bridge.function(CanvasRenderingContext2D.save, .{ .noop = true });
-    pub const restore = bridge.function(CanvasRenderingContext2D.restore, .{ .noop = true });
+    pub const save = bridge.function(CanvasRenderingContext2D.save, .{});
+    pub const restore = bridge.function(CanvasRenderingContext2D.restore, .{});
     pub const scale = bridge.function(CanvasRenderingContext2D.scale, .{});
     pub const rotate = bridge.function(CanvasRenderingContext2D.rotate, .{});
     pub const translate = bridge.function(CanvasRenderingContext2D.translate, .{});

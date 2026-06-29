@@ -117,6 +117,53 @@ const Point = struct {
     y: f64,
 };
 
+pub const DrawingState = struct {
+    fill_style: color.RGBA,
+    stroke_style: color.RGBA,
+    line_width: f64,
+    font: []const u8,
+    transform: Transform,
+};
+
+pub fn drawingState(context: anytype) DrawingState {
+    return .{
+        .fill_style = context._fill_style,
+        .stroke_style = context._stroke_style,
+        .line_width = context._line_width,
+        .font = context._font,
+        .transform = context._transform,
+    };
+}
+
+pub fn applyDrawingState(context: anytype, state: DrawingState) void {
+    context._fill_style = state.fill_style;
+    context._stroke_style = state.stroke_style;
+    context._line_width = state.line_width;
+    context._font = state.font;
+    context._transform = state.transform;
+}
+
+pub const DrawingStateStack = struct {
+    states: std.ArrayListUnmanaged(DrawingState) = .{},
+
+    pub fn push(self: *DrawingStateStack, allocator: std.mem.Allocator, state: DrawingState) !void {
+        try self.states.append(allocator, state);
+    }
+
+    pub fn pop(self: *DrawingStateStack) ?DrawingState {
+        if (self.states.items.len == 0) return null;
+        const index = self.states.items.len - 1;
+        const state = self.states.items[index];
+        self.states.items.len = index;
+        return state;
+    }
+
+    pub fn deinit(self: *DrawingStateStack, allocator: std.mem.Allocator) void {
+        self.states.deinit(allocator);
+        self.* = .{};
+    }
+};
+
 pub const FilledRect = struct {
     x: f64,
     y: f64,
@@ -835,6 +882,56 @@ test "CanvasBitmap path stroke reuses stroke rect outline" {
     try testing.expect(pathStrokeContains(path, 4, 4, 2));
     try testing.expect(!pathStrokeContains(path, 8, 7, 2));
     try testing.expect(!pathStrokeContains(path, 4, 4, 0));
+}
+
+test "CanvasBitmap drawing state stack restores latest state" {
+    var stack = DrawingStateStack{};
+    defer stack.deinit(testing.allocator);
+    const red = color.RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    const blue = color.RGBA{ .r = 0, .g = 51, .b = 255, .a = 255 };
+    const state = DrawingState{
+        .fill_style = red,
+        .stroke_style = blue,
+        .line_width = 2,
+        .font = "16px Arial",
+        .transform = .{ .e = 4, .f = 3 },
+    };
+
+    try testing.expect(stack.pop() == null);
+    try stack.push(testing.allocator, state);
+    const restored = stack.pop().?;
+    try testing.expectEqual(red, restored.fill_style);
+    try testing.expectEqual(blue, restored.stroke_style);
+    try testing.expectEqual(@as(f64, 2), restored.line_width);
+    try testing.expectEqualStrings("16px Arial", restored.font);
+    try testing.expectEqual(@as(f64, 4), restored.transform.e);
+    try testing.expectEqual(@as(f64, 3), restored.transform.f);
+    try testing.expect(stack.pop() == null);
+}
+
+test "CanvasBitmap drawing state stack keeps deep state without a shallow cap" {
+    var stack = DrawingStateStack{};
+    defer stack.deinit(testing.allocator);
+
+    for (0..64) |i| {
+        try stack.push(testing.allocator, .{
+            .fill_style = color.RGBA{ .r = @intCast(i), .g = 0, .b = 0, .a = 255 },
+            .stroke_style = color.RGBA.Named.black,
+            .line_width = @floatFromInt(i + 1),
+            .font = default_font,
+            .transform = .{ .e = @floatFromInt(i) },
+        });
+    }
+
+    var next: usize = 64;
+    while (next > 0) {
+        next -= 1;
+        const restored = stack.pop().?;
+        try testing.expectEqual(@as(u8, @intCast(next)), restored.fill_style.r);
+        try testing.expectEqual(@as(f64, @floatFromInt(next + 1)), restored.line_width);
+        try testing.expectEqual(@as(f64, @floatFromInt(next)), restored.transform.e);
+    }
+    try testing.expect(stack.pop() == null);
 }
 
 test "CanvasBitmap clear rect overrides only covered pixels" {

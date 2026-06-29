@@ -231,6 +231,51 @@
 }
 </script>
 
+<script id="CanvasRenderingContext2D#save restore drawing state">
+{
+  const element = document.createElement("canvas");
+  element.width = 32;
+  element.height = 32;
+  const ctx = element.getContext("2d");
+
+  ctx.fillStyle = "#00aa00";
+  ctx.strokeStyle = "#0033ff";
+  ctx.lineWidth = 2;
+  ctx.font = "16px Arial";
+  ctx.translate(6, 24);
+  ctx.save();
+  ctx.fillStyle = "#ff0000";
+  ctx.strokeStyle = "#ff0000";
+  ctx.lineWidth = 6;
+  ctx.font = "bold 48px serif";
+  ctx.translate(20, 0);
+  ctx.restore();
+
+  testing.expectEqual("#00aa00", ctx.fillStyle);
+  testing.expectEqual("#0033ff", ctx.strokeStyle);
+  testing.expectEqual(2, ctx.lineWidth);
+  testing.expectEqual("16px Arial", ctx.font);
+  testing.expectEqual(true, ctx.measureText("Chimera").actualBoundingBoxAscent < 20);
+
+  ctx.fillRect(0, 0, 2, 2);
+  ctx.strokeRect(4, 0, 4, 4);
+  const fillPixel = ctx.getImageData(6, 24, 1, 1).data;
+  const originPixel = ctx.getImageData(0, 24, 1, 1).data;
+  const strokePixel = ctx.getImageData(10, 24, 1, 1).data;
+  const strokeCenter = ctx.getImageData(12, 26, 1, 1).data;
+  testing.expectEqual(true, fillPixel[1] >= 120);
+  testing.expectEqual(true, fillPixel[3] >= 200);
+  testing.expectEqual(0, originPixel[3]);
+  testing.expectEqual(true, strokePixel[2] >= 200);
+  testing.expectEqual(true, strokePixel[3] >= 200);
+  testing.expectEqual(0, strokeCenter[3]);
+
+  ctx.restore();
+  testing.expectEqual(2, ctx.lineWidth);
+  testing.expectEqual("16px Arial", ctx.font);
+}
+</script>
+
 <script id="CanvasRenderingContext2D#strokeRect">
 {
   const element = document.createElement("canvas");
