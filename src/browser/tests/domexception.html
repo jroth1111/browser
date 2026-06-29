@@ -35,6 +35,18 @@
   }
 </script>
 
+<script id=constructor_strings_are_stable>
+  {
+    const first = new DOMException('Permission denied', 'NotAllowedError');
+    const second = new DOMException('The request was aborted.', 'AbortError');
+    testing.expectEqual('AbortError', second.name);
+    testing.expectEqual('The request was aborted.', second.message);
+    testing.expectEqual('NotAllowedError', first.name);
+    testing.expectEqual('Permission denied', first.message);
+    testing.expectEqual('NotAllowedError: Permission denied', first.toString());
+  }
+</script>
+
 <script id=legacy_error_codes>
   {
     // Test standard errors with legacy codes

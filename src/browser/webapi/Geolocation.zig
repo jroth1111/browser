@@ -29,7 +29,7 @@ pub fn getCurrentPosition(
     _: ?GeolocationOptions,
     exec: *js.Execution,
 ) !void {
-    if (managedPosition(exec)) |position| {
+    if (try managedPosition(exec)) |position| {
         try success.call(void, .{position});
         return;
     }
@@ -80,14 +80,18 @@ fn permissionStateForProfile(geolocation: ?ChimeraProfile.Geolocation) Permissio
     return if (geolocation != null) .granted else .denied;
 }
 
-fn managedPosition(exec: *js.Execution) ?GeolocationPosition {
-    const coords = managedCoordinates(exec) orelse return null;
-    return .{ .coords = coords, .timestamp = @floatFromInt(std.time.milliTimestamp()) };
+fn managedPosition(exec: *js.Execution) !?*GeolocationPosition {
+    const coords = (try managedCoordinates(exec)) orelse return null;
+    return exec._factory.create(GeolocationPosition{
+        .coords = coords,
+        .timestamp = @floatFromInt(std.time.milliTimestamp()),
+    });
 }
 
-fn managedCoordinates(exec: *js.Execution) ?GeolocationCoordinates {
+fn managedCoordinates(exec: *js.Execution) !?*GeolocationCoordinates {
     const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return null;
-    return coordinatesFromProfile(authority.profile.geolocation);
+    const coords = coordinatesFromProfile(authority.profile.geolocation) orelse return null;
+    return exec._factory.create(coords);
 }
 
 fn coordinatesFromProfile(geolocation: ?ChimeraProfile.Geolocation) ?GeolocationCoordinates {
@@ -126,11 +130,11 @@ test "WebApi: Geolocation managed coordinates are profile driven" {
 }
 
 pub const GeolocationPosition = struct {
-    coords: GeolocationCoordinates,
+    coords: *GeolocationCoordinates,
     timestamp: f64,
 
     pub fn getCoords(self: *GeolocationPosition) *GeolocationCoordinates {
-        return &self.coords;
+        return self.coords;
     }
 
     pub fn getTimestamp(self: *const GeolocationPosition) f64 {

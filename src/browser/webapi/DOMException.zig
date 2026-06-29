@@ -25,7 +25,13 @@ _code: Code = .none,
 _custom_name: ?[]const u8 = null,
 _custom_message: ?[]const u8 = null,
 
-pub fn init(message: ?[]const u8, name: ?[]const u8) DOMException {
+pub fn init(message: ?[]const u8, name: ?[]const u8, exec: *js.Execution) !DOMException {
+    const copied_name = if (name) |n| try exec.arena.dupe(u8, n) else null;
+    const copied_message = if (message) |msg| try exec.arena.dupe(u8, msg) else null;
+    return initStatic(copied_message, copied_name);
+}
+
+pub fn initStatic(message: ?[]const u8, name: ?[]const u8) DOMException {
     // If name is provided, try to map it to a legacy code
     const code = if (name) |n| Code.fromName(n) else .none;
     return .{

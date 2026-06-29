@@ -57,7 +57,7 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
 
     if (request._signal) |signal| {
         if (signal._aborted) {
-            resolver.reject("fetch aborted", DOMException.init("The operation was aborted.", "AbortError"));
+            resolver.reject("fetch aborted", DOMException.initStatic("The operation was aborted.", "AbortError"));
             return resolver.promise();
         }
     }
