@@ -22,7 +22,9 @@ const js = @import("../../js/js.zig");
 
 const color = @import("../../color.zig");
 
+const CanvasBitmap = @import("CanvasBitmap.zig");
 const Canvas = @import("../element/html/Canvas.zig");
+const CanvasPath = @import("CanvasPath.zig");
 const ImageData = @import("../ImageData.zig");
 const Seeds = @import("../../../chimera/Seeds.zig");
 
@@ -38,24 +40,8 @@ _canvas: *Canvas,
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
-_filled_rect: ?FilledRect = null,
-
-const FilledRect = struct {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    rgba: color.RGBA,
-
-    fn contains(self: FilledRect, x: i64, y: i64) bool {
-        const xf = @as(f64, @floatFromInt(x)) + 0.5;
-        const yf = @as(f64, @floatFromInt(y)) + 0.5;
-        return xf >= self.x and
-            yf >= self.y and
-            xf < self.x + self.width and
-            yf < self.y + self.height;
-    }
-};
+_filled_rect: ?CanvasBitmap.FilledRect = null,
+_path: CanvasPath = .{},
 
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
@@ -168,7 +154,9 @@ pub fn fillRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, hei
     };
 }
 pub fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn beginPath(_: *CanvasRenderingContext2D) void {}
+pub fn beginPath(self: *CanvasRenderingContext2D) void {
+    self._path.begin();
+}
 pub fn closePath(_: *CanvasRenderingContext2D) void {}
 pub fn moveTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn lineTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -176,12 +164,20 @@ pub fn quadraticCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _:
 pub fn bezierCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn arc(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
 pub fn arcTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn rect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+pub fn rect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._path.rect(x, y, width, height);
+}
 pub fn fill(_: *CanvasRenderingContext2D) void {}
 pub fn stroke(_: *CanvasRenderingContext2D) void {}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
 pub fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 pub fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+pub fn isPointInPath(self: *const CanvasRenderingContext2D, x: f64, y: f64, maybe_fill_rule: ?[]const u8) bool {
+    return self._path.isPointInPath(x, y, maybe_fill_rule);
+}
+pub fn isPointInStroke(_: *const CanvasRenderingContext2D, _: f64, _: f64) bool {
+    return false;
+}
 
 pub fn pngRawPixels(
     self: *const CanvasRenderingContext2D,
@@ -191,50 +187,11 @@ pub fn pngRawPixels(
     height: u32,
     raw_len: usize,
 ) ![]const u8 {
-    const out = try allocator.alloc(u8, raw_len);
-    var pos: usize = 0;
-    for (0..height) |y| {
-        out[pos] = 0;
-        pos += 1;
-        for (0..width) |x| {
-            const rgba = self.pixelAt(@as(i64, @intCast(x)), @as(i64, @intCast(y)), seed);
-            out[pos + 0] = rgba.r;
-            out[pos + 1] = rgba.g;
-            out[pos + 2] = rgba.b;
-            out[pos + 3] = rgba.a;
-            pos += 4;
-        }
-    }
-    return out;
+    return CanvasBitmap.rawPixelsForFilledRect(allocator, seed, width, height, raw_len, self._filled_rect);
 }
 
 fn pixelAt(self: *const CanvasRenderingContext2D, x: i64, y: i64, seed: u64) color.RGBA {
-    var rgba = self.basePixelAt(x, y);
-    if (seed != 0 and rgba.a != 0) {
-        rgba.r = noisyChannel(rgba.r, seed, x, y, 0);
-        rgba.g = noisyChannel(rgba.g, seed, x, y, 1);
-        rgba.b = noisyChannel(rgba.b, seed, x, y, 2);
-    }
-    return rgba;
-}
-
-fn basePixelAt(self: *const CanvasRenderingContext2D, x: i64, y: i64) color.RGBA {
-    if (self._filled_rect) |filled_rect| {
-        if (filled_rect.contains(x, y)) return filled_rect.rgba;
-    }
-    return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
-}
-
-fn noisyChannel(value: u8, seed: u64, x: i64, y: i64, channel: u8) u8 {
-    const ux: u64 = @bitCast(x);
-    const uy: u64 = @bitCast(y);
-    const rotated_y = (uy << 17) | (uy >> 47);
-    const mixed = Seeds.mix(seed, ux ^ rotated_y ^ (@as(u64, channel) << 56));
-    const delta = @as(i16, @intCast(mixed % 3)) - 1;
-    const adjusted = @as(i16, @intCast(value)) + delta;
-    if (adjusted <= 0) return 0;
-    if (adjusted >= 255) return 255;
-    return @intCast(adjusted);
+    return CanvasBitmap.pixelAt(self._filled_rect, x, y, seed);
 }
 
 fn canvasSeed(exec: *Execution) u64 {
@@ -282,7 +239,7 @@ pub const JsApi = struct {
     pub const clearRect = bridge.function(CanvasRenderingContext2D.clearRect, .{});
     pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{});
     pub const strokeRect = bridge.function(CanvasRenderingContext2D.strokeRect, .{ .noop = true });
-    pub const beginPath = bridge.function(CanvasRenderingContext2D.beginPath, .{ .noop = true });
+    pub const beginPath = bridge.function(CanvasRenderingContext2D.beginPath, .{});
     pub const closePath = bridge.function(CanvasRenderingContext2D.closePath, .{ .noop = true });
     pub const moveTo = bridge.function(CanvasRenderingContext2D.moveTo, .{ .noop = true });
     pub const lineTo = bridge.function(CanvasRenderingContext2D.lineTo, .{ .noop = true });
@@ -290,12 +247,14 @@ pub const JsApi = struct {
     pub const bezierCurveTo = bridge.function(CanvasRenderingContext2D.bezierCurveTo, .{ .noop = true });
     pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{ .noop = true });
-    pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{ .noop = true });
+    pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{});
     pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{ .noop = true });
     pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{ .noop = true });
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{ .noop = true });
     pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{ .noop = true });
+    pub const isPointInPath = bridge.function(CanvasRenderingContext2D.isPointInPath, .{});
+    pub const isPointInStroke = bridge.function(CanvasRenderingContext2D.isPointInStroke, .{});
 };
 
 const testing = @import("../../../testing.zig");

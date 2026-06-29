@@ -21,7 +21,11 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const color = @import("../../color.zig");
 
+const CanvasBitmap = @import("CanvasBitmap.zig");
+const CanvasPath = @import("CanvasPath.zig");
 const ImageData = @import("../ImageData.zig");
+const OffscreenCanvas = @import("OffscreenCanvas.zig");
+const Seeds = @import("../../../chimera/Seeds.zig");
 
 const Execution = js.Execution;
 
@@ -29,9 +33,16 @@ const Execution = js.Execution;
 /// It can be obtained with a call to `OffscreenCanvas#getContext`.
 /// https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvasRenderingContext2D
 const OffscreenCanvasRenderingContext2D = @This();
+_canvas: *OffscreenCanvas,
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
+_filled_rect: ?CanvasBitmap.FilledRect = null,
+_path: CanvasPath = .{},
+
+pub fn getCanvas(self: *const OffscreenCanvasRenderingContext2D) *OffscreenCanvas {
+    return self._canvas;
+}
 
 pub fn getFillStyle(self: *const OffscreenCanvasRenderingContext2D, exec: *Execution) ![]const u8 {
     var w = std.Io.Writer.Allocating.init(exec.call_arena);
@@ -75,9 +86,9 @@ pub fn createImageData(
 pub fn putImageData(_: *const OffscreenCanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
 
 pub fn getImageData(
-    _: *const OffscreenCanvasRenderingContext2D,
-    _: i32, // sx
-    _: i32, // sy
+    self: *const OffscreenCanvasRenderingContext2D,
+    sx: i32,
+    sy: i32,
     sw: i32,
     sh: i32,
     exec: *Execution,
@@ -85,7 +96,32 @@ pub fn getImageData(
     if (sw <= 0 or sh <= 0) {
         return error.IndexSizeError;
     }
-    return ImageData.init(@intCast(sw), @intCast(sh), null, exec);
+    const image_data = try ImageData.init(@as(u32, @intCast(sw)), @as(u32, @intCast(sh)), null, exec);
+    const pixels = image_data.pixelData(exec);
+    const width: usize = @intCast(sw);
+    const height: usize = @intCast(sh);
+    const sx_base: i64 = sx;
+    const sy_base: i64 = sy;
+    const seed = canvasSeed(exec);
+
+    var pos: usize = 0;
+    for (0..height) |y| {
+        for (0..width) |x| {
+            const rgba = CanvasBitmap.pixelAt(
+                self._filled_rect,
+                sx_base + @as(i64, @intCast(x)),
+                sy_base + @as(i64, @intCast(y)),
+                seed,
+            );
+            pixels[pos + 0] = rgba.r;
+            pixels[pos + 1] = rgba.g;
+            pixels[pos + 2] = rgba.b;
+            pixels[pos + 3] = rgba.a;
+            pos += 4;
+        }
+    }
+
+    return image_data;
 }
 
 pub fn save(_: *OffscreenCanvasRenderingContext2D) void {}
@@ -97,10 +133,24 @@ pub fn transform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, 
 pub fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn setStrokeStyle(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
-pub fn clearRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn fillRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+pub fn clearRect(self: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
+    self._filled_rect = null;
+}
+
+pub fn fillRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    if (width <= 0 or height <= 0) return;
+    self._filled_rect = .{
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = height,
+        .rgba = self._fill_style,
+    };
+}
 pub fn strokeRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn beginPath(_: *OffscreenCanvasRenderingContext2D) void {}
+pub fn beginPath(self: *OffscreenCanvasRenderingContext2D) void {
+    self._path.begin();
+}
 pub fn closePath(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn moveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn lineTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -108,12 +158,42 @@ pub fn quadraticCurveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _
 pub fn bezierCurveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn arc(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
 pub fn arcTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn rect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+pub fn rect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._path.rect(x, y, width, height);
+}
 pub fn fill(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn stroke(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn fillText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 pub fn strokeText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
+pub fn isPointInPath(self: *const OffscreenCanvasRenderingContext2D, x: f64, y: f64, maybe_fill_rule: ?[]const u8) bool {
+    return self._path.isPointInPath(x, y, maybe_fill_rule);
+}
+pub fn isPointInStroke(_: *const OffscreenCanvasRenderingContext2D, _: f64, _: f64) bool {
+    return false;
+}
+
+pub fn resetBitmap(self: *OffscreenCanvasRenderingContext2D) void {
+    self._filled_rect = null;
+    self._path.begin();
+}
+
+pub fn pngRawPixels(
+    self: *const OffscreenCanvasRenderingContext2D,
+    allocator: std.mem.Allocator,
+    seed: u64,
+    width: u32,
+    height: u32,
+    raw_len: usize,
+) ![]const u8 {
+    return CanvasBitmap.rawPixelsForFilledRect(allocator, seed, width, height, raw_len, self._filled_rect);
+}
+
+fn canvasSeed(exec: *Execution) u64 {
+    const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
+    if (!authority.profile.canvas.enabled) return 0;
+    return Seeds.surfaceSeed(&authority.profile, .canvas);
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(OffscreenCanvasRenderingContext2D);
@@ -125,6 +205,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const canvas = bridge.accessor(OffscreenCanvasRenderingContext2D.getCanvas, null, .{});
     pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
@@ -149,10 +230,10 @@ pub const JsApi = struct {
     pub const transform = bridge.function(OffscreenCanvasRenderingContext2D.transform, .{ .noop = true });
     pub const setTransform = bridge.function(OffscreenCanvasRenderingContext2D.setTransform, .{ .noop = true });
     pub const resetTransform = bridge.function(OffscreenCanvasRenderingContext2D.resetTransform, .{ .noop = true });
-    pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{ .noop = true });
-    pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{ .noop = true });
+    pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{});
+    pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{});
     pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{ .noop = true });
-    pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{ .noop = true });
+    pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{});
     pub const closePath = bridge.function(OffscreenCanvasRenderingContext2D.closePath, .{ .noop = true });
     pub const moveTo = bridge.function(OffscreenCanvasRenderingContext2D.moveTo, .{ .noop = true });
     pub const lineTo = bridge.function(OffscreenCanvasRenderingContext2D.lineTo, .{ .noop = true });
@@ -160,10 +241,12 @@ pub const JsApi = struct {
     pub const bezierCurveTo = bridge.function(OffscreenCanvasRenderingContext2D.bezierCurveTo, .{ .noop = true });
     pub const arc = bridge.function(OffscreenCanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(OffscreenCanvasRenderingContext2D.arcTo, .{ .noop = true });
-    pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{ .noop = true });
+    pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{});
     pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{ .noop = true });
     pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{ .noop = true });
     pub const clip = bridge.function(OffscreenCanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{ .noop = true });
     pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{ .noop = true });
+    pub const isPointInPath = bridge.function(OffscreenCanvasRenderingContext2D.isPointInPath, .{});
+    pub const isPointInStroke = bridge.function(OffscreenCanvasRenderingContext2D.isPointInStroke, .{});
 };

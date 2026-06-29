@@ -20,9 +20,12 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const Blob = @import("../Blob.zig");
+const CanvasBitmap = @import("CanvasBitmap.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
+const Seeds = @import("../../../chimera/Seeds.zig");
 
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 
 /// https://developer.mozilla.org/en-US/docs/Web/API/OffscreenCanvas
 const OffscreenCanvas = @This();
@@ -31,6 +34,7 @@ pub const _prototype_root = true;
 
 _width: u32,
 _height: u32,
+_cached: ?DrawingContext = null,
 
 /// Since there's no base class rendering contexts inherit from,
 /// we're using tagged union.
@@ -42,6 +46,7 @@ pub fn constructor(width: u32, height: u32, exec: *Execution) !*OffscreenCanvas 
     return exec._factory.create(OffscreenCanvas{
         ._width = width,
         ._height = height,
+        ._cached = null,
     });
 }
 
@@ -51,6 +56,7 @@ pub fn getWidth(self: *const OffscreenCanvas) u32 {
 
 pub fn setWidth(self: *OffscreenCanvas, value: u32) void {
     self._width = value;
+    self.resetBitmap();
 }
 
 pub fn getHeight(self: *const OffscreenCanvas) u32 {
@@ -59,21 +65,33 @@ pub fn getHeight(self: *const OffscreenCanvas) u32 {
 
 pub fn setHeight(self: *OffscreenCanvas, value: u32) void {
     self._height = value;
+    self.resetBitmap();
 }
 
-pub fn getContext(_: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
+pub fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execution) !?DrawingContext {
+    if (self._cached) |cached| {
+        const matches = switch (cached) {
+            .@"2d" => std.mem.eql(u8, context_type, "2d"),
+        };
+        return if (matches) cached else null;
+    }
+
     if (std.mem.eql(u8, context_type, "2d")) {
-        const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{});
-        return .{ .@"2d" = ctx };
+        const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{ ._canvas = self });
+        const drawing_context: DrawingContext = .{ .@"2d" = ctx };
+        self._cached = drawing_context;
+        return drawing_context;
     }
 
     return null;
 }
 
-/// Returns a Promise that resolves to a Blob containing the image.
-/// Since we have no actual rendering, this returns an empty blob.
-pub fn convertToBlob(_: *OffscreenCanvas, exec: *Execution) !js.Promise {
-    const blob = try Blob.init(null, null, exec.page);
+pub fn convertToBlob(self: *const OffscreenCanvas, exec: *Execution) !js.Promise {
+    const maybe_png = try self.canvasPngBytes(exec.call_arena, exec);
+    const blob = if (maybe_png) |png|
+        try Blob.initFromBytes(png, "image/png", exec.page)
+    else
+        try Blob.init(null, null, exec.page);
     return exec.js.local.?.resolvePromise(blob);
 }
 
@@ -81,6 +99,42 @@ pub fn convertToBlob(_: *OffscreenCanvas, exec: *Execution) !js.Promise {
 pub fn transferToImageBitmap(_: *OffscreenCanvas) ?void {
     // ImageBitmap not implemented yet, return null
     return null;
+}
+
+fn resetBitmap(self: *OffscreenCanvas) void {
+    if (self._cached) |cached| {
+        switch (cached) {
+            .@"2d" => |ctx| ctx.resetBitmap(),
+        }
+    }
+}
+
+fn canvasPngBytes(self: *const OffscreenCanvas, allocator: Allocator, exec: *Execution) !?[]const u8 {
+    const seed = canvasSeed(exec);
+    const width = self.getWidth();
+    const height = self.getHeight();
+    if (width == 0 or height == 0) return null;
+
+    const raw_len = CanvasBitmap.rawLen(width, height) orelse return null;
+    if (raw_len > CanvasBitmap.max_png_raw_bytes) return null;
+    const raw = try self.canvasRawPixels(allocator, seed, width, height, raw_len);
+    return try CanvasBitmap.png(allocator, width, height, raw);
+}
+
+fn canvasRawPixels(self: *const OffscreenCanvas, allocator: Allocator, seed: u64, width: u32, height: u32, raw_len: usize) ![]const u8 {
+    if (self._cached) |cached| {
+        switch (cached) {
+            .@"2d" => |ctx| return ctx.pngRawPixels(allocator, seed, width, height, raw_len),
+        }
+    }
+
+    return CanvasBitmap.transparentRawPixels(allocator, width, height, raw_len);
+}
+
+fn canvasSeed(exec: *Execution) u64 {
+    const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
+    if (!authority.profile.canvas.enabled) return 0;
+    return Seeds.surfaceSeed(&authority.profile, .canvas);
 }
 
 pub const JsApi = struct {

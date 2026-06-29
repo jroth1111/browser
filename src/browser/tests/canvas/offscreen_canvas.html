@@ -38,16 +38,27 @@
 }
 </script>
 
-<script id=OffscreenCanvas#convertToBlob>
+<script id=OffscreenCanvas#convertToBlob type=module>
 {
+  const state = await testing.async();
   const canvas = new OffscreenCanvas(64, 64);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#00ff00";
+  ctx.fillRect(0, 0, 64, 64);
   const promise = canvas.convertToBlob();
   testing.expectEqual(true, promise instanceof Promise);
-  // The promise should resolve to a Blob (even if empty)
-  promise.then(blob => {
+  promise.then(async (blob) => {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
     testing.expectEqual(true, blob instanceof Blob);
-    testing.expectEqual(blob.size, 0); // Empty since no rendering
+    testing.expectEqual("image/png", blob.type);
+    testing.expectEqual(true, blob.size > 0);
+    testing.expectEqual(0x89, bytes[0]);
+    testing.expectEqual(0x50, bytes[1]);
+    testing.expectEqual(0x4e, bytes[2]);
+    testing.expectEqual(0x47, bytes[3]);
+    state.resolve();
   });
+  await state.done(() => testing.expectEqual(true, true));
 }
 </script>
 
@@ -80,8 +91,30 @@
   testing.expectEqual(imageData.data[2], 0);
   testing.expectEqual(imageData.data[3], 0);
 
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(0, 0, 10, 20);
+  const filled = ctx.getImageData(0, 0, 1, 1);
+  testing.expectEqual(true, filled.data[0] >= 200);
+  testing.expectEqual(true, filled.data[1] <= 30);
+  testing.expectEqual(true, filled.data[2] <= 30);
+  testing.expectEqual(true, filled.data[3] >= 200);
+
   // Zero or negative dimensions should throw.
   testing.expectError('Index or size', () => ctx.getImageData(0, 0, 0, 10));
   testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, -5));
+}
+</script>
+
+<script id=OffscreenCanvasRenderingContext2D#isPointInPath>
+{
+  const canvas = new OffscreenCanvas(100, 50);
+  const ctx = canvas.getContext("2d");
+  ctx.rect(0, 0, 10, 10);
+  ctx.rect(2, 2, 6, 6);
+
+  testing.expectEqual(true, ctx.isPointInPath(5, 5));
+  testing.expectEqual(false, ctx.isPointInPath(5, 5, "evenodd"));
+  testing.expectEqual(true, ctx.isPointInPath(1, 1, "evenodd"));
+  testing.expectEqual(false, ctx.isPointInStroke(5, 5));
 }
 </script>

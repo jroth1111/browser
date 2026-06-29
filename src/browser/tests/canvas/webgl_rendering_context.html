@@ -70,8 +70,8 @@
   testing.expectEqual(UNMASKED_VENDOR_WEBGL, 0x9245);
   testing.expectEqual(UNMASKED_RENDERER_WEBGL, 0x9246);
 
-  testing.expectEqual("", ctx.getParameter(UNMASKED_VENDOR_WEBGL));
-  testing.expectEqual("", ctx.getParameter(UNMASKED_RENDERER_WEBGL));
+  testing.expectEqual("Google Inc. (Apple)", ctx.getParameter(UNMASKED_VENDOR_WEBGL));
+  testing.expectEqual("ANGLE (Apple, ANGLE Metal Renderer: Apple M-series, Unspecified Version)", ctx.getParameter(UNMASKED_RENDERER_WEBGL));
 }
 
 // WEBGL_lose_context
@@ -83,6 +83,51 @@
 
   loseContext.loseContext();
   loseContext.restoreContext();
+}
+</script>
+
+<script id=WebGLRenderingContext#getParameter>
+{
+  const element = document.createElement("canvas");
+  element.setAttribute("width", "640");
+  element.setAttribute("height", "360");
+  const ctx = element.getContext("webgl");
+
+  testing.expectEqual("WebKit", ctx.getParameter(ctx.VENDOR));
+  testing.expectEqual("WebKit WebGL", ctx.getParameter(ctx.RENDERER));
+  testing.expectEqual("WebGL 1.0 (OpenGL ES 2.0 Chromium)", ctx.getParameter(ctx.VERSION));
+  testing.expectEqual("WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)", ctx.getParameter(ctx.SHADING_LANGUAGE_VERSION));
+  testing.expectEqual(16384, ctx.getParameter(ctx.MAX_TEXTURE_SIZE));
+  testing.expectEqual(16, ctx.getParameter(ctx.MAX_VERTEX_ATTRIBS));
+  testing.expectEqual(true, ctx.getParameter(ctx.DEPTH_WRITEMASK));
+  testing.expectEqual(false, ctx.getParameter(ctx.BLEND));
+
+  const viewport = ctx.getParameter(ctx.VIEWPORT);
+  testing.expectEqual(true, viewport instanceof Int32Array);
+  testing.expectEqual(4, viewport.length);
+  testing.expectEqual(640, viewport[2]);
+  testing.expectEqual(360, viewport[3]);
+
+  const lineWidth = ctx.getParameter(ctx.ALIASED_LINE_WIDTH_RANGE);
+  testing.expectEqual(true, lineWidth instanceof Float32Array);
+  testing.expectEqual(2, lineWidth.length);
+}
+</script>
+
+<script id=WebGLRenderingContext#objects>
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("experimental-webgl");
+
+  testing.expectEqual(true, ctx instanceof WebGLRenderingContext);
+  testing.expectEqual(true, ctx.createBuffer() instanceof WebGLBuffer);
+  testing.expectEqual(true, ctx.createFramebuffer() instanceof WebGLFramebuffer);
+  testing.expectEqual(true, ctx.createProgram() instanceof WebGLProgram);
+  testing.expectEqual(true, ctx.createRenderbuffer() instanceof WebGLRenderbuffer);
+  testing.expectEqual(true, ctx.createShader(ctx.FRAGMENT_SHADER) instanceof WebGLShader);
+  testing.expectEqual(true, ctx.createTexture() instanceof WebGLTexture);
+  testing.expectEqual(true, ctx.getShaderPrecisionFormat(ctx.FRAGMENT_SHADER, ctx.HIGH_FLOAT) instanceof WebGLShaderPrecisionFormat);
+  testing.expectEqual(0, ctx.getAttribLocation(ctx.createProgram(), "position"));
 }
 </script>
 

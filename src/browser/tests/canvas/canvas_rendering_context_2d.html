@@ -143,6 +143,43 @@
 }
 </script>
 
+<script id="HTMLCanvasElement#toBlob" type=module>
+{
+  const state = await testing.async();
+  const element = document.createElement("canvas");
+  element.width = 16;
+  element.height = 16;
+  const ctx = element.getContext("2d");
+  ctx.fillStyle = "#00ff00";
+  ctx.fillRect(0, 0, 16, 16);
+
+  let callbackSync = true;
+  element.toBlob(async (blob) => {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    state.resolve({
+      callbackAsync: callbackSync === false,
+      isBlob: blob instanceof Blob,
+      type: blob.type,
+      size: blob.size,
+      pngSignature: bytes.length >= 8 &&
+        bytes[0] === 0x89 &&
+        bytes[1] === 0x50 &&
+        bytes[2] === 0x4e &&
+        bytes[3] === 0x47,
+    });
+  }, "image/png");
+  callbackSync = false;
+
+  await state.done((result) => {
+    testing.expectEqual(true, result.callbackAsync);
+    testing.expectEqual(true, result.isBlob);
+    testing.expectEqual("image/png", result.type);
+    testing.expectTrue(result.size > 0);
+    testing.expectEqual(true, result.pngSignature);
+  });
+}
+</script>
+
 <script id="CanvasRenderingContext2D#getImageData invalid">
 {
   const element = document.createElement("canvas");
@@ -201,5 +238,25 @@
   ctx.drawImage(img, 0, 0);
   ctx.drawImage(src, 0, 0, 10, 10);
   testing.expectEqual(undefined, ctx.drawImage(src, 0, 0, 10, 10, 0, 0, 10, 10));
+}
+</script>
+
+<script id="CanvasRenderingContext2D#isPointInPath">
+{
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.rect(0, 0, 10, 10);
+  ctx.rect(2, 2, 6, 6);
+
+  testing.expectEqual(true, ctx.isPointInPath(5, 5));
+  testing.expectEqual(false, ctx.isPointInPath(5, 5, "evenodd"));
+  testing.expectEqual(true, ctx.isPointInPath(1, 1, "evenodd"));
+  testing.expectEqual(false, ctx.isPointInPath(20, 20));
+  testing.expectEqual(false, ctx.isPointInStroke(5, 5));
+
+  ctx.beginPath();
+  testing.expectEqual(false, ctx.isPointInPath(5, 5));
+
+  ctx.rect(10, 10, -10, -10);
+  testing.expectEqual(true, ctx.isPointInPath(5, 5));
 }
 </script>

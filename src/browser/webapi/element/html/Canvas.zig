@@ -23,13 +23,15 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
+const Blob = @import("../../Blob.zig");
+const CanvasBitmap = @import("../../canvas/CanvasBitmap.zig");
 const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
 const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
 const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
 const Seeds = @import("../../../../chimera/Seeds.zig");
 
 const Execution = js.Execution;
-const max_canvas_png_raw_bytes = 4 * 1024 * 1024;
+const Allocator = std.mem.Allocator;
 
 const Canvas = @This();
 _proto: *HtmlElement,
@@ -87,17 +89,13 @@ pub fn getContext(self: *Canvas, context_type: []const u8, frame: *Frame) !?Draw
             break :blk .{ .@"2d" = ctx };
         }
 
-        // We only stub a tiny slice of the WebGL API (getParameter,
-        // getExtension, getSupportedExtensions). Real WebGL consumers like
-        // Three.js immediately call createTexture/createBuffer/etc. and
-        // throw `TypeError: e.createTexture is not a function`. Pretending
-        // WebGL works until the first non-stubbed call is the worst of both
-        // worlds: pages that have an error boundary above the WebGL widget
-        // catch the throw, reset, re-render, and loop forever.
-        // Spec-correct signal for "no WebGL" is null, so apps that check
-        // (Three.js does) can degrade gracefully.
         if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
-            return null;
+            const width = self.getWidth();
+            const height = self.getHeight();
+            const authority = frame._session.browser.http_client.network.config.chimeraAuthority();
+            const profile = if (authority) |loaded| &loaded.profile else null;
+            const ctx = try frame._factory.create(WebGLRenderingContext.initFromProfile(width, height, profile));
+            break :blk .{ .webgl = ctx };
         }
         return null;
     };
@@ -116,15 +114,7 @@ pub fn transferControlToOffscreen(self: *Canvas, exec: *Execution) !*OffscreenCa
 pub fn toDataURL(self: *const Canvas, maybe_type: ?[]const u8, frame: *Frame) ![]const u8 {
     _ = maybe_type;
 
-    const seed = canvasSeed(frame);
-    const width = self.getWidth();
-    const height = self.getHeight();
-    if (width == 0 or height == 0) return "data:,";
-
-    const raw_len = canvasRawLen(width, height) orelse return "data:,";
-    if (raw_len > max_canvas_png_raw_bytes) return "data:,";
-    const raw = try self.canvasRawPixels(frame.call_arena, seed, width, height, raw_len);
-    const png = try canvasPng(frame.call_arena, width, height, raw);
+    const png = (try self.canvasPngBytes(frame.call_arena, frame)) orelse return "data:,";
 
     const encoder = std.base64.standard.Encoder;
     const prefix = "data:image/png;base64,";
@@ -135,17 +125,90 @@ pub fn toDataURL(self: *const Canvas, maybe_type: ?[]const u8, frame: *Frame) ![
     return out;
 }
 
+pub fn toBlob(
+    self: *const Canvas,
+    maybe_callback: ?js.Function.Temp,
+    maybe_type: ?[]const u8,
+    quality: ?f64,
+    frame: *Frame,
+) !void {
+    _ = maybe_type;
+    _ = quality;
+
+    const callback = maybe_callback orelse return;
+    errdefer callback.release();
+
+    const arena = try frame.getArena(.tiny, "Canvas.toBlob");
+    errdefer frame.releaseArena(arena);
+
+    const task = try arena.create(ToBlobCallback);
+    task.* = .{
+        .canvas = self,
+        .callback = callback,
+        .frame = frame,
+        .arena = arena,
+    };
+
+    try frame.js.scheduler.add(task, ToBlobCallback.run, 0, .{
+        .name = "Canvas.toBlob",
+        .low_priority = false,
+        .finalizer = ToBlobCallback.cancelled,
+    });
+}
+
+const ToBlobCallback = struct {
+    canvas: *const Canvas,
+    callback: js.Function.Temp,
+    frame: *Frame,
+    arena: Allocator,
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *ToBlobCallback = @ptrCast(@alignCast(ctx));
+        self.deinit();
+    }
+
+    fn deinit(self: *ToBlobCallback) void {
+        self.callback.release();
+        self.frame.releaseArena(self.arena);
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *ToBlobCallback = @ptrCast(@alignCast(ctx));
+        defer self.deinit();
+
+        const frame = self.frame;
+        const maybe_png = try self.canvas.canvasPngBytes(frame.call_arena, frame);
+        const blob = if (maybe_png) |png|
+            try Blob.initFromBytes(png, "image/png", frame._page)
+        else
+            null;
+
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        try ls.toLocal(self.callback).call(void, .{blob});
+        ls.local.runMicrotasks();
+        return null;
+    }
+};
+
+fn canvasPngBytes(self: *const Canvas, allocator: Allocator, frame: *Frame) !?[]const u8 {
+    const seed = canvasSeed(frame);
+    const width = self.getWidth();
+    const height = self.getHeight();
+    if (width == 0 or height == 0) return null;
+
+    const raw_len = CanvasBitmap.rawLen(width, height) orelse return null;
+    if (raw_len > CanvasBitmap.max_png_raw_bytes) return null;
+    const raw = try self.canvasRawPixels(allocator, seed, width, height, raw_len);
+    return try CanvasBitmap.png(allocator, width, height, raw);
+}
+
 fn canvasSeed(frame: *Frame) u64 {
     const authority = frame._session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
     if (!authority.profile.canvas.enabled) return 0;
     return Seeds.surfaceSeed(&authority.profile, .canvas);
-}
-
-fn canvasRawLen(width: u32, height: u32) ?usize {
-    const row_len = std.math.mul(u64, width, 4) catch return null;
-    const raw_len = std.math.mul(u64, row_len + 1, height) catch return null;
-    if (raw_len > std.math.maxInt(usize)) return null;
-    return @intCast(raw_len);
 }
 
 fn canvasRawPixels(self: *const Canvas, allocator: std.mem.Allocator, seed: u64, width: u32, height: u32, raw_len: usize) ![]const u8 {
@@ -156,103 +219,7 @@ fn canvasRawPixels(self: *const Canvas, allocator: std.mem.Allocator, seed: u64,
         }
     }
 
-    const out = try allocator.alloc(u8, raw_len);
-    var pos: usize = 0;
-    for (0..height) |_| {
-        out[pos] = 0;
-        pos += 1;
-        for (0..width) |_| {
-            out[pos + 0] = 0;
-            out[pos + 1] = 0;
-            out[pos + 2] = 0;
-            out[pos + 3] = 0;
-            pos += 4;
-        }
-    }
-    return out;
-}
-
-fn canvasPng(allocator: std.mem.Allocator, width: u32, height: u32, raw: []const u8) ![]const u8 {
-    var ihdr: [13]u8 = undefined;
-    std.mem.writeInt(u32, ihdr[0..4], width, .big);
-    std.mem.writeInt(u32, ihdr[4..8], height, .big);
-    ihdr[8] = 8;
-    ihdr[9] = 6;
-    ihdr[10] = 0;
-    ihdr[11] = 0;
-    ihdr[12] = 0;
-
-    const idat = try zlibStore(allocator, raw);
-    const png_len = png_signature.len + pngChunkLen(ihdr.len) + pngChunkLen(idat.len) + pngChunkLen(0);
-    const out = try allocator.alloc(u8, png_len);
-    var pos: usize = 0;
-    @memcpy(out[pos..][0..png_signature.len], &png_signature);
-    pos += png_signature.len;
-    appendPngChunk(out, &pos, "IHDR", &ihdr);
-    appendPngChunk(out, &pos, "IDAT", idat);
-    appendPngChunk(out, &pos, "IEND", "");
-    return out;
-}
-
-const png_signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
-
-fn pngChunkLen(payload_len: usize) usize {
-    return 12 + payload_len;
-}
-
-fn appendPngChunk(out: []u8, pos: *usize, tag: []const u8, payload: []const u8) void {
-    std.debug.assert(tag.len == 4);
-    std.mem.writeInt(u32, out[pos.*..][0..4], @intCast(payload.len), .big);
-    pos.* += 4;
-    @memcpy(out[pos.*..][0..4], tag);
-    pos.* += 4;
-    @memcpy(out[pos.*..][0..payload.len], payload);
-    pos.* += payload.len;
-    std.mem.writeInt(u32, out[pos.*..][0..4], pngCrc(tag, payload), .big);
-    pos.* += 4;
-}
-
-fn pngCrc(tag: []const u8, payload: []const u8) u32 {
-    var crc = std.hash.Crc32.init();
-    crc.update(tag);
-    crc.update(payload);
-    return crc.final();
-}
-
-fn zlibStore(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
-    const block_count = (raw.len + 65534) / 65535;
-    const out = try allocator.alloc(u8, 2 + raw.len + block_count * 5 + 4);
-    var pos: usize = 0;
-    out[pos] = 0x78;
-    out[pos + 1] = 0x01;
-    pos += 2;
-
-    var raw_pos: usize = 0;
-    while (raw_pos < raw.len) {
-        const block_len = @min(raw.len - raw_pos, 65535);
-        const final_block = raw_pos + block_len == raw.len;
-        out[pos] = if (final_block) 1 else 0;
-        pos += 1;
-        std.mem.writeInt(u16, out[pos..][0..2], @intCast(block_len), .little);
-        pos += 2;
-        std.mem.writeInt(u16, out[pos..][0..2], ~@as(u16, @intCast(block_len)), .little);
-        pos += 2;
-        @memcpy(out[pos..][0..block_len], raw[raw_pos..][0..block_len]);
-        pos += block_len;
-        raw_pos += block_len;
-    }
-    std.mem.writeInt(u32, out[pos..][0..4], adler32(raw), .big);
-    return out;
-}
-
-fn adler32(bytes: []const u8) u32 {
-    var a: u32 = 1;
-    var b: u32 = 0;
-    for (bytes) |byte| {
-        a = (a + byte) % 65521;
-        b = (b + a) % 65521;
-    }
-    return (b << 16) | a;
+    return CanvasBitmap.transparentRawPixels(allocator, width, height, raw_len);
 }
 
 pub const JsApi = struct {
@@ -269,4 +236,5 @@ pub const JsApi = struct {
     pub const getContext = bridge.function(Canvas.getContext, .{});
     pub const transferControlToOffscreen = bridge.function(Canvas.transferControlToOffscreen, .{});
     pub const toDataURL = bridge.function(Canvas.toDataURL, .{});
+    pub const toBlob = bridge.function(Canvas.toBlob, .{});
 };
