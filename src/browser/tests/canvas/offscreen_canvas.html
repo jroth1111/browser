@@ -127,6 +127,13 @@
   testing.expectEqual(true, metrics instanceof TextMetrics);
   testing.expectEqual(true, metrics.width > 0);
   testing.expectEqual(true, metrics.actualBoundingBoxRight > 0);
+  testing.expectEqual("10px sans-serif", ctx.font);
+  ctx.font = "bold 48px serif";
+  const largeMetrics = ctx.measureText("Chimera");
+  testing.expectEqual("bold 48px serif", ctx.font);
+  testing.expectEqual(true, largeMetrics.width > metrics.width);
+  testing.expectEqual(true, largeMetrics.actualBoundingBoxAscent > metrics.actualBoundingBoxAscent);
+  ctx.font = "16px Arial";
 
   const before = ctx.getImageData(2, 12, 1, 1).data;
   testing.expectEqual(0, before[3]);
@@ -134,5 +141,12 @@
   ctx.fillText("Chimera", 2, 22);
   const after = ctx.getImageData(2, 12, 1, 1).data;
   testing.expectEqual(true, after[3] > 0);
+
+  ctx.clearRect(0, 0, 96, 32);
+  ctx.fillText("Chimera", 2, 22, 6);
+  const insideLimitedWidth = ctx.getImageData(5, 12, 1, 1).data;
+  const outsideLimitedWidth = ctx.getImageData(12, 12, 1, 1).data;
+  testing.expectEqual(true, insideLimitedWidth[3] > 0);
+  testing.expectEqual(0, outsideLimitedWidth[3]);
 }
 </script>

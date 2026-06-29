@@ -5,6 +5,7 @@ const Seeds = @import("../../../chimera/Seeds.zig");
 
 pub const max_png_raw_bytes = 4 * 1024 * 1024;
 pub const png_signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
+pub const default_font = "10px sans-serif";
 
 pub const FilledRect = struct {
     x: f64,
@@ -23,26 +24,47 @@ pub const FilledRect = struct {
     }
 };
 
-pub fn textWidth(text: []const u8) f64 {
+pub fn fontPixelSize(font: []const u8) f64 {
+    var i: usize = 0;
+    while (i + 1 < font.len) : (i += 1) {
+        if (font[i] != 'p' or font[i + 1] != 'x') continue;
+        var start = i;
+        while (start > 0) {
+            const ch = font[start - 1];
+            if (!((ch >= '0' and ch <= '9') or ch == '.')) break;
+            start -= 1;
+        }
+        if (start == i) continue;
+        const parsed = std.fmt.parseFloat(f64, font[start..i]) catch continue;
+        if (finite(parsed) and parsed > 0) return parsed;
+    }
+    return 10.0;
+}
+
+pub fn textWidth(text: []const u8, font: []const u8) f64 {
+    const font_size = fontPixelSize(font);
     var width: f64 = 0;
     for (text) |byte| {
-        width += switch (byte) {
-            ' ', '\t', '\n', '\r' => 4.0,
-            else => 7.0,
+        if ((byte & 0xC0) == 0x80) continue;
+        const advance = switch (byte) {
+            ' ', '\t', '\n', '\r' => 0.25,
+            0x00...0x7f => 0.48,
+            else => 0.8,
         };
+        width += font_size * advance;
     }
     return width;
 }
 
-pub fn textFilledRect(text: []const u8, x: f64, y: f64, max_width: ?f64, rgba: color.RGBA) ?FilledRect {
+pub fn textFilledRect(text: []const u8, x: f64, y: f64, max_width: ?f64, rgba: color.RGBA, font: []const u8) ?FilledRect {
     if (text.len == 0 or !finite(x) or !finite(y)) return null;
-    var width = textWidth(text);
+    var width = textWidth(text, font);
     if (max_width) |limit| {
         if (!finite(limit) or limit <= 0) return null;
         width = @min(width, limit);
     }
     if (width <= 0) return null;
-    const height = 12.0;
+    const height = @max(1.0, fontPixelSize(font) * 0.75);
     return .{
         .x = x,
         .y = y - height,
@@ -213,4 +235,26 @@ fn adler32(bytes: []const u8) u32 {
         b = (b + a) % 65521;
     }
     return (b << 16) | a;
+}
+
+const testing = std.testing;
+
+test "CanvasBitmap text metrics follow pixel font size" {
+    const small = textWidth("Chimera", default_font);
+    const large = textWidth("Chimera", "bold 48px serif");
+
+    try testing.expect(small > 0);
+    try testing.expect(large > small);
+    try testing.expectEqual(@as(f64, 48.0), fontPixelSize("bold 48px serif"));
+    try testing.expectEqual(@as(f64, 10.0), fontPixelSize("bold 1.2em serif"));
+}
+
+test "CanvasBitmap text filled rect respects max width" {
+    const rect = textFilledRect("Chimera", 2, 22, 6, color.RGBA.Named.black, "16px Arial").?;
+
+    try testing.expectEqual(@as(f64, 2.0), rect.x);
+    try testing.expectEqual(@as(f64, 6.0), rect.width);
+    try testing.expect(rect.height > 1);
+    try testing.expect(rect.contains(5, 12));
+    try testing.expect(!rect.contains(12, 12));
 }

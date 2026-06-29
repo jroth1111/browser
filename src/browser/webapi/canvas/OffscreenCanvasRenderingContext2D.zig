@@ -38,6 +38,7 @@ _canvas: *OffscreenCanvas,
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
+_font: []const u8 = CanvasBitmap.default_font,
 _filled_rect: ?CanvasBitmap.FilledRect = null,
 _path: CanvasPath = .{},
 
@@ -57,6 +58,15 @@ pub fn setFillStyle(
 ) !void {
     // Prefer the same fill_style if fails.
     self._fill_style = color.RGBA.parse(value) catch self._fill_style;
+}
+
+pub fn getFont(self: *const OffscreenCanvasRenderingContext2D) []const u8 {
+    return self._font;
+}
+
+pub fn setFont(self: *OffscreenCanvasRenderingContext2D, value: []const u8, exec: *const Execution) !void {
+    if (value.len == 0) return;
+    self._font = try exec.dupeString(value);
 }
 
 const WidthOrImageData = union(enum) {
@@ -166,13 +176,14 @@ pub fn fill(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn stroke(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn fillText(self: *OffscreenCanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
-    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style);
+    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font);
 }
 pub fn strokeText(self: *OffscreenCanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
-    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style);
+    self._filled_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font);
 }
-pub fn measureText(_: *const OffscreenCanvasRenderingContext2D, text: []const u8, exec: *Execution) !*TextMetrics {
-    return exec._factory.create(TextMetrics.init(CanvasBitmap.textWidth(text)));
+pub fn measureText(self: *const OffscreenCanvasRenderingContext2D, text: []const u8, exec: *Execution) !*TextMetrics {
+    const font_size = CanvasBitmap.fontPixelSize(self._font);
+    return exec._factory.create(TextMetrics.init(CanvasBitmap.textWidth(text, self._font), font_size));
 }
 pub fn isPointInPath(self: *const OffscreenCanvasRenderingContext2D, x: f64, y: f64, maybe_fill_rule: ?[]const u8) bool {
     return self._path.isPointInPath(x, y, maybe_fill_rule);
@@ -214,7 +225,7 @@ pub const JsApi = struct {
     };
 
     pub const canvas = bridge.accessor(OffscreenCanvasRenderingContext2D.getCanvas, null, .{});
-    pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
+    pub const font = bridge.accessor(OffscreenCanvasRenderingContext2D.getFont, OffscreenCanvasRenderingContext2D.setFont, .{});
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
     pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });

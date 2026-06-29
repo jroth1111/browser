@@ -13,10 +13,18 @@ _em_height_ascent: f64 = 10,
 _em_height_descent: f64 = 2,
 _alphabetic_baseline: f64 = 0,
 
-pub fn init(width: f64) TextMetrics {
+pub fn init(width: f64, font_size: f64) TextMetrics {
+    const ascent = font_size * 0.75;
+    const descent = font_size * 0.25;
     return .{
         ._width = width,
         ._actual_bounding_box_right = width,
+        ._font_bounding_box_ascent = ascent,
+        ._font_bounding_box_descent = descent,
+        ._actual_bounding_box_ascent = ascent,
+        ._actual_bounding_box_descent = descent,
+        ._em_height_ascent = ascent,
+        ._em_height_descent = descent,
     };
 }
 
