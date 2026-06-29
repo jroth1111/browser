@@ -191,8 +191,8 @@ pub fn translate(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn clearRect(self: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
-    self._paint_stack.clear();
+pub fn clearRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._paint_stack.appendClearRect(x, y, width, height);
 }
 
 pub fn fillRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {

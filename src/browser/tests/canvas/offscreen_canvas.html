@@ -99,6 +99,18 @@
   testing.expectEqual(true, filled.data[2] <= 30);
   testing.expectEqual(true, filled.data[3] >= 200);
 
+  ctx.clearRect(4, 4, 2, 2);
+  const cleared = ctx.getImageData(4, 4, 1, 1).data;
+  const retained = ctx.getImageData(0, 0, 1, 1).data;
+  testing.expectEqual(0, cleared[0]);
+  testing.expectEqual(0, cleared[1]);
+  testing.expectEqual(0, cleared[2]);
+  testing.expectEqual(0, cleared[3]);
+  testing.expectEqual(true, retained[0] >= 200);
+  testing.expectEqual(true, retained[1] <= 30);
+  testing.expectEqual(true, retained[2] <= 30);
+  testing.expectEqual(true, retained[3] >= 200);
+
   // Zero or negative dimensions should throw.
   testing.expectError('Index or size', () => ctx.getImageData(0, 0, 0, 10));
   testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, -5));

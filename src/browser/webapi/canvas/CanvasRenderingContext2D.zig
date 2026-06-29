@@ -197,8 +197,8 @@ pub fn translate(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *CanvasRenderingContext2D) void {}
-pub fn clearRect(self: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
-    self._paint_stack.clear();
+pub fn clearRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._paint_stack.appendClearRect(x, y, width, height);
 }
 
 pub fn fillRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {

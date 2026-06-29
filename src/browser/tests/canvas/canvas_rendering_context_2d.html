@@ -176,6 +176,18 @@
   testing.expectEqual(0, outside[2]);
   testing.expectEqual(0, outside[3]);
 
+  ctx.clearRect(4, 4, 4, 4);
+  const partiallyCleared = ctx.getImageData(5, 5, 1, 1).data;
+  const retained = ctx.getImageData(0, 0, 1, 1).data;
+  testing.expectEqual(0, partiallyCleared[0]);
+  testing.expectEqual(0, partiallyCleared[1]);
+  testing.expectEqual(0, partiallyCleared[2]);
+  testing.expectEqual(0, partiallyCleared[3]);
+  testing.expectEqual(255, retained[0]);
+  testing.expectEqual(0, retained[1]);
+  testing.expectEqual(0, retained[2]);
+  testing.expectEqual(255, retained[3]);
+
   ctx.clearRect(0, 0, 16, 16);
   const cleared = ctx.getImageData(0, 0, 1, 1).data;
   testing.expectEqual(0, cleared[0]);

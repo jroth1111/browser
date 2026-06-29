@@ -26,6 +26,37 @@ pub const FilledRect = struct {
     }
 };
 
+pub const ClearedRect = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+
+    pub fn init(x: f64, y: f64, width: f64, height: f64) ?ClearedRect {
+        if (!finite(x) or !finite(y) or !finite(width) or !finite(height)) return null;
+        if (width == 0 or height == 0) return null;
+        return .{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = height,
+        };
+    }
+
+    fn contains(self: ClearedRect, x: i64, y: i64) bool {
+        const xf = @as(f64, @floatFromInt(x)) + 0.5;
+        const yf = @as(f64, @floatFromInt(y)) + 0.5;
+        const left = @min(self.x, self.x + self.width);
+        const right = @max(self.x, self.x + self.width);
+        const top = @min(self.y, self.y + self.height);
+        const bottom = @max(self.y, self.y + self.height);
+        return xf >= left and
+            xf < right and
+            yf >= top and
+            yf < bottom;
+    }
+};
+
 pub const StrokedRect = struct {
     x: f64,
     y: f64,
@@ -97,6 +128,7 @@ pub const FilledPath = struct {
 
 pub const Paint = union(enum) {
     rect: FilledRect,
+    clear_rect: ClearedRect,
     stroke_rect: StrokedRect,
     path: FilledPath,
     image: ImagePatch,
@@ -104,6 +136,7 @@ pub const Paint = union(enum) {
     fn pixelAt(self: *const Paint, x: i64, y: i64) ?color.RGBA {
         return switch (self.*) {
             .rect => |rect| if (rect.contains(x, y)) rect.rgba else null,
+            .clear_rect => |rect| if (rect.contains(x, y)) color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 } else null,
             .stroke_rect => |rect| if (rect.contains(x, y)) rect.rgba else null,
             .path => |path| if (path.contains(x, y)) path.rgba else null,
             .image => |image| image.pixelAt(x, y),
@@ -144,6 +177,12 @@ pub const PaintStack = struct {
 
     pub fn appendRect(self: *PaintStack, rect: FilledRect) void {
         self.append(.{ .rect = rect });
+    }
+
+    pub fn appendClearRect(self: *PaintStack, x: f64, y: f64, width: f64, height: f64) void {
+        if (ClearedRect.init(x, y, width, height)) |rect| {
+            self.append(.{ .clear_rect = rect });
+        }
     }
 
     pub fn appendStrokeRect(self: *PaintStack, x: f64, y: f64, width: f64, height: f64, line_width: f64, rgba: color.RGBA) void {
@@ -638,6 +677,21 @@ test "CanvasBitmap stroke rect paints outline only" {
 
     stack.appendStrokeRect(0, 0, 10, 10, 0, blue);
     try testing.expectEqual(@as(usize, 1), stack.count);
+}
+
+test "CanvasBitmap clear rect overrides only covered pixels" {
+    var stack = PaintStack{};
+    const red = color.RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
+
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 10, .height = 10, .rgba = red });
+    stack.appendClearRect(4, 4, 2, 2);
+
+    try testing.expectEqual(red, paintStackPixelAt(&stack, 1, 1, 0));
+    try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&stack, 4, 4, 0));
+    try testing.expectEqual(red, paintStackPixelAt(&stack, 7, 7, 0));
+
+    stack.appendClearRect(0, 0, 10, 10);
+    try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&stack, 1, 1, 0));
 }
 
 test "CanvasBitmap image patch copies dirty pixels and rejects overflowing bounds" {
