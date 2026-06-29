@@ -288,8 +288,13 @@ fn G(comptime global_type: GlobalType) type {
         }
 
         pub fn release(self: *const Self) void {
-            if (self.temps.fetchRemove(self.handle.data_ptr)) |kv| {
-                var g = kv.value;
+            if (global_type == .temp) {
+                if (self.temps.fetchRemove(self.handle.data_ptr)) |kv| {
+                    var g = kv.value;
+                    v8.v8__Global__Reset(&g);
+                }
+            } else {
+                var g = self.handle;
                 v8.v8__Global__Reset(&g);
             }
         }

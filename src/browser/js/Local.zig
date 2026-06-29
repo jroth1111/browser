@@ -403,6 +403,15 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                     // have handled it
                     unreachable;
                 }
+                if (one_info == .array) {
+                    var js_arr = self.newArray(one_info.array.len);
+                    for (value.*, 0..) |v, i| {
+                        if (try js_arr.set(@intCast(i), v, opts) == false) {
+                            return error.FailedToCreateArray;
+                        }
+                    }
+                    return js_arr.toValue();
+                }
             },
             .slice => {
                 if (ptr.child == u8) {

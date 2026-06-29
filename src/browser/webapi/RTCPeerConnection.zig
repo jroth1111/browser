@@ -255,7 +255,6 @@ const RTCDataChannel = struct {
             pub const name = "RTCDataChannel";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
-            pub const empty_with_no_proto = true;
         };
 
         pub const label = bridge.accessor(RTCDataChannel.getLabel, null, .{});

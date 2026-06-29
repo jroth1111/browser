@@ -553,8 +553,9 @@ pub fn textWidth(text: []const u8, font: []const u8) f64 {
     var width: f64 = 0;
     for (text) |byte| {
         if ((byte & 0xC0) == 0x80) continue;
-        const advance = switch (byte) {
-            ' ', '\t', '\n', '\r' => 0.25,
+        const advance: f64 = if (byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r')
+            0.25
+        else switch (byte) {
             0x00...0x7f => 0.48,
             else => 0.8,
         };
