@@ -188,19 +188,21 @@ pub fn imagePatch(
     }
 
     if (source_width < 0) {
-        source_x += source_width;
+        if (source_width == std.math.minInt(i64)) return null;
+        source_x = checkedAddI64(source_x, source_width) orelse return null;
         source_width = -source_width;
     }
     if (source_height < 0) {
-        source_y += source_height;
+        if (source_height == std.math.minInt(i64)) return null;
+        source_y = checkedAddI64(source_y, source_height) orelse return null;
         source_height = -source_height;
     }
     if (source_width == 0 or source_height == 0) return null;
 
     const left = @max(source_x, 0);
     const top = @max(source_y, 0);
-    const right = @min(source_x + source_width, @as(i64, image_width));
-    const bottom = @min(source_y + source_height, @as(i64, image_height));
+    const right = @min(positiveEndI64(source_x, source_width), @as(i64, image_width));
+    const bottom = @min(positiveEndI64(source_y, source_height), @as(i64, image_height));
     if (right <= left or bottom <= top) return null;
 
     const patch_width: u32 = @intCast(right - left);
@@ -219,9 +221,12 @@ pub fn imagePatch(
         @memcpy(data[dst_pos..][0..patch_stride], pixels[src_pos..][0..patch_stride]);
     }
 
+    const patch_x = checkedAddI64(dest_x, left) orelse return null;
+    const patch_y = checkedAddI64(dest_y, top) orelse return null;
+
     return .{
-        .x = dest_x + left,
-        .y = dest_y + top,
+        .x = patch_x,
+        .y = patch_y,
         .width = patch_width,
         .height = patch_height,
         .data = data,
@@ -310,6 +315,15 @@ fn finiteInteger(value: f64) ?i64 {
     if (value < @as(f64, @floatFromInt(std.math.minInt(i64)))) return null;
     if (value > @as(f64, @floatFromInt(std.math.maxInt(i64)))) return null;
     return @intFromFloat(@trunc(value));
+}
+
+fn checkedAddI64(a: i64, b: i64) ?i64 {
+    return std.math.add(i64, a, b) catch null;
+}
+
+fn positiveEndI64(start: i64, len: i64) i64 {
+    std.debug.assert(len >= 0);
+    return std.math.add(i64, start, len) catch std.math.maxInt(i64);
 }
 
 fn hasFontFamily(font: []const u8, after_px: usize) bool {
@@ -548,4 +562,28 @@ test "CanvasBitmap text filled rect respects max width" {
     try testing.expect(rect.height > 1);
     try testing.expect(rect.contains(5, 12));
     try testing.expect(!rect.contains(12, 12));
+}
+
+test "CanvasBitmap image patch copies dirty pixels and rejects overflowing bounds" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const pixels = [_]u8{
+        255, 0, 0,   255, 0,   255, 0,   255,
+        0,   0, 255, 255, 255, 255, 255, 255,
+    };
+    const patch = (try imagePatch(allocator, 2, 2, pixels[0..], 4, 5, 1, 1, 1, 1)).?;
+
+    try testing.expectEqual(@as(i64, 5), patch.x);
+    try testing.expectEqual(@as(i64, 6), patch.y);
+    try testing.expectEqual(@as(u32, 1), patch.width);
+    try testing.expectEqual(@as(u32, 1), patch.height);
+    try testing.expectEqual(color.RGBA{ .r = 255, .g = 255, .b = 255, .a = 255 }, patch.pixelAt(5, 6).?);
+    try testing.expectEqual(@as(?color.RGBA, null), patch.pixelAt(4, 5));
+
+    const max_i64 = @as(f64, @floatFromInt(std.math.maxInt(i64)));
+    const min_i64 = @as(f64, @floatFromInt(std.math.minInt(i64)));
+    try testing.expect(try imagePatch(allocator, 2, 2, pixels[0..], max_i64, 0, 1, 0, 1, 1) == null);
+    try testing.expect(try imagePatch(allocator, 2, 2, pixels[0..], 0, 0, min_i64, 0, -1, 1) == null);
 }
