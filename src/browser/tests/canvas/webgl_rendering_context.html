@@ -270,7 +270,12 @@
   ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MAG_FILTER, ctx.NEAREST);
   ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_S, ctx.CLAMP_TO_EDGE);
   ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_T, ctx.CLAMP_TO_EDGE);
-  ctx.texImage2D(ctx.TEXTURE_2D, 0, ctx.RGBA, 1, 1, 0, ctx.RGBA, ctx.UNSIGNED_BYTE, new Uint8Array([37, 47, 57, 255]));
+  ctx.texImage2D(ctx.TEXTURE_2D, 0, ctx.RGBA, 2, 2, 0, ctx.RGBA, ctx.UNSIGNED_BYTE, new Uint8Array([
+    37, 47, 57, 255,
+    41, 51, 61, 255,
+    71, 81, 91, 255,
+    97, 107, 117, 255,
+  ]));
 
   const vertexShader = ctx.createShader(ctx.VERTEX_SHADER);
   ctx.shaderSource(vertexShader, "attribute vec2 position; void main() { gl_Position = vec4(position, 0.0, 1.0); }");
@@ -321,6 +326,32 @@
   testing.expectEqual(9, pixels[0]);
   testing.expectEqual(19, pixels[1]);
   testing.expectEqual(29, pixels[2]);
+  testing.expectEqual(255, pixels[3]);
+
+  const coordinateFragmentShader = ctx.createShader(ctx.FRAGMENT_SHADER);
+  ctx.shaderSource(coordinateFragmentShader, "precision mediump float; uniform sampler2D u_texture; void main() { gl_FragColor = texture2D(u_texture, vec2(0.75, 0.75)); }");
+  ctx.compileShader(coordinateFragmentShader);
+  testing.expectEqual(true, ctx.getShaderParameter(coordinateFragmentShader, ctx.COMPILE_STATUS));
+
+  const coordinateProgram = ctx.createProgram();
+  ctx.attachShader(coordinateProgram, vertexShader);
+  ctx.attachShader(coordinateProgram, coordinateFragmentShader);
+  ctx.linkProgram(coordinateProgram);
+  testing.expectEqual(true, ctx.getProgramParameter(coordinateProgram, ctx.LINK_STATUS));
+  ctx.useProgram(coordinateProgram);
+  const coordinateUniform = ctx.getUniformLocation(coordinateProgram, "u_texture");
+  testing.expectEqual(true, coordinateUniform instanceof WebGLUniformLocation);
+  ctx.uniform1i(coordinateUniform, 1);
+  const coordinatePosition = ctx.getAttribLocation(coordinateProgram, "position");
+  ctx.enableVertexAttribArray(coordinatePosition);
+  ctx.vertexAttribPointer(coordinatePosition, 2, ctx.FLOAT, false, 0, 0);
+  ctx.clearColor(0, 0, 0, 1);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+  ctx.drawArrays(ctx.TRIANGLES, 0, 3);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixels);
+  testing.expectEqual(97, pixels[0]);
+  testing.expectEqual(107, pixels[1]);
+  testing.expectEqual(117, pixels[2]);
   testing.expectEqual(255, pixels[3]);
 }
 </script>

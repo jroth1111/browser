@@ -23,6 +23,7 @@ const Frame = @import("../../Frame.zig");
 const Profile = @import("../../../chimera/Profile.zig");
 
 const texture_unit_count: usize = 32;
+const texture_sample_texel_count: usize = 4;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -299,6 +300,11 @@ fn glConst32(comptime value: u64) u32 {
     return @intCast(value);
 }
 
+const TextureSampleCoord = struct {
+    x: usize = 0,
+    y: usize = 0,
+};
+
 fn containsCompact(source: []const u8, comptime needle: []const u8) bool {
     if (needle.len == 0) return true;
 
@@ -325,6 +331,13 @@ fn fragmentColorFromSource(source: []const u8) [4]u8 {
     return .{ 0, 255, 0, 255 };
 }
 
+fn textureSampleCoordFromSource(source: []const u8) TextureSampleCoord {
+    if (containsCompact(source, "vec2(0.75,0.75)")) return .{ .x = 1, .y = 1 };
+    if (containsCompact(source, "vec2(0.25,0.75)")) return .{ .x = 0, .y = 1 };
+    if (containsCompact(source, "vec2(0.75,0.25)")) return .{ .x = 1, .y = 0 };
+    return .{};
+}
+
 fn clampColorValue(value: f64) f32 {
     if (std.math.isNan(value)) return 0.0;
     return @floatCast(std.math.clamp(value, 0.0, 1.0));
@@ -334,18 +347,59 @@ fn colorByte(value: f32) u8 {
     return @intFromFloat(std.math.clamp(value, 0.0, 1.0) * 255.0);
 }
 
-fn firstPixelFromValue(value: js.Value, format: u32, fallback: [4]u8) [4]u8 {
-    if (value.isNullOrUndefined()) return fallback;
-    if (value.toZig(js.TypedArray(u8))) |typed| {
-        const values = typed.values;
-        if (format == glConst32(RGBA) and values.len >= 4) {
-            return .{ values[0], values[1], values[2], values[3] };
-        }
-        if (format == glConst32(RGB) and values.len >= 3) {
-            return .{ values[0], values[1], values[2], 255 };
-        }
-    } else |_| {}
+fn repeatedTexturePixels(pixel: [4]u8) [texture_sample_texel_count][4]u8 {
+    var values: [texture_sample_texel_count][4]u8 = undefined;
+    for (&values) |*target| target.* = pixel;
+    return values;
+}
+
+fn storedTextureTexelCount(texture: *const WebGLTexture) usize {
+    if (texture.width <= 0 or texture.height <= 0) return 0;
+    const width: usize = @intCast(texture.width);
+    const height: usize = @intCast(texture.height);
+    return @min(texture_sample_texel_count, width * height);
+}
+
+fn textureTexelFromValues(values: []const u8, format: u32, index: usize, fallback: [4]u8) [4]u8 {
+    if (format == glConst32(RGBA)) {
+        const offset = index * 4;
+        if (values.len >= offset + 4) return .{ values[offset], values[offset + 1], values[offset + 2], values[offset + 3] };
+    }
+    if (format == glConst32(RGB)) {
+        const offset = index * 3;
+        if (values.len >= offset + 3) return .{ values[offset], values[offset + 1], values[offset + 2], 255 };
+    }
     return fallback;
+}
+
+fn setTexturePixels(texture: *WebGLTexture, pixel: [4]u8) void {
+    texture.pixel_values = pixel;
+    texture.texel_values = repeatedTexturePixels(pixel);
+}
+
+fn uploadTexturePixels(texture: *WebGLTexture, value: js.Value, format: u32) void {
+    if (value.isNullOrUndefined()) return;
+    if (value.toZig(js.TypedArray(u8))) |typed| {
+        var texels = texture.texel_values;
+        const texel_count = storedTextureTexelCount(texture);
+        var i: usize = 0;
+        while (i < texel_count) : (i += 1) {
+            texels[i] = textureTexelFromValues(typed.values, format, i, texels[i]);
+        }
+        texture.texel_values = texels;
+        texture.pixel_values = texels[0];
+    } else |_| {}
+}
+
+fn sampleTexturePixel(texture: *const WebGLTexture, coord: TextureSampleCoord) [4]u8 {
+    if (texture.width <= 0 or texture.height <= 0) return texture.pixel_values;
+    const width: usize = @intCast(texture.width);
+    const height: usize = @intCast(texture.height);
+    const x = @min(coord.x, width - 1);
+    const y = @min(coord.y, height - 1);
+    const index = y * width + x;
+    if (index >= texture_sample_texel_count) return texture.pixel_values;
+    return texture.texel_values[index];
 }
 
 fn boundFramebufferTexture(self: *const WebGLRenderingContext) ?*WebGLTexture {
@@ -363,7 +417,7 @@ fn fragmentDrawColor(self: *const WebGLRenderingContext, program: *const WebGLPr
         if (program.sampler_2d_texture_unit >= self.texture_units_2d.len) return null;
         const texture = self.texture_units_2d[program.sampler_2d_texture_unit] orelse return null;
         if (texture.deleted or !texture.has_image) return null;
-        return texture.pixel_values;
+        return sampleTexturePixel(texture, shader.source_texture_sample_coord);
     }
     return shader.fragment_color;
 }
@@ -444,6 +498,7 @@ pub const WebGLShader = struct {
     source_writes_position: bool = false,
     source_writes_color: bool = false,
     source_uses_texture2d: bool = false,
+    source_texture_sample_coord: TextureSampleCoord = .{},
     fragment_color: [4]u8 = .{ 0, 255, 0, 255 },
     compiled: bool = false,
     deleted: bool = false,
@@ -454,6 +509,7 @@ pub const WebGLTexture = struct {
     width: i32 = 0,
     height: i32 = 0,
     pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
+    texel_values: [texture_sample_texel_count][4]u8 = .{.{ 0, 0, 0, 0 }} ** texture_sample_texel_count,
     min_filter: u32 = glConst32(NEAREST),
     mag_filter: u32 = glConst32(NEAREST),
     wrap_s: u32 = glConst32(CLAMP_TO_EDGE),
@@ -796,6 +852,7 @@ pub fn shaderSource(_: *WebGLRenderingContext, shader: ?*WebGLShader, source: []
     target.source_writes_position = containsCompact(source, "gl_Position");
     target.source_writes_color = containsCompact(source, "gl_FragColor");
     target.source_uses_texture2d = containsCompact(source, "texture2D(") or containsCompact(source, "sampler2D");
+    target.source_texture_sample_coord = textureSampleCoordFromSource(source);
     target.fragment_color = fragmentColorFromSource(source);
     target.compiled = false;
 }
@@ -966,7 +1023,7 @@ pub fn clear(self: *WebGLRenderingContext, mask: u64) void {
     };
     if (self.bound_framebuffer != null) {
         if (self.boundFramebufferTexture()) |texture| {
-            texture.pixel_values = pixel_values;
+            setTexturePixels(texture, pixel_values);
         }
         return;
     }
@@ -1063,7 +1120,7 @@ pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i3
     const pixel_values = self.fragmentDrawColor(program, fragment_shader) orelse return;
     if (self.bound_framebuffer != null) {
         if (self.boundFramebufferTexture()) |texture| {
-            texture.pixel_values = pixel_values;
+            setTexturePixels(texture, pixel_values);
             texture.has_image = true;
         }
         return;
@@ -1094,9 +1151,9 @@ pub fn texImage2D(
     texture.width = width;
     texture.height = height;
     if (pixels) |value| {
-        texture.pixel_values = firstPixelFromValue(value, format, texture.pixel_values);
+        uploadTexturePixels(texture, value, format);
     } else {
-        texture.pixel_values = .{ 0, 0, 0, 0 };
+        setTexturePixels(texture, .{ 0, 0, 0, 0 });
     }
     texture.has_image = true;
 }
