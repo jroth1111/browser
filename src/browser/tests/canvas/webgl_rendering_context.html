@@ -181,6 +181,70 @@
 }
 </script>
 
+<script id=WebGLRenderingContext#shader_program_draw_state>
+{
+  const element = document.createElement("canvas");
+  element.setAttribute("width", "16");
+  element.setAttribute("height", "16");
+  const ctx = element.getContext("webgl");
+
+  const badShader = ctx.createShader(ctx.FRAGMENT_SHADER);
+  ctx.shaderSource(badShader, "void nope() {}");
+  ctx.compileShader(badShader);
+  testing.expectEqual(false, ctx.getShaderParameter(badShader, ctx.COMPILE_STATUS));
+
+  const vertexShader = ctx.createShader(ctx.VERTEX_SHADER);
+  ctx.shaderSource(vertexShader, "attribute vec2 position; void main() { gl_Position = vec4(position, 0.0, 1.0); }");
+  ctx.compileShader(vertexShader);
+  testing.expectEqual(true, ctx.getShaderParameter(vertexShader, ctx.COMPILE_STATUS));
+  testing.expectEqual(ctx.VERTEX_SHADER, ctx.getShaderParameter(vertexShader, ctx.SHADER_TYPE));
+
+  const fragmentShader = ctx.createShader(ctx.FRAGMENT_SHADER);
+  ctx.shaderSource(fragmentShader, "void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0); }");
+  ctx.compileShader(fragmentShader);
+  testing.expectEqual(true, ctx.getShaderParameter(fragmentShader, ctx.COMPILE_STATUS));
+
+  const program = ctx.createProgram();
+  ctx.attachShader(program, vertexShader);
+  ctx.attachShader(program, fragmentShader);
+  testing.expectEqual(2, ctx.getProgramParameter(program, ctx.ATTACHED_SHADERS));
+  ctx.linkProgram(program);
+  testing.expectEqual(true, ctx.getProgramParameter(program, ctx.LINK_STATUS));
+  testing.expectEqual(1, ctx.getProgramParameter(program, ctx.ACTIVE_ATTRIBUTES));
+  ctx.useProgram(program);
+
+  const position = ctx.getAttribLocation(program, "position");
+  testing.expectEqual(0, position);
+  const attrib = ctx.getActiveAttrib(program, 0);
+  testing.expectEqual(true, attrib instanceof WebGLActiveInfo);
+  testing.expectEqual("position", attrib.name);
+
+  const pixelsBeforeBuffer = new Uint8Array(4);
+  ctx.clearColor(0, 0, 0, 1);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+  ctx.drawArrays(ctx.TRIANGLES, 0, 3);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixelsBeforeBuffer);
+  testing.expectEqual(0, pixelsBeforeBuffer[0]);
+  testing.expectEqual(0, pixelsBeforeBuffer[1]);
+  testing.expectEqual(0, pixelsBeforeBuffer[2]);
+  testing.expectEqual(255, pixelsBeforeBuffer[3]);
+
+  const buffer = ctx.createBuffer();
+  ctx.bindBuffer(ctx.ARRAY_BUFFER, buffer);
+  ctx.bufferData(ctx.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 0, 1]), ctx.STATIC_DRAW);
+  ctx.enableVertexAttribArray(position);
+  ctx.vertexAttribPointer(position, 2, ctx.FLOAT, false, 0, 0);
+  ctx.drawArrays(ctx.TRIANGLES, 0, 3);
+
+  const pixelsAfterDraw = new Uint8Array(4);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixelsAfterDraw);
+  testing.expectEqual(0, pixelsAfterDraw[0]);
+  testing.expectEqual(255, pixelsAfterDraw[1]);
+  testing.expectEqual(0, pixelsAfterDraw[2]);
+  testing.expectEqual(255, pixelsAfterDraw[3]);
+}
+</script>
+
 <script id=identity>
 {
   const element = document.createElement('canvas');
