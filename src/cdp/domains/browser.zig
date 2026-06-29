@@ -22,25 +22,21 @@ const id = @import("../id.zig");
 const CDP = @import("../CDP.zig");
 const Session = @import("../../browser/Session.zig");
 const Notification = @import("../../Notification.zig");
+const Identity = @import("../../chimera/CdpIdentity.zig");
 
 const log = lp.log;
 const PermissionState = @import("../../browser/webapi/Permissions.zig").State;
 
-// TODO: hard coded data
-const PROTOCOL_VERSION = "1.3";
-const REVISION = "@9e6ded5ac1ff5e38d930ae52bd9aec09bd1a68e4";
+const PROTOCOL_VERSION = Identity.PROTOCOL_VERSION;
+const REVISION = Identity.REVISION;
 
-// CDP_USER_AGENT const is used by the CDP server only to identify itself to
-// the CDP clients.
-// Many clients check the CDP server is a Chrome browser.
-//
-// CDP_USER_AGENT const is not used by the browser for the HTTP client (see
-// src/http/client.zig) nor exposed to the JS (see
-// src/browser/html/navigator.zig).
-const CDP_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-const PRODUCT = "Chrome/124.0.6367.29";
+// Managed Chimera sessions derive product and userAgent from the active
+// profile so CDP, HTTP headers, and JS navigator state do not drift. The
+// unmanaged fallback stays Chrome-like because many CDP clients require it.
+const CDP_USER_AGENT = Identity.DEFAULT_CDP_USER_AGENT;
+const PRODUCT = Identity.DEFAULT_CDP_PRODUCT;
 
-const JS_VERSION = "12.4.254.8";
+const JS_VERSION = Identity.JS_VERSION;
 const DEV_TOOLS_WINDOW_ID = 1923710101;
 
 pub fn processMessage(cmd: *CDP.Command) !void {
@@ -66,12 +62,15 @@ pub fn processMessage(cmd: *CDP.Command) !void {
 }
 
 fn getVersion(cmd: *CDP.Command) !void {
+    const authority = cmd.cdp.browser.http_client.network.config.chimeraAuthority();
+    const product = try Identity.cdpProduct(cmd.arena, authority);
+
     // TODO: pre-serialize?
     return cmd.sendResult(.{
         .protocolVersion = PROTOCOL_VERSION,
-        .product = PRODUCT,
+        .product = product.value,
         .revision = REVISION,
-        .userAgent = CDP_USER_AGENT,
+        .userAgent = Identity.cdpUserAgent(authority),
         .jsVersion = JS_VERSION,
     }, .{ .include_session_id = false });
 }
@@ -243,6 +242,27 @@ test "cdp.browser: getVersion" {
         .userAgent = CDP_USER_AGENT,
         .jsVersion = JS_VERSION,
     }, .{ .id = 32, .index = 0, .session_id = null });
+}
+
+test "cdp.browser: getVersion uses Chimera authority identity" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    var guard = try ctx.enableManagedAuthority(testing.managedAuthority());
+    defer guard.deinit();
+
+    try ctx.processMessage(.{
+        .id = 132,
+        .method = "Browser.getVersion",
+    });
+
+    try ctx.expectSentCount(1);
+    try ctx.expectSentResult(.{
+        .protocolVersion = PROTOCOL_VERSION,
+        .product = "Chrome/136.0.0.0",
+        .revision = REVISION,
+        .userAgent = "Mozilla/5.0",
+        .jsVersion = JS_VERSION,
+    }, .{ .id = 132, .index = 0, .session_id = null });
 }
 
 test "cdp.browser: getWindowForTarget" {

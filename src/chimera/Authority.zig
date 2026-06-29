@@ -50,7 +50,7 @@ pub fn fromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !Autho
     const profile_value = obj.get("profile") orelse return error.InvalidChimeraAuthority;
     const profile = try Profile.fromJsonValue(allocator, profile_value);
     const network = try networkFromValue(obj.get("network") orelse return error.InvalidChimeraAuthority);
-    const diagnostics = diagnosticsFromValue(obj.get("diagnostics")) catch Diagnostics{};
+    const diagnostics = try diagnosticsFromValue(obj.get("diagnostics"));
     const profile_id = try requiredString(obj, "profile_id");
     const target_domain = try requiredString(obj, "target_domain");
     if (!std.mem.eql(u8, profile_id, profile.profile_id)) {
@@ -72,6 +72,12 @@ pub fn fromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !Autho
     {
         return error.InvalidChimeraAuthority;
     }
+    if (diagnostics.expected_impersonation_target) |expected| {
+        const actual = profile.transport.impersonate_target orelse return error.InvalidChimeraAuthority;
+        if (!std.mem.eql(u8, expected, actual)) {
+            return error.InvalidChimeraAuthority;
+        }
+    }
 
     return .{
         .authority_version = authority_version,
@@ -88,9 +94,9 @@ fn networkFromValue(value: std.json.Value) !Network {
     const obj = try object(value);
     return .{
         .proxy_url = try requiredString(obj, "proxy_url"),
-        .route_id = optionalString(obj, "route_id") catch null,
-        .proxy_route = optionalString(obj, "proxy_route") catch null,
-        .requires_proxy = optionalBool(obj, "requires_proxy") catch true,
+        .route_id = try optionalString(obj, "route_id"),
+        .proxy_route = try optionalString(obj, "proxy_route"),
+        .requires_proxy = try optionalBoolDefault(obj, "requires_proxy", true),
     };
 }
 
@@ -98,8 +104,8 @@ fn diagnosticsFromValue(value: ?std.json.Value) !Diagnostics {
     const raw = value orelse return .{};
     const obj = try object(raw);
     return .{
-        .expected_impersonation_target = optionalString(obj, "expected_impersonation_target") catch null,
-        .requires_curl_impersonate = optionalBool(obj, "requires_curl_impersonate") catch false,
+        .expected_impersonation_target = try optionalString(obj, "expected_impersonation_target"),
+        .requires_curl_impersonate = try optionalBool(obj, "requires_curl_impersonate"),
     };
 }
 
@@ -136,6 +142,15 @@ fn optionalBool(obj: std.json.ObjectMap, key: []const u8) !bool {
     };
 }
 
+fn optionalBoolDefault(obj: std.json.ObjectMap, key: []const u8, default: bool) !bool {
+    const value = obj.get(key) orelse return default;
+    return switch (value) {
+        .bool => |b| b,
+        .null => default,
+        else => error.InvalidChimeraAuthority,
+    };
+}
+
 const test_authority_json =
     \\{
     \\  "authority_version":"chimera-lightpanda-authority/v1",
@@ -155,7 +170,13 @@ const test_authority_json =
     \\      "Accept-Language":"en-AU,en;q=0.9",
     \\      "Sec-CH-UA":"\"Chromium\";v=\"136\"",
     \\      "Sec-CH-UA-Mobile":"?0",
-    \\      "Sec-CH-UA-Platform":"\"macOS\""
+    \\      "Sec-CH-UA-Platform":"\"macOS\"",
+    \\      "Sec-CH-UA-Full-Version":"\"136.0.0.0\"",
+    \\      "Sec-CH-UA-Full-Version-List":"\"Chromium\";v=\"136.0.0.0\"",
+    \\      "Sec-CH-UA-Arch":"\"arm\"",
+    \\      "Sec-CH-UA-Bitness":"\"64\"",
+    \\      "Sec-CH-UA-Model":"\"\"",
+    \\      "Sec-CH-UA-Platform-Version":"\"15.0.0\""
     \\    },
     \\    "navigator":{
     \\      "platform":"MacIntel",
@@ -196,6 +217,19 @@ const test_authority_json =
     \\      "enabled":true,
     \\      "seed":222
     \\    },
+    \\    "webgl":{
+    \\      "enabled":true,
+    \\      "vendor":"Google Inc. (Apple)",
+    \\      "renderer":"ANGLE (Apple, ANGLE Metal Renderer: Apple M-series, Unspecified Version)"
+    \\    },
+    \\    "webrtc":{
+    \\      "enabled":false,
+    \\      "exit_ip":null
+    \\    },
+    \\    "storage":{
+    \\      "quota_bytes":5368709120,
+    \\      "usage_bytes":0
+    \\    },
     \\    "transport":{
     \\      "impersonate_target":"chrome136",
     \\      "requires_curl_impersonate":true
@@ -230,6 +264,7 @@ test "Chimera Authority parses managed launch authority" {
     try testing.expectEqualStrings("lightpanda:sess-1", authority.profile_id);
     try testing.expectEqualStrings("http://routejson.token:secret@127.0.0.1:8080", authority.network.proxy_url);
     try testing.expectEqualStrings("chrome136", authority.profile.transport.impersonate_target.?);
+    try testing.expectEqual(@as(u64, 5 * 1024 * 1024 * 1024), authority.profile.storage.quota_bytes);
     try testing.expect(authority.diagnostics.requires_curl_impersonate);
 }
 
@@ -254,6 +289,30 @@ test "Chimera Authority rejects missing required impersonation target" {
         error.InvalidChimeraAuthority,
         "\"impersonate_target\":\"chrome136\"",
         "\"impersonate_target\":null",
+    );
+}
+
+test "Chimera Authority rejects malformed diagnostics" {
+    try expectMutatedAuthorityError(
+        error.InvalidChimeraAuthority,
+        "\"expected_impersonation_target\":\"chrome136\"",
+        "\"expected_impersonation_target\":42",
+    );
+}
+
+test "Chimera Authority rejects mismatched diagnostic impersonation target" {
+    try expectMutatedAuthorityError(
+        error.InvalidChimeraAuthority,
+        "\"expected_impersonation_target\":\"chrome136\"",
+        "\"expected_impersonation_target\":\"chrome999\"",
+    );
+}
+
+test "Chimera Authority rejects impossible required WebRTC exit IP" {
+    try expectMutatedAuthorityError(
+        error.InvalidChimeraProfile,
+        "\"requires_webrtc_exit_ip\":false",
+        "\"requires_webrtc_exit_ip\":true",
     );
 }
 

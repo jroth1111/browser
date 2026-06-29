@@ -150,6 +150,12 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
         userAgentMetadata: ?HttpClient.UserAgentMetadata = null,
     })) orelse return error.InvalidParams;
 
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const http_client = &cmd.cdp.browser.http_client;
+    if (http_client.network.config.chimeraAuthority() != null) {
+        return cmd.sendResult(null, .{});
+    }
+
     const ua = params.userAgent;
     Config.validateUserAgent(ua) catch |err| switch (err) {
         error.NonPrintable => return cmd.sendError(-32602, "User agent contains non-printable characters", .{}),
@@ -159,8 +165,6 @@ pub fn setUserAgentOverride(cmd: *CDP.Command) !void {
         },
     };
 
-    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const http_client = &cmd.cdp.browser.http_client;
     try http_client.setUserAgentOverride(ua, params.acceptLanguage, params.platform, params.userAgentMetadata);
     bc.user_agent_changed = true;
 
@@ -303,6 +307,12 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
     try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
     try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Full-Version", "\"136.0.0.0\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Full-Version-List", "\"Chromium\";v=\"136.0.0.0\", \"Not.A/Brand\";v=\"24.0.0.0\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Arch", "\"x86\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Bitness", "\"64\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Model", "\"\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Platform-Version", "\"6.6.0\"");
 }
 
 test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
@@ -325,6 +335,53 @@ test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
     });
 
     try ctx.expectSentResult(null, .{ .id = 7 });
+}
+
+test "cdp.Emulation: setUserAgentOverride is ignored under Chimera authority" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-UA7" });
+    var guard = try ctx.enableManagedAuthority(testing.managedAuthority());
+    defer guard.deinit();
+
+    try ctx.processMessage(.{
+        .id = 17,
+        .method = "Emulation.setUserAgentOverride",
+        .params = .{
+            .userAgent = "CustomBot/9.0",
+            .acceptLanguage = "fr-FR,fr;q=0.9",
+            .platform = "Linux x86_64",
+            .userAgentMetadata = .{
+                .brands = &.{.{ .brand = "Chromium", .version = "999" }},
+                .fullVersionList = &.{.{ .brand = "Chromium", .version = "999.0.0.0" }},
+                .fullVersion = "999.0.0.0",
+                .platform = "Linux",
+                .platformVersion = "6.6.0",
+                .architecture = "x86",
+                .bitness = "64",
+                .model = "",
+                .mobile = false,
+                .wow64 = false,
+                .formFactor = &.{"Desktop"},
+            },
+        },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 17 });
+
+    const client = &ctx.cdp().browser.http_client;
+    try testing.expectEqual("Mozilla/5.0", client.getUserAgent());
+    try testing.expect(client.getLanguageOverride() == null);
+    try testing.expect(client.getNavigatorPlatformOverride() == null);
+    try testing.expect(client.getUADataOverride() == null);
+    try testing.expectEqual(false, ctx.cdp().browser_context.?.user_agent_changed);
+
+    const headers = try client.newHeaders();
+    defer headers.deinit();
+    try expectRequestHeader(headers, "User-Agent", "Mozilla/5.0");
+    try expectRequestHeader(headers, "Accept-Language", "en-AU,en;q=0.9");
+    try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Arch", "\"arm\"");
 }
 
 test "cdp.Emulation: setDeviceMetricsOverride and clear" {

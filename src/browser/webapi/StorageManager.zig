@@ -18,6 +18,7 @@
 
 const js = @import("../js/js.zig");
 const Execution = js.Execution;
+const StorageQuota = @import("StorageQuota.zig");
 
 pub fn registerTypes() []const type {
     return &.{ StorageManager, StorageEstimate };
@@ -29,10 +30,18 @@ _pad: bool = false,
 
 pub fn estimate(_: *const StorageManager, exec: *const Execution) !js.Promise {
     const est = try exec._factory.create(StorageEstimate{
-        ._usage = 0,
-        ._quota = 1024 * 1024 * 1024, // 1 GiB
+        ._usage = StorageQuota.usageBytes(exec),
+        ._quota = StorageQuota.quotaBytes(exec),
     });
     return exec.js.local.?.resolvePromise(est);
+}
+
+pub fn persist(_: *const StorageManager, exec: *const Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise(false);
+}
+
+pub fn persisted(_: *const StorageManager, exec: *const Execution) !js.Promise {
+    return exec.js.local.?.resolvePromise(false);
 }
 
 const StorageEstimate = struct {
@@ -68,4 +77,6 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
     pub const estimate = bridge.function(StorageManager.estimate, .{});
+    pub const persist = bridge.function(StorageManager.persist, .{});
+    pub const persisted = bridge.function(StorageManager.persisted, .{});
 };

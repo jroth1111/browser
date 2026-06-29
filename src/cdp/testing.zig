@@ -19,6 +19,9 @@
 const std = @import("std");
 
 const CDP = @import("CDP.zig");
+const Config = @import("../Config.zig");
+const ChimeraAuthority = @import("../chimera/Authority.zig");
+const ChimeraProfile = @import("../chimera/Profile.zig");
 
 const base = @import("../testing.zig");
 
@@ -34,6 +37,20 @@ pub const expectEqualSlices = base.expectEqualSlices;
 pub const pageTest = base.pageTest;
 pub const newString = base.newString;
 pub const LogFilter = base.LogFilter;
+
+const test_allocator = @import("root").tracking_allocator;
+
+pub const ManagedAuthorityGuard = struct {
+    config: *Config,
+    previous_authority: ?ChimeraAuthority,
+    previous_headers: Config.HttpHeaders,
+
+    pub fn deinit(self: *ManagedAuthorityGuard) void {
+        self.config.http_headers.deinit(test_allocator);
+        self.config.http_headers = self.previous_headers;
+        self.config.chimera_authority = self.previous_authority;
+    }
+};
 
 const TestContext = struct {
     read_at: usize = 0,
@@ -58,6 +75,24 @@ const TestContext = struct {
             self.cdp_initialized = true;
         }
         return &self.cdp_;
+    }
+
+    pub fn enableManagedAuthority(self: *TestContext, authority: ChimeraAuthority) !ManagedAuthorityGuard {
+        const config: *Config = @constCast(self.cdp().browser.http_client.network.config);
+        const previous_authority = config.chimera_authority;
+        const previous_headers = config.http_headers;
+
+        config.chimera_authority = authority;
+        errdefer config.chimera_authority = previous_authority;
+
+        const managed_headers = try Config.HttpHeaders.init(test_allocator, config);
+        config.http_headers = managed_headers;
+
+        return .{
+            .config = config,
+            .previous_authority = previous_authority,
+            .previous_headers = previous_headers,
+        };
     }
 
     const BrowserContextOpts = struct {
@@ -316,6 +351,95 @@ pub fn context() !TestContext {
     return .{
         .cdp_socket = pair[1],
         .socket = pair[0],
+    };
+}
+
+pub fn managedAuthority() ChimeraAuthority {
+    const languages = &[_][]const u8{ "en-AU", "en" };
+    const brands = &[_]ChimeraProfile.Brand{.{ .brand = "Chromium", .version = "136" }};
+    const full_version_list = &[_]ChimeraProfile.Brand{.{ .brand = "Chromium", .version = "136.0.0.0" }};
+    const form_factor = &[_][]const u8{"Desktop"};
+
+    return .{
+        .authority_version = ChimeraAuthority.VERSION,
+        .profile_schema_version = ChimeraProfile.VERSION,
+        .profile_id = "lightpanda:sess-managed",
+        .target_domain = "example.com",
+        .profile = .{
+            .schema_version = ChimeraProfile.VERSION,
+            .profile_id = "lightpanda:sess-managed",
+            .target_domain = "example.com",
+            .user_agent = "Mozilla/5.0",
+            .app_version = "5.0",
+            .accept_language = "en-AU,en;q=0.9",
+            .languages = languages,
+            .headers = .{
+                .user_agent = "Mozilla/5.0",
+                .accept_language = "en-AU,en;q=0.9",
+                .sec_ch_ua = "\"Chromium\";v=\"136\"",
+                .sec_ch_ua_mobile = "?0",
+                .sec_ch_ua_platform = "\"macOS\"",
+                .sec_ch_ua_full_version = "\"136.0.0.0\"",
+                .sec_ch_ua_full_version_list = "\"Chromium\";v=\"136.0.0.0\"",
+                .sec_ch_ua_arch = "\"arm\"",
+                .sec_ch_ua_bitness = "\"64\"",
+                .sec_ch_ua_model = "\"\"",
+                .sec_ch_ua_platform_version = "\"15.0.0\"",
+            },
+            .navigator = .{
+                .platform = "MacIntel",
+                .vendor = "Google Inc.",
+                .product = "Gecko",
+                .hardware_concurrency = 8,
+                .device_memory = 8,
+                .max_touch_points = 0,
+                .webdriver = false,
+            },
+            .ua_data = .{
+                .brands = brands,
+                .full_version_list = full_version_list,
+                .mobile = false,
+                .platform = "macOS",
+                .architecture = "arm",
+                .bitness = "64",
+                .model = "",
+                .platform_version = "15.0.0",
+                .ua_full_version = "136.0.0.0",
+                .wow64 = false,
+                .form_factor = form_factor,
+            },
+            .seeds = .{ .canvas = 111, .audio = 222, .font = 333, .human = 444 },
+            .plugins = .{ .pdf_enabled = true },
+            .canvas = .{ .enabled = true, .seed = 111 },
+            .audio = .{ .enabled = true, .seed = 222 },
+            .webgl = .{
+                .enabled = true,
+                .vendor = "Google Inc. (Apple)",
+                .renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M-series, Unspecified Version)",
+            },
+            .webrtc = .{ .enabled = false, .exit_ip = null },
+            .geolocation = null,
+            .storage = .{ .quota_bytes = 5 * 1024 * 1024 * 1024, .usage_bytes = 0 },
+            .transport = .{
+                .impersonate_target = "chrome136",
+                .requires_curl_impersonate = false,
+            },
+            .capabilities = .{
+                .requires_proxy = true,
+                .requires_webrtc_exit_ip = false,
+                .requires_curl_impersonate = false,
+            },
+        },
+        .network = .{
+            .proxy_url = "http://routejson.token:secret@127.0.0.1:8080",
+            .route_id = "exit-a",
+            .proxy_route = "lock:exit-a:sess-managed:lightpanda",
+            .requires_proxy = true,
+        },
+        .diagnostics = .{
+            .expected_impersonation_target = "chrome136",
+            .requires_curl_impersonate = false,
+        },
     };
 }
 

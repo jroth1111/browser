@@ -28,7 +28,9 @@ const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
 const Crypto = @import("Crypto.zig");
 const CSS = @import("CSS.zig");
+const CacheStorage = @import("CacheStorage.zig");
 const Chrome = @import("Chrome.zig");
+const DeprecatedFileSystem = @import("DeprecatedFileSystem.zig");
 const Navigator = @import("Navigator.zig");
 const ModelContext = @import("ModelContext.zig");
 const Screen = @import("Screen.zig");
@@ -68,6 +70,7 @@ _proto: *EventTarget,
 _frame: *Frame,
 _document: *Document,
 _css: CSS = .init,
+_caches: CacheStorage = .{},
 _chrome: Chrome = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
@@ -243,6 +246,29 @@ pub fn getCrypto(self: *Window) *Crypto {
 
 pub fn getCSS(self: *Window) *CSS {
     return &self._css;
+}
+
+pub fn getCaches(self: *Window) *CacheStorage {
+    return &self._caches;
+}
+
+pub fn webkitRequestFileSystem(
+    _: *Window,
+    fs_type: ?u32,
+    size: ?u64,
+    success: ?js.Function,
+    error_callback: ?js.Function,
+) !js.Undefined {
+    return DeprecatedFileSystem.requestFileSystem(fs_type, size, success, error_callback);
+}
+
+pub fn webkitResolveLocalFileSystemURL(
+    _: *Window,
+    url: ?[]const u8,
+    success: ?js.Function,
+    error_callback: ?js.Function,
+) !js.Undefined {
+    return DeprecatedFileSystem.resolveLocalFileSystemURL(url, success, error_callback);
 }
 
 pub fn getChrome(self: *Window, exec: *const Execution) ?*Chrome {
@@ -1023,8 +1049,11 @@ pub const JsApi = struct {
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{});
     pub const CSS = bridge.accessor(Window.getCSS, null, .{});
+    pub const caches = bridge.accessor(Window.getCaches, null, .{});
     pub const chrome = bridge.accessor(Window.getChrome, null, .{ .null_as_undefined = true });
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{});
+    pub const TEMPORARY = bridge.property(DeprecatedFileSystem.TEMPORARY, .{ .template = true, .readonly = true });
+    pub const PERSISTENT = bridge.property(DeprecatedFileSystem.PERSISTENT, .{ .template = true, .readonly = true });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
@@ -1054,6 +1083,8 @@ pub const JsApi = struct {
     pub const structuredClone = bridge.function(Window.structuredClone, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
     pub const getSelection = bridge.function(Window.getSelection, .{});
+    pub const webkitRequestFileSystem = bridge.function(Window.webkitRequestFileSystem, .{});
+    pub const webkitResolveLocalFileSystemURL = bridge.function(Window.webkitResolveLocalFileSystemURL, .{});
     pub const frameElement = bridge.accessor(Window.getFrameElement, null, .{});
 
     pub const frames = bridge.accessor(Window.getWindow, Window.setFrames, .{});

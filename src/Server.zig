@@ -24,6 +24,7 @@ const App = @import("App.zig");
 const Config = @import("Config.zig");
 
 const CDP = @import("cdp/CDP.zig");
+const CdpIdentity = @import("chimera/CdpIdentity.zig");
 
 const log = lp.log;
 const net = std.net;
@@ -271,14 +272,21 @@ fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
             .message = "when --host is set to 0.0.0.0 consider setting --advertise-host to a reachable address",
         });
     }
-    const body_format =
-        "{{" ++
-        "\"Browser\": \"Lightpanda/1.0\", " ++
-        "\"Protocol-Version\": \"1.3\", " ++
-        "\"User-Agent\": \"Lightpanda/1.0\", " ++
-        "\"webSocketDebuggerUrl\": \"ws://{s}:{d}/\"" ++
-        "}}";
-    const body_len = std.fmt.count(body_format, .{ host, port });
+
+    const authority = app.config.chimeraAuthority();
+    const browser_product = try CdpIdentity.httpBrowserProduct(app.allocator, authority);
+    defer browser_product.deinit(app.allocator);
+
+    const websocket_url = try std.fmt.allocPrint(app.allocator, "ws://{s}:{d}/", .{ host, port });
+    defer app.allocator.free(websocket_url);
+
+    const body = try std.json.Stringify.valueAlloc(app.allocator, .{
+        .Browser = browser_product.value,
+        .@"Protocol-Version" = CdpIdentity.PROTOCOL_VERSION,
+        .@"User-Agent" = CdpIdentity.httpUserAgent(authority),
+        .webSocketDebuggerUrl = websocket_url,
+    }, .{});
+    defer app.allocator.free(body);
 
     // We send a Connection: Close (and actually close the connection)
     // because chromedp (Go driver) sends a request to /json/version and then
@@ -291,8 +299,8 @@ fn buildJSONVersionResponse(app: *const App, port: u16) ![]const u8 {
         "Content-Length: {d}\r\n" ++
         "Connection: Close\r\n" ++
         "Content-Type: application/json; charset=UTF-8\r\n\r\n" ++
-        body_format;
-    return try std.fmt.allocPrint(app.allocator, response_format, .{ body_len, host, port });
+        "{s}";
+    return try std.fmt.allocPrint(app.allocator, response_format, .{ body.len, body });
 }
 
 const testing = @import("testing.zig");
@@ -305,11 +313,16 @@ test "server: buildJSONVersionResponse" {
     try testing.expect(std.mem.indexOf(u8, res, "Content-Type: application/json") != null);
     try testing.expect(std.mem.indexOf(u8, res, "Connection: Close") != null);
 
-    // Verify all required JSON fields are present in the body
-    try testing.expect(std.mem.indexOf(u8, res, "\"Browser\": \"Lightpanda/") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "\"Protocol-Version\": \"1.3\"") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "\"User-Agent\": \"Lightpanda/") != null);
-    try testing.expect(std.mem.indexOf(u8, res, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9222/\"") != null);
+    const body = try jsonVersionBody(res);
+    try testing.expect(std.mem.startsWith(u8, body.object.get("Browser").?.string, "Lightpanda/"));
+    try testing.expectEqualStrings("1.3", body.object.get("Protocol-Version").?.string);
+    try testing.expect(std.mem.startsWith(u8, body.object.get("User-Agent").?.string, "Lightpanda/"));
+    try testing.expectEqualStrings("ws://127.0.0.1:9222/", body.object.get("webSocketDebuggerUrl").?.string);
+}
+
+fn jsonVersionBody(response: []const u8) !std.json.Value {
+    const body_start = (std.mem.indexOf(u8, response, "\r\n\r\n") orelse return error.InvalidHttpResponse) + 4;
+    return try std.json.parseFromSliceLeaky(std.json.Value, testing.arena_allocator, response[body_start..], .{});
 }
 
 test "Client: http invalid request" {
@@ -535,9 +548,10 @@ test "server: get /json/version" {
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
         try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
-        try testing.expect(std.mem.indexOf(u8, res1, "\"Protocol-Version\": \"1.3\"") != null);
-        try testing.expect(std.mem.indexOf(u8, res1, "\"webSocketDebuggerUrl\": \"ws://127.0.0.1:9583/\"") != null);
+        const body = try jsonVersionBody(res1);
+        try testing.expect(std.mem.startsWith(u8, body.object.get("Browser").?.string, "Lightpanda/"));
+        try testing.expectEqualStrings("1.3", body.object.get("Protocol-Version").?.string);
+        try testing.expectEqualStrings("ws://127.0.0.1:9583/", body.object.get("webSocketDebuggerUrl").?.string);
     }
 
     {
@@ -547,7 +561,8 @@ test "server: get /json/version" {
 
         const res1 = try c.httpRequest("GET /json/version HTTP/1.1\r\n\r\n");
         try testing.expect(std.mem.startsWith(u8, res1, "HTTP/1.1 200 OK\r\n"));
-        try testing.expect(std.mem.indexOf(u8, res1, "\"Browser\": \"Lightpanda/") != null);
+        const body = try jsonVersionBody(res1);
+        try testing.expect(std.mem.startsWith(u8, body.object.get("Browser").?.string, "Lightpanda/"));
     }
 }
 

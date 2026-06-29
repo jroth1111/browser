@@ -30,6 +30,7 @@ const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 const http = @import("../network/http.zig");
 const Network = @import("../network/Network.zig");
 const ChimeraProfile = @import("../chimera/Profile.zig");
+const ClientHints = @import("../chimera/ClientHints.zig");
 
 const CDP = @import("../cdp/CDP.zig");
 const Inbox = @import("../Inbox.zig");
@@ -73,6 +74,12 @@ const UADataOverride = struct {
     sec_ch_ua_header: ?[:0]const u8,
     sec_ch_ua_mobile_header: ?[:0]const u8,
     sec_ch_ua_platform_header: ?[:0]const u8,
+    sec_ch_ua_full_version_header: ?[:0]const u8,
+    sec_ch_ua_full_version_list_header: ?[:0]const u8,
+    sec_ch_ua_arch_header: ?[:0]const u8,
+    sec_ch_ua_bitness_header: ?[:0]const u8,
+    sec_ch_ua_model_header: ?[:0]const u8,
+    sec_ch_ua_platform_version_header: ?[:0]const u8,
 
     fn init(allocator: Allocator, metadata: UserAgentMetadata) !UADataOverride {
         const brands = try copyBrandList(allocator, metadata.brands);
@@ -98,22 +105,58 @@ const UADataOverride = struct {
 
         const client_hints_enabled = brands.len > 0;
         const sec_ch_ua_header = if (client_hints_enabled)
-            try formatSecChUaHeader(allocator, brands)
+            try ClientHints.formatBrandListHeader(allocator, "Sec-CH-UA", brands)
         else
             null;
         errdefer if (sec_ch_ua_header) |header| allocator.free(header);
 
         const sec_ch_ua_mobile_header = if (client_hints_enabled)
-            try std.fmt.allocPrintSentinel(allocator, "Sec-CH-UA-Mobile: ?{d}", .{@intFromBool(metadata.mobile orelse false)}, 0)
+            try ClientHints.formatMobileHeader(allocator, "Sec-CH-UA-Mobile", metadata.mobile orelse false)
         else
             null;
         errdefer if (sec_ch_ua_mobile_header) |header| allocator.free(header);
 
         const sec_ch_ua_platform_header = if (client_hints_enabled)
-            try std.fmt.allocPrintSentinel(allocator, "Sec-CH-UA-Platform: \"{s}\"", .{platform}, 0)
+            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Platform", platform)
         else
             null;
         errdefer if (sec_ch_ua_platform_header) |header| allocator.free(header);
+
+        const sec_ch_ua_full_version_header = if (client_hints_enabled)
+            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Full-Version", ua_full_version)
+        else
+            null;
+        errdefer if (sec_ch_ua_full_version_header) |header| allocator.free(header);
+
+        const sec_ch_ua_full_version_list_header = if (client_hints_enabled)
+            try ClientHints.formatBrandListHeader(allocator, "Sec-CH-UA-Full-Version-List", full_version_list)
+        else
+            null;
+        errdefer if (sec_ch_ua_full_version_list_header) |header| allocator.free(header);
+
+        const sec_ch_ua_arch_header = if (client_hints_enabled)
+            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Arch", architecture)
+        else
+            null;
+        errdefer if (sec_ch_ua_arch_header) |header| allocator.free(header);
+
+        const sec_ch_ua_bitness_header = if (client_hints_enabled)
+            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Bitness", bitness)
+        else
+            null;
+        errdefer if (sec_ch_ua_bitness_header) |header| allocator.free(header);
+
+        const sec_ch_ua_model_header = if (client_hints_enabled)
+            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Model", model)
+        else
+            null;
+        errdefer if (sec_ch_ua_model_header) |header| allocator.free(header);
+
+        const sec_ch_ua_platform_version_header = if (client_hints_enabled)
+            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Platform-Version", platform_version)
+        else
+            null;
+        errdefer if (sec_ch_ua_platform_version_header) |header| allocator.free(header);
 
         return .{
             .data = .{
@@ -133,10 +176,22 @@ const UADataOverride = struct {
             .sec_ch_ua_header = sec_ch_ua_header,
             .sec_ch_ua_mobile_header = sec_ch_ua_mobile_header,
             .sec_ch_ua_platform_header = sec_ch_ua_platform_header,
+            .sec_ch_ua_full_version_header = sec_ch_ua_full_version_header,
+            .sec_ch_ua_full_version_list_header = sec_ch_ua_full_version_list_header,
+            .sec_ch_ua_arch_header = sec_ch_ua_arch_header,
+            .sec_ch_ua_bitness_header = sec_ch_ua_bitness_header,
+            .sec_ch_ua_model_header = sec_ch_ua_model_header,
+            .sec_ch_ua_platform_version_header = sec_ch_ua_platform_version_header,
         };
     }
 
     fn deinit(self: *const UADataOverride, allocator: Allocator) void {
+        if (self.sec_ch_ua_platform_version_header) |header| allocator.free(header);
+        if (self.sec_ch_ua_model_header) |header| allocator.free(header);
+        if (self.sec_ch_ua_bitness_header) |header| allocator.free(header);
+        if (self.sec_ch_ua_arch_header) |header| allocator.free(header);
+        if (self.sec_ch_ua_full_version_list_header) |header| allocator.free(header);
+        if (self.sec_ch_ua_full_version_header) |header| allocator.free(header);
         if (self.sec_ch_ua_platform_header) |header| allocator.free(header);
         if (self.sec_ch_ua_mobile_header) |header| allocator.free(header);
         if (self.sec_ch_ua_header) |header| allocator.free(header);
@@ -214,18 +269,6 @@ fn freeStringItems(allocator: Allocator, list: []const []const u8) void {
     for (list) |item| {
         allocator.free(item);
     }
-}
-
-fn formatSecChUaHeader(allocator: Allocator, brands: []const ChimeraProfile.Brand) ![:0]const u8 {
-    var value = try std.ArrayList(u8).initCapacity(allocator, brands.len * 32);
-    defer value.deinit(allocator);
-    var writer = value.writer(allocator);
-
-    for (brands, 0..) |brand, i| {
-        if (i > 0) try writer.writeAll(", ");
-        try writer.print("\"{s}\";v=\"{s}\"", .{ brand.brand, brand.version });
-    }
-    return try std.fmt.allocPrintSentinel(allocator, "Sec-CH-UA: {s}", .{value.items}, 0);
 }
 
 // This is loosely tied to a browser Frame. Loading all the <scripts>, doing
@@ -623,6 +666,12 @@ pub fn newHeaders(self: *const Client) !http.Headers {
         .sec_ch_ua_header = if (ua_data) |value| value.sec_ch_ua_header else null,
         .sec_ch_ua_mobile_header = if (ua_data) |value| value.sec_ch_ua_mobile_header else null,
         .sec_ch_ua_platform_header = if (ua_data) |value| value.sec_ch_ua_platform_header else null,
+        .sec_ch_ua_full_version_header = if (ua_data) |value| value.sec_ch_ua_full_version_header else null,
+        .sec_ch_ua_full_version_list_header = if (ua_data) |value| value.sec_ch_ua_full_version_list_header else null,
+        .sec_ch_ua_arch_header = if (ua_data) |value| value.sec_ch_ua_arch_header else null,
+        .sec_ch_ua_bitness_header = if (ua_data) |value| value.sec_ch_ua_bitness_header else null,
+        .sec_ch_ua_model_header = if (ua_data) |value| value.sec_ch_ua_model_header else null,
+        .sec_ch_ua_platform_version_header = if (ua_data) |value| value.sec_ch_ua_platform_version_header else null,
     });
 }
 

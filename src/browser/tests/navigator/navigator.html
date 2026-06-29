@@ -42,6 +42,7 @@
     'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
     'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
     'plugins', 'doNotTrack', 'globalPrivacyControl',
+    'webkitTemporaryStorage', 'webkitPersistentStorage',
   ]) {
     const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
     testing.expectEqual('function', typeof desc.get); // accessor on prototype
@@ -65,6 +66,40 @@
   testing.expectEqual(null, navigator.doNotTrack);
 </script>
 
+<script id=deprecated_storage_quota type=module>
+  {
+    testing.expectEqual(true, navigator.webkitTemporaryStorage === navigator.webkitTemporaryStorage);
+    testing.expectEqual(true, navigator.webkitPersistentStorage === navigator.webkitPersistentStorage);
+    testing.expectEqual('function', typeof navigator.webkitTemporaryStorage.queryUsageAndQuota);
+    testing.expectEqual('function', typeof navigator.webkitTemporaryStorage.requestQuota);
+    testing.expectEqual(true, navigator.webkitTemporaryStorage.queryUsageAndQuota.toString().includes('[native code]'));
+    testing.expectEqual(true, navigator.webkitTemporaryStorage.requestQuota.toString().includes('[native code]'));
+
+    const state = await testing.async();
+    navigator.webkitTemporaryStorage.queryUsageAndQuota((usage, quota) => {
+      state.resolve({usage, quota});
+    }, () => testing.fail('temporary storage quota should resolve'));
+
+    await state.done((estimate) => {
+      testing.expectEqual(0, estimate.usage);
+      testing.expectEqual(5 * 1024 * 1024 * 1024, estimate.quota);
+    });
+  }
+</script>
+
+<script id=deprecated_storage_request_quota type=module>
+  {
+    const state = await testing.async();
+    navigator.webkitPersistentStorage.requestQuota(4096, (granted) => {
+      state.resolve(granted);
+    }, () => testing.fail('persistent storage quota should resolve'));
+
+    await state.done((granted) => {
+      testing.expectEqual(4096, granted);
+    });
+  }
+</script>
+
 <script id=permission_query type=module>
   {
     const state = await testing.async();
@@ -80,19 +115,48 @@
   }
 </script>
 
+<script id=geolocation_unmanaged_error_callback type=module>
+  {
+    const state = await testing.async();
+
+    testing.expectEqual('object', typeof navigator.geolocation);
+    testing.expectEqual(true, navigator.geolocation instanceof Geolocation);
+    testing.expectEqual('function', typeof navigator.geolocation.getCurrentPosition);
+    testing.expectEqual('function', typeof navigator.geolocation.watchPosition);
+    testing.expectEqual('function', typeof navigator.geolocation.clearWatch);
+
+    navigator.geolocation.getCurrentPosition(
+      () => testing.fail('geolocation should not return an unmanaged fallback position'),
+      (error) => state.resolve(error)
+    );
+
+    await state.done((error) => {
+      testing.expectEqual(true, error instanceof GeolocationPositionError);
+      testing.expectEqual(GeolocationPositionError.PERMISSION_DENIED, error.code);
+      testing.expectEqual('User denied Geolocation', error.message);
+    });
+  }
+</script>
+
 <script id=storage_estimate type=module>
   {
     const state = await testing.async();
 
     const p = navigator.storage.estimate();
     testing.expectTrue(p instanceof Promise);
+    testing.expectEqual('function', typeof navigator.storage.persist);
+    testing.expectEqual('function', typeof navigator.storage.persisted);
 
     const estimate = await p;
+    const persist = await navigator.storage.persist();
+    const persisted = await navigator.storage.persisted();
     state.resolve();
 
     await state.done(() =>{
       testing.expectEqual(0, estimate.usage);
-      testing.expectEqual(1024 * 1024 * 1024, estimate.quota);
+      testing.expectEqual(5 * 1024 * 1024 * 1024, estimate.quota);
+      testing.expectEqual(false, persist);
+      testing.expectEqual(false, persisted);
     });
   }
 </script>
@@ -150,4 +214,3 @@
   // rather than a stub that always rejects.
   testing.expectEqual('undefined', typeof navigator.getBattery);
 </script>
-

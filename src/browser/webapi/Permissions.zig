@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Execution = js.Execution;
+const Geolocation = @import("Geolocation.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -44,13 +45,13 @@ const QueryDescriptor = struct {
     name: []const u8,
 };
 
-// Report the state set via CDP Browser.grantPermissions / setPermission, or
-// 'prompt' (the default safe value — neither granted nor denied) when unset.
+// Report the state set via CDP Browser.grantPermissions / setPermission, or a
+// coherent managed default when unset.
 pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution) !js.Promise {
     const arena = try exec.getArena(.tiny, "PermissionStatus");
     errdefer exec.releaseArena(arena);
 
-    const state = exec.session.browser.permissions.get(qd.name) orelse .prompt;
+    const state = exec.session.browser.permissions.get(qd.name) orelse defaultState(qd.name, exec);
     const status = try arena.create(PermissionStatus);
     status.* = .{
         ._arena = arena,
@@ -58,6 +59,21 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
         ._name = try arena.dupe(u8, qd.name),
     };
     return exec.js.local.?.resolvePromise(status);
+}
+
+fn defaultState(name: []const u8, exec: *const Execution) State {
+    if (std.mem.eql(u8, name, "geolocation")) {
+        return geolocationPermissionState(Geolocation.permissionState(exec));
+    }
+    return .prompt;
+}
+
+fn geolocationPermissionState(state: Geolocation.PermissionState) State {
+    return switch (state) {
+        .granted => .granted,
+        .prompt => .prompt,
+        .denied => .denied,
+    };
 }
 
 const PermissionStatus = struct {
@@ -110,3 +126,9 @@ pub const JsApi = struct {
 
     pub const query = bridge.function(Permissions.query, .{ .dom_exception = true });
 };
+
+test "WebApi: Permissions geolocation defaults are profile driven in managed mode" {
+    try std.testing.expectEqual(State.granted, geolocationPermissionState(.granted));
+    try std.testing.expectEqual(State.prompt, geolocationPermissionState(.prompt));
+    try std.testing.expectEqual(State.denied, geolocationPermissionState(.denied));
+}

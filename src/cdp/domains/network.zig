@@ -30,6 +30,7 @@ const timestamp = @import("../../datetime.zig").timestamp;
 const Headers = @import("../../browser/HttpClient.zig").Headers;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
+const CdpIdentity = @import("../../chimera/CdpIdentity.zig");
 
 const CdpStorage = @import("storage.zig");
 
@@ -121,6 +122,9 @@ fn setExtraHTTPHeaders(cmd: *CDP.Command) !void {
         const header_string = try std.fmt.allocPrintSentinel(arena, "{s}: {s}", .{ key, value }, 0);
 
         if (Headers.parseHeader(header_string)) |parsed| {
+            if (bc.cdp.browser.http_client.network.config.chimeraAuthority() != null and CdpIdentity.ownsHeaderName(parsed.name)) {
+                continue;
+            }
             if (std.ascii.eqlIgnoreCase(parsed.name, "user-agent")) {
                 Config.validateUserAgent(parsed.value) catch |err| {
                     log.warn(.not_implemented, "network.setExtraHTTPHeaders", .{ .param = "userAgent", .value = parsed.value, .err = err });
@@ -674,6 +678,71 @@ test "cdp.network setExtraHTTPHeaders rejects a header that smuggles CRLF" {
 
     try testing.expectEqual(bc.extra_headers.items.len, 1);
     try testing.expectEqual("x-keep: ok", std.mem.span(bc.extra_headers.items[0]));
+}
+
+test "cdp.network setExtraHTTPHeaders ignores profile-owned headers under Chimera authority" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "NID-UA6", .session_id = "NESI-UA6" });
+    var guard = try ctx.enableManagedAuthority(testing.managedAuthority());
+    defer guard.deinit();
+
+    try ctx.processMessage(.{
+        .id = 18,
+        .method = "Network.setExtraHTTPHeaders",
+        .params = .{ .headers = .{
+            .@"User-Agent" = "CustomBot/9.0",
+            .@"Accept-Language" = "fr-FR,fr;q=0.9",
+            .@"Sec-CH-UA-Full-Version-List" = "\"Chromium\";v=\"999.0.0.0\"",
+            .@"X-Keep" = "ok",
+        } },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 18 });
+    try testing.expectEqual(bc.extra_headers.items.len, 1);
+    try testing.expectEqual("X-Keep: ok", std.mem.span(bc.extra_headers.items[0]));
+}
+
+test "cdp.Network: setUserAgentOverride is ignored under Chimera authority" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    _ = try ctx.loadBrowserContext(.{ .id = "NID-UA7", .session_id = "NESI-UA7" });
+    var guard = try ctx.enableManagedAuthority(testing.managedAuthority());
+    defer guard.deinit();
+
+    try ctx.processMessage(.{
+        .id = 19,
+        .method = "Network.setUserAgentOverride",
+        .params = .{
+            .userAgent = "CustomBot/9.0",
+            .acceptLanguage = "fr-FR,fr;q=0.9",
+            .platform = "Linux x86_64",
+        },
+    });
+
+    try ctx.expectSentResult(null, .{ .id = 19 });
+
+    const client = &ctx.cdp().browser.http_client;
+    try testing.expectEqual("Mozilla/5.0", client.getUserAgent());
+    try testing.expect(client.getLanguageOverride() == null);
+    try testing.expect(client.getNavigatorPlatformOverride() == null);
+
+    const headers = try client.newHeaders();
+    defer headers.deinit();
+    try expectRequestHeader(headers, "User-Agent", "Mozilla/5.0");
+    try expectRequestHeader(headers, "Accept-Language", "en-AU,en;q=0.9");
+    try expectRequestHeader(headers, "Sec-CH-UA-Arch", "\"arm\"");
+}
+
+fn expectRequestHeader(headers: Headers, name: []const u8, expected: []const u8) !void {
+    var it = headers.iterator();
+    while (it.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, name)) {
+            return testing.expectEqual(expected, header.value);
+        }
+    }
+    return testing.expect(false);
 }
 
 test "cdp.Network: cookies" {

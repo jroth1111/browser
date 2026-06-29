@@ -441,3 +441,78 @@
   testing.expectEqual(true, typeof navigator.userAgent === 'string');
   testing.expectEqual(true, navigator.userAgent.length > 0);
 </script>
+
+<script id=webkit_file_system type=module>
+  {
+    testing.expectEqual(0, window.TEMPORARY);
+    testing.expectEqual(1, window.PERSISTENT);
+    testing.expectEqual('function', typeof window.webkitRequestFileSystem);
+    testing.expectEqual('function', typeof window.webkitResolveLocalFileSystemURL);
+    testing.expectEqual(true, window.webkitRequestFileSystem.toString().includes('[native code]'));
+    testing.expectEqual(true, window.webkitResolveLocalFileSystemURL.toString().includes('[native code]'));
+
+    const state = await testing.async();
+    const results = {};
+
+    window.webkitRequestFileSystem(
+      window.TEMPORARY,
+      1024,
+      (fs) => { results.request_success = fs; },
+      (err) => { results.request_error = err; }
+    );
+    window.webkitResolveLocalFileSystemURL(
+      'filesystem:https://example.test/temporary/missing',
+      (entry) => { results.resolve_success = entry; },
+      (err) => { results.resolve_error = err; }
+    );
+    window.webkitRequestFileSystem(
+      window.PERSISTENT,
+      1024,
+      (fs) => { results.fallback_success = fs; }
+    );
+
+    state.resolve(results);
+
+    await state.done((result) => {
+      testing.expectEqual(undefined, result.request_success);
+      testing.expectEqual('NotFoundError', result.request_error.name);
+      testing.expectEqual(undefined, result.resolve_success);
+      testing.expectEqual('NotFoundError', result.resolve_error.name);
+      testing.expectEqual(null, result.fallback_success);
+    });
+  }
+</script>
+
+<script id=cache_storage type=module>
+  {
+    testing.expectEqual('object', typeof window.caches);
+    testing.expectEqual(true, window.caches instanceof CacheStorage);
+    testing.expectEqual(true, window.caches === window.caches);
+    testing.expectEqual('function', typeof window.caches.open);
+    testing.expectEqual('function', typeof window.caches.keys);
+    testing.expectEqual('function', typeof window.caches.has);
+    testing.expectEqual('function', typeof window.caches.delete);
+    testing.expectEqual(true, window.caches.open.toString().includes('[native code]'));
+
+    const state = await testing.async();
+    const cache = await window.caches.open('chimera-cache');
+    const keys = await window.caches.keys();
+    const has = await window.caches.has('chimera-cache');
+    const deleted = await window.caches.delete('chimera-cache');
+    const matched = await window.caches.match('/missing');
+    const cacheKeys = await cache.keys();
+
+    state.resolve({ cache, keys, has, deleted, matched, cacheKeys });
+
+    await state.done((result) => {
+      testing.expectEqual(true, result.cache instanceof Cache);
+      testing.expectEqual(true, Array.isArray(result.keys));
+      testing.expectEqual(0, result.keys.length);
+      testing.expectEqual(false, result.has);
+      testing.expectEqual(false, result.deleted);
+      testing.expectEqual(undefined, result.matched);
+      testing.expectEqual(true, Array.isArray(result.cacheKeys));
+      testing.expectEqual(0, result.cacheKeys.length);
+    });
+  }
+</script>

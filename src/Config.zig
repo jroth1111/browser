@@ -696,6 +696,12 @@ pub const HttpHeaders = struct {
     sec_ch_ua_header: [:0]const u8,
     sec_ch_ua_mobile_header: ?[:0]const u8,
     sec_ch_ua_platform_header: ?[:0]const u8,
+    sec_ch_ua_full_version_header: ?[:0]const u8 = null,
+    sec_ch_ua_full_version_list_header: ?[:0]const u8 = null,
+    sec_ch_ua_arch_header: ?[:0]const u8 = null,
+    sec_ch_ua_bitness_header: ?[:0]const u8 = null,
+    sec_ch_ua_model_header: ?[:0]const u8 = null,
+    sec_ch_ua_platform_version_header: ?[:0]const u8 = null,
 
     proxy_bearer_header: ?[:0]const u8,
 
@@ -743,6 +749,36 @@ pub const HttpHeaders = struct {
         else
             null;
 
+        const sec_ch_ua_full_version_header = if (profile_headers) |headers|
+            headers.sec_ch_ua_full_version_header
+        else
+            null;
+
+        const sec_ch_ua_full_version_list_header = if (profile_headers) |headers|
+            headers.sec_ch_ua_full_version_list_header
+        else
+            null;
+
+        const sec_ch_ua_arch_header = if (profile_headers) |headers|
+            headers.sec_ch_ua_arch_header
+        else
+            null;
+
+        const sec_ch_ua_bitness_header = if (profile_headers) |headers|
+            headers.sec_ch_ua_bitness_header
+        else
+            null;
+
+        const sec_ch_ua_model_header = if (profile_headers) |headers|
+            headers.sec_ch_ua_model_header
+        else
+            null;
+
+        const sec_ch_ua_platform_version_header = if (profile_headers) |headers|
+            headers.sec_ch_ua_platform_version_header
+        else
+            null;
+
         const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
             try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
         else
@@ -755,6 +791,12 @@ pub const HttpHeaders = struct {
             .sec_ch_ua_header = sec_ch_ua_header,
             .sec_ch_ua_mobile_header = sec_ch_ua_mobile_header,
             .sec_ch_ua_platform_header = sec_ch_ua_platform_header,
+            .sec_ch_ua_full_version_header = sec_ch_ua_full_version_header,
+            .sec_ch_ua_full_version_list_header = sec_ch_ua_full_version_list_header,
+            .sec_ch_ua_arch_header = sec_ch_ua_arch_header,
+            .sec_ch_ua_bitness_header = sec_ch_ua_bitness_header,
+            .sec_ch_ua_model_header = sec_ch_ua_model_header,
+            .sec_ch_ua_platform_version_header = sec_ch_ua_platform_version_header,
             .proxy_bearer_header = proxy_bearer_header,
         };
     }
@@ -774,6 +816,24 @@ pub const HttpHeaders = struct {
             allocator.free(hdr);
         }
         if (self.sec_ch_ua_platform_header) |hdr| {
+            allocator.free(hdr);
+        }
+        if (self.sec_ch_ua_full_version_header) |hdr| {
+            allocator.free(hdr);
+        }
+        if (self.sec_ch_ua_full_version_list_header) |hdr| {
+            allocator.free(hdr);
+        }
+        if (self.sec_ch_ua_arch_header) |hdr| {
+            allocator.free(hdr);
+        }
+        if (self.sec_ch_ua_bitness_header) |hdr| {
+            allocator.free(hdr);
+        }
+        if (self.sec_ch_ua_model_header) |hdr| {
+            allocator.free(hdr);
+        }
+        if (self.sec_ch_ua_platform_version_header) |hdr| {
             allocator.free(hdr);
         }
         if (self.user_agent.ptr != user_agent_base.ptr) {
@@ -923,6 +983,12 @@ fn testChimeraAuthority(requires_curl_impersonate: bool) ChimeraAuthority {
                 .sec_ch_ua = "\"Chromium\";v=\"136\"",
                 .sec_ch_ua_mobile = "?0",
                 .sec_ch_ua_platform = "\"macOS\"",
+                .sec_ch_ua_full_version = "\"136.0.0.0\"",
+                .sec_ch_ua_full_version_list = "\"Chromium\";v=\"136.0.0.0\"",
+                .sec_ch_ua_arch = "\"arm\"",
+                .sec_ch_ua_bitness = "\"64\"",
+                .sec_ch_ua_model = "\"\"",
+                .sec_ch_ua_platform_version = "\"15.0.0\"",
             },
             .navigator = .{
                 .platform = "MacIntel",
@@ -950,6 +1016,13 @@ fn testChimeraAuthority(requires_curl_impersonate: bool) ChimeraAuthority {
             .plugins = .{ .pdf_enabled = true },
             .canvas = .{ .enabled = true, .seed = 111 },
             .audio = .{ .enabled = true, .seed = 222 },
+            .webgl = .{
+                .enabled = true,
+                .vendor = "Google Inc. (Apple)",
+                .renderer = "ANGLE (Apple, ANGLE Metal Renderer: Apple M-series, Unspecified Version)",
+            },
+            .webrtc = .{ .enabled = false, .exit_ip = null },
+            .storage = .{ .quota_bytes = 5 * 1024 * 1024 * 1024, .usage_bytes = 0 },
             .transport = .{
                 .impersonate_target = "chrome136",
                 .requires_curl_impersonate = requires_curl_impersonate,

@@ -27,8 +27,10 @@ const PluginArray = @import("PluginArray.zig");
 const MimeTypeArray = PluginArray.MimeTypeArray;
 const Permissions = @import("Permissions.zig");
 const StorageManager = @import("StorageManager.zig");
+const DeprecatedStorageQuota = @import("DeprecatedStorageQuota.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const ModelContext = @import("ModelContext.zig");
+const Geolocation = @import("Geolocation.zig");
 const ChimeraProfile = @import("../../chimera/Profile.zig");
 
 const Navigator = @This();
@@ -37,7 +39,10 @@ _plugins: PluginArray = .{},
 _mime_types: MimeTypeArray = .{},
 _permissions: Permissions = .{},
 _storage: StorageManager = .{},
+_webkit_temporary_storage: DeprecatedStorageQuota = .{},
+_webkit_persistent_storage: DeprecatedStorageQuota = .{},
 _ua_data: NavigatorUAData = .{},
+_geolocation: Geolocation = .{},
 
 pub const init: Navigator = .{};
 const default_languages = [_][]const u8{ "en-US", "en" };
@@ -188,8 +193,20 @@ pub fn getStorage(self: *Navigator) *StorageManager {
     return &self._storage;
 }
 
+pub fn getWebkitTemporaryStorage(self: *Navigator) *DeprecatedStorageQuota {
+    return &self._webkit_temporary_storage;
+}
+
+pub fn getWebkitPersistentStorage(self: *Navigator) *DeprecatedStorageQuota {
+    return &self._webkit_persistent_storage;
+}
+
 pub fn getUserAgentData(self: *Navigator) *NavigatorUAData {
     return &self._ua_data;
+}
+
+pub fn getGeolocation(self: *Navigator) *Geolocation {
+    return &self._geolocation;
 }
 
 pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
@@ -302,10 +319,13 @@ pub const JsApi = struct {
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
+    pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
 
     // window only
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });
     pub const mimeTypes = bridge.accessor(Navigator.getMimeTypes, null, .{ .exposed = .window });
+    pub const webkitTemporaryStorage = bridge.accessor(Navigator.getWebkitTemporaryStorage, null, .{ .exposed = .window });
+    pub const webkitPersistentStorage = bridge.accessor(Navigator.getWebkitPersistentStorage, null, .{ .exposed = .window });
     pub const modelContext = bridge.accessor(Navigator.getModelContext, null, .{ .exposed = .window });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true, .exposed = .window });
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true, .exposed = .window });
