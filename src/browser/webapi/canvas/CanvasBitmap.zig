@@ -26,6 +26,55 @@ pub const FilledRect = struct {
     }
 };
 
+pub const StrokedRect = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    line_width: f64,
+    rgba: color.RGBA,
+
+    pub fn init(x: f64, y: f64, width: f64, height: f64, line_width: f64, rgba: color.RGBA) ?StrokedRect {
+        if (!finite(x) or !finite(y) or !finite(width) or !finite(height)) return null;
+        if (!finite(line_width) or line_width <= 0) return null;
+        return .{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = height,
+            .line_width = line_width,
+            .rgba = rgba,
+        };
+    }
+
+    fn contains(self: StrokedRect, x: i64, y: i64) bool {
+        const xf = @as(f64, @floatFromInt(x)) + 0.5;
+        const yf = @as(f64, @floatFromInt(y)) + 0.5;
+        const left = @min(self.x, self.x + self.width);
+        const right = @max(self.x, self.x + self.width);
+        const top = @min(self.y, self.y + self.height);
+        const bottom = @max(self.y, self.y + self.height);
+        const half = self.line_width / 2.0;
+        const in_outer = xf >= left - half and
+            xf < right + half and
+            yf >= top - half and
+            yf < bottom + half;
+        if (!in_outer) return false;
+
+        const inner_left = left + half;
+        const inner_right = right - half;
+        const inner_top = top + half;
+        const inner_bottom = bottom - half;
+        const has_inner = inner_left < inner_right and inner_top < inner_bottom;
+        const in_inner = has_inner and
+            xf >= inner_left and
+            xf < inner_right and
+            yf >= inner_top and
+            yf < inner_bottom;
+        return !in_inner;
+    }
+};
+
 pub const FilledPath = struct {
     path: CanvasPath,
     rgba: color.RGBA,
@@ -48,12 +97,14 @@ pub const FilledPath = struct {
 
 pub const Paint = union(enum) {
     rect: FilledRect,
+    stroke_rect: StrokedRect,
     path: FilledPath,
     image: ImagePatch,
 
     fn pixelAt(self: *const Paint, x: i64, y: i64) ?color.RGBA {
         return switch (self.*) {
             .rect => |rect| if (rect.contains(x, y)) rect.rgba else null,
+            .stroke_rect => |rect| if (rect.contains(x, y)) rect.rgba else null,
             .path => |path| if (path.contains(x, y)) path.rgba else null,
             .image => |image| image.pixelAt(x, y),
         };
@@ -93,6 +144,12 @@ pub const PaintStack = struct {
 
     pub fn appendRect(self: *PaintStack, rect: FilledRect) void {
         self.append(.{ .rect = rect });
+    }
+
+    pub fn appendStrokeRect(self: *PaintStack, x: f64, y: f64, width: f64, height: f64, line_width: f64, rgba: color.RGBA) void {
+        if (StrokedRect.init(x, y, width, height, line_width, rgba)) |rect| {
+            self.append(.{ .stroke_rect = rect });
+        }
     }
 
     pub fn appendText(self: *PaintStack, text: []const u8, x: f64, y: f64, max_width: ?f64, rgba: color.RGBA, font: []const u8) void {
@@ -257,6 +314,10 @@ pub fn isValidFont(font: []const u8) bool {
 
 pub fn fontPixelSize(font: []const u8) f64 {
     return parsedFontPixelSize(font) orelse 10.0;
+}
+
+pub fn isValidLineWidth(value: f64) bool {
+    return finite(value) and value > 0;
 }
 
 pub fn textWidth(text: []const u8, font: []const u8) f64 {
@@ -562,6 +623,21 @@ test "CanvasBitmap text filled rect respects max width" {
     try testing.expect(rect.height > 1);
     try testing.expect(rect.contains(5, 12));
     try testing.expect(!rect.contains(12, 12));
+}
+
+test "CanvasBitmap stroke rect paints outline only" {
+    var stack = PaintStack{};
+    const blue = color.RGBA{ .r = 0, .g = 51, .b = 255, .a = 255 };
+
+    stack.appendStrokeRect(4, 4, 8, 6, 2, blue);
+
+    try testing.expectEqual(blue, paintStackPixelAt(&stack, 4, 4, 0));
+    try testing.expectEqual(blue, paintStackPixelAt(&stack, 11, 9, 0));
+    try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&stack, 8, 7, 0));
+    try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&stack, 20, 20, 0));
+
+    stack.appendStrokeRect(0, 0, 10, 10, 0, blue);
+    try testing.expectEqual(@as(usize, 1), stack.count);
 }
 
 test "CanvasBitmap image patch copies dirty pixels and rejects overflowing bounds" {

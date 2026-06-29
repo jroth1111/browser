@@ -34,6 +34,27 @@
 }
 </script>
 
+<script id=CanvasRenderingContext2D#strokeStyle-and-lineWidth>
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  testing.expectEqual(ctx.strokeStyle, "#000000");
+  ctx.strokeStyle = "#03f";
+  testing.expectEqual(ctx.strokeStyle, "#0033ff");
+  ctx.strokeStyle = "invalid-color";
+  testing.expectEqual(ctx.strokeStyle, "#0033ff");
+
+  testing.expectEqual(1, ctx.lineWidth);
+  ctx.lineWidth = 2;
+  testing.expectEqual(2, ctx.lineWidth);
+  ctx.lineWidth = -10;
+  testing.expectEqual(2, ctx.lineWidth);
+  ctx.lineWidth = Number.POSITIVE_INFINITY;
+  testing.expectEqual(2, ctx.lineWidth);
+}
+</script>
+
 <script id="CanvasRenderingContext2D#createImageData(width, height)">
 {
   const element = document.createElement("canvas");
@@ -161,6 +182,29 @@
   testing.expectEqual(0, cleared[1]);
   testing.expectEqual(0, cleared[2]);
   testing.expectEqual(0, cleared[3]);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#strokeRect">
+{
+  const element = document.createElement("canvas");
+  element.width = 16;
+  element.height = 16;
+  const ctx = element.getContext("2d");
+
+  ctx.strokeStyle = "#0033ff";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(4, 4, 8, 6);
+
+  const edge = ctx.getImageData(4, 4, 1, 1).data;
+  const center = ctx.getImageData(8, 7, 1, 1).data;
+  const outside = ctx.getImageData(14, 14, 1, 1).data;
+  testing.expectEqual(0, edge[0]);
+  testing.expectEqual(51, edge[1]);
+  testing.expectEqual(255, edge[2]);
+  testing.expectEqual(255, edge[3]);
+  testing.expectEqual(0, center[3]);
+  testing.expectEqual(0, outside[3]);
 }
 </script>
 

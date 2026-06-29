@@ -105,6 +105,27 @@
 }
 </script>
 
+<script id=OffscreenCanvasRenderingContext2D#strokeRect>
+{
+  const canvas = new OffscreenCanvas(16, 16);
+  const ctx = canvas.getContext("2d");
+
+  ctx.strokeStyle = "#0033ff";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(4, 4, 8, 6);
+
+  const edge = ctx.getImageData(4, 4, 1, 1).data;
+  const center = ctx.getImageData(8, 7, 1, 1).data;
+  const outside = ctx.getImageData(14, 14, 1, 1).data;
+  testing.expectEqual(0, edge[0]);
+  testing.expectEqual(51, edge[1]);
+  testing.expectEqual(255, edge[2]);
+  testing.expectEqual(255, edge[3]);
+  testing.expectEqual(0, center[3]);
+  testing.expectEqual(0, outside[3]);
+}
+</script>
+
 <script id=OffscreenCanvasRenderingContext2D#putImageData>
 {
   const canvas = new OffscreenCanvas(32, 32);

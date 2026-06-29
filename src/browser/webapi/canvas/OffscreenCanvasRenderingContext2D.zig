@@ -38,6 +38,8 @@ _canvas: *OffscreenCanvas,
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
+_stroke_style: color.RGBA = color.RGBA.Named.black,
+_line_width: f64 = 1.0,
 _font: []const u8 = CanvasBitmap.default_font,
 _paint_stack: CanvasBitmap.PaintStack = .{},
 _path: CanvasPath = .{},
@@ -58,6 +60,29 @@ pub fn setFillStyle(
 ) !void {
     // Prefer the same fill_style if fails.
     self._fill_style = color.RGBA.parse(value) catch self._fill_style;
+}
+
+pub fn getStrokeStyle(self: *const OffscreenCanvasRenderingContext2D, exec: *Execution) ![]const u8 {
+    var w = std.Io.Writer.Allocating.init(exec.call_arena);
+    try self._stroke_style.format(&w.writer);
+    return w.written();
+}
+
+pub fn setStrokeStyle(
+    self: *OffscreenCanvasRenderingContext2D,
+    value: []const u8,
+) !void {
+    self._stroke_style = color.RGBA.parse(value) catch self._stroke_style;
+}
+
+pub fn getLineWidth(self: *const OffscreenCanvasRenderingContext2D) f64 {
+    return self._line_width;
+}
+
+pub fn setLineWidth(self: *OffscreenCanvasRenderingContext2D, value: f64) void {
+    if (CanvasBitmap.isValidLineWidth(value)) {
+        self._line_width = value;
+    }
 }
 
 pub fn getFont(self: *const OffscreenCanvasRenderingContext2D) []const u8 {
@@ -166,7 +191,6 @@ pub fn translate(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn setStrokeStyle(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
 pub fn clearRect(self: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
     self._paint_stack.clear();
 }
@@ -181,7 +205,9 @@ pub fn fillRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width:
         .rgba = self._fill_style,
     });
 }
-pub fn strokeRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+pub fn strokeRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._paint_stack.appendStrokeRect(x, y, width, height, self._line_width, self._stroke_style);
+}
 pub fn beginPath(self: *OffscreenCanvasRenderingContext2D) void {
     self._path.begin();
 }
@@ -253,8 +279,8 @@ pub const JsApi = struct {
     pub const font = bridge.accessor(OffscreenCanvasRenderingContext2D.getFont, OffscreenCanvasRenderingContext2D.setFont, .{});
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
-    pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
-    pub const lineWidth = bridge.property(1.0, .{ .template = false, .readonly = false });
+    pub const strokeStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getStrokeStyle, OffscreenCanvasRenderingContext2D.setStrokeStyle, .{});
+    pub const lineWidth = bridge.accessor(OffscreenCanvasRenderingContext2D.getLineWidth, OffscreenCanvasRenderingContext2D.setLineWidth, .{});
     pub const lineCap = bridge.property("butt", .{ .template = false, .readonly = false });
     pub const lineJoin = bridge.property("miter", .{ .template = false, .readonly = false });
     pub const miterLimit = bridge.property(10.0, .{ .template = false, .readonly = false });
@@ -276,7 +302,7 @@ pub const JsApi = struct {
     pub const resetTransform = bridge.function(OffscreenCanvasRenderingContext2D.resetTransform, .{ .noop = true });
     pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{});
     pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{});
-    pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{ .noop = true });
+    pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{});
     pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{});
     pub const closePath = bridge.function(OffscreenCanvasRenderingContext2D.closePath, .{ .noop = true });
     pub const moveTo = bridge.function(OffscreenCanvasRenderingContext2D.moveTo, .{ .noop = true });
