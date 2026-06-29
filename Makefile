@@ -126,12 +126,12 @@ run-debug: build-dev
 ## Test - `grep` is used to filter out the huge compile command on build
 ifeq ($(OS), macos)
 test:
-	@script -q /dev/null sh -c 'TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace' 2>&1 \
-		| grep --line-buffered -v "^/.*zig test -freference-trace"
+	@bash -c 'script -q /dev/null sh -c '\''TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace'\'' 2>&1 \
+		| grep --line-buffered -v "^/.*zig test -freference-trace"; exit $${PIPESTATUS[0]}'
 else
 test:
-	@script -qec 'TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace' /dev/null 2>&1 \
-		| grep --line-buffered -v "^/.*zig test -freference-trace"
+	@bash -c 'script -qec '\''TEST_FILTER="${F}" $(ZIG) build $(ZIGFLAGS) test -freference-trace'\'' /dev/null 2>&1 \
+		| grep --line-buffered -v "^/.*zig test -freference-trace"; exit $${PIPESTATUS[0]}'
 endif
 
 ## Run Chimera managed-profile unit tests without a built V8 artifact
