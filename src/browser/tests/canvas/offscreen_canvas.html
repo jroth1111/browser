@@ -117,6 +117,38 @@
 }
 </script>
 
+<script id=OffscreenCanvasRenderingContext2D#transform-backed-paint>
+{
+  const canvas = new OffscreenCanvas(24, 24);
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#00aa00";
+  ctx.translate(4, 3);
+  ctx.fillRect(0, 0, 2, 2);
+  const translated = ctx.getImageData(4, 3, 1, 1).data;
+  const original = ctx.getImageData(0, 0, 1, 1).data;
+  testing.expectEqual(true, translated[1] >= 120);
+  testing.expectEqual(true, translated[3] >= 200);
+  testing.expectEqual(0, original[3]);
+
+  ctx.setTransform(2, 0, 0, 2, 0, 0);
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(5, 5, 2, 2);
+  const scaled = ctx.getImageData(10, 10, 1, 1).data;
+  const unscaled = ctx.getImageData(5, 5, 1, 1).data;
+  testing.expectEqual(true, scaled[0] >= 200);
+  testing.expectEqual(true, scaled[3] >= 200);
+  testing.expectEqual(0, unscaled[3]);
+
+  ctx.resetTransform();
+  ctx.fillStyle = "#0000ff";
+  ctx.fillRect(1, 1, 1, 1);
+  const reset = ctx.getImageData(1, 1, 1, 1).data;
+  testing.expectEqual(true, reset[2] >= 200);
+  testing.expectEqual(true, reset[3] >= 200);
+}
+</script>
+
 <script id=OffscreenCanvasRenderingContext2D#strokeRect>
 {
   const canvas = new OffscreenCanvas(16, 16);
@@ -135,6 +167,34 @@
   testing.expectEqual(255, edge[3]);
   testing.expectEqual(0, center[3]);
   testing.expectEqual(0, outside[3]);
+}
+</script>
+
+<script id=OffscreenCanvasRenderingContext2D#transform-paint>
+{
+  const canvas = new OffscreenCanvas(16, 16);
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#ff0000";
+  ctx.translate(4, 3);
+  ctx.fillRect(0, 0, 2, 2);
+
+  const origin = ctx.getImageData(0, 0, 1, 1).data;
+  const translated = ctx.getImageData(4, 3, 1, 1).data;
+  testing.expectEqual(0, origin[3]);
+  testing.expectEqual(255, translated[0]);
+  testing.expectEqual(0, translated[1]);
+  testing.expectEqual(0, translated[2]);
+  testing.expectEqual(255, translated[3]);
+
+  ctx.resetTransform();
+  ctx.fillStyle = "#0000ff";
+  ctx.fillRect(0, 0, 1, 1);
+  const reset = ctx.getImageData(0, 0, 1, 1).data;
+  testing.expectEqual(0, reset[0]);
+  testing.expectEqual(0, reset[1]);
+  testing.expectEqual(255, reset[2]);
+  testing.expectEqual(255, reset[3]);
 }
 </script>
 

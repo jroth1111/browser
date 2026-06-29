@@ -9,6 +9,114 @@ pub const max_paint_ops = 32;
 pub const png_signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
 pub const default_font = "10px sans-serif";
 
+pub const Transform = struct {
+    a: f64 = 1.0,
+    b: f64 = 0.0,
+    c: f64 = 0.0,
+    d: f64 = 1.0,
+    e: f64 = 0.0,
+    f: f64 = 0.0,
+
+    pub fn translate(self: *Transform, x: f64, y: f64) void {
+        self.multiply(.{ .e = x, .f = y });
+    }
+
+    pub fn scale(self: *Transform, x: f64, y: f64) void {
+        self.multiply(.{ .a = x, .d = y });
+    }
+
+    pub fn rotate(self: *Transform, angle: f64) void {
+        if (!finite(angle)) return;
+        const cos = @cos(angle);
+        const sin = @sin(angle);
+        self.multiply(.{ .a = cos, .b = sin, .c = -sin, .d = cos });
+    }
+
+    pub fn transform(self: *Transform, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) void {
+        self.multiply(.{ .a = a, .b = b, .c = c, .d = d, .e = e, .f = f });
+    }
+
+    pub fn set(self: *Transform, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) void {
+        const next = Transform{ .a = a, .b = b, .c = c, .d = d, .e = e, .f = f };
+        if (!next.valid()) return;
+        self.* = next;
+    }
+
+    pub fn reset(self: *Transform) void {
+        self.* = .{};
+    }
+
+    pub fn rect(self: Transform, x: f64, y: f64, width: f64, height: f64) ?RectBounds {
+        if (!finite(x) or !finite(y) or !finite(width) or !finite(height)) return null;
+        if (width == 0 or height == 0) return null;
+        const p0 = self.point(x, y);
+        const p1 = self.point(x + width, y);
+        const p2 = self.point(x, y + height);
+        const p3 = self.point(x + width, y + height);
+        const left = @min(@min(p0.x, p1.x), @min(p2.x, p3.x));
+        const right = @max(@max(p0.x, p1.x), @max(p2.x, p3.x));
+        const top = @min(@min(p0.y, p1.y), @min(p2.y, p3.y));
+        const bottom = @max(@max(p0.y, p1.y), @max(p2.y, p3.y));
+        if (!finite(left) or !finite(right) or !finite(top) or !finite(bottom)) return null;
+        if (left == right or top == bottom) return null;
+        return .{ .x = left, .y = top, .width = right - left, .height = bottom - top };
+    }
+
+    pub fn filledRect(self: Transform, rect_in: FilledRect) ?FilledRect {
+        const bounds = self.rect(rect_in.x, rect_in.y, rect_in.width, rect_in.height) orelse return null;
+        return .{
+            .x = bounds.x,
+            .y = bounds.y,
+            .width = bounds.width,
+            .height = bounds.height,
+            .rgba = rect_in.rgba,
+        };
+    }
+
+    pub fn strokeScale(self: Transform) f64 {
+        const x_scale = @sqrt(self.a * self.a + self.b * self.b);
+        const y_scale = @sqrt(self.c * self.c + self.d * self.d);
+        return @max(x_scale, y_scale);
+    }
+
+    fn multiply(self: *Transform, other: Transform) void {
+        if (!other.valid() or !self.valid()) return;
+        const next = Transform{
+            .a = self.a * other.a + self.c * other.b,
+            .b = self.b * other.a + self.d * other.b,
+            .c = self.a * other.c + self.c * other.d,
+            .d = self.b * other.c + self.d * other.d,
+            .e = self.a * other.e + self.c * other.f + self.e,
+            .f = self.b * other.e + self.d * other.f + self.f,
+        };
+        if (next.valid()) self.* = next;
+    }
+
+    fn valid(self: Transform) bool {
+        return finite(self.a) and finite(self.b) and finite(self.c) and
+            finite(self.d) and finite(self.e) and finite(self.f);
+    }
+
+    fn point(self: Transform, x: f64, y: f64) Point {
+        return .{
+            .x = self.a * x + self.c * y + self.e,
+            .y = self.b * x + self.d * y + self.f,
+        };
+    }
+};
+
+pub const RectBounds = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
+const Point = struct {
+    x: f64,
+    y: f64,
+};
+
 pub const FilledRect = struct {
     x: f64,
     y: f64,
@@ -692,6 +800,26 @@ test "CanvasBitmap clear rect overrides only covered pixels" {
 
     stack.appendClearRect(0, 0, 10, 10);
     try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&stack, 1, 1, 0));
+}
+
+test "CanvasBitmap transform maps simple rect bounds" {
+    var translated = Transform{};
+    translated.translate(4, 3);
+    const red = color.RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    const moved = translated.filledRect(.{ .x = 0, .y = 0, .width = 2, .height = 2, .rgba = red }).?;
+
+    try testing.expectEqual(@as(f64, 4.0), moved.x);
+    try testing.expectEqual(@as(f64, 3.0), moved.y);
+    try testing.expectEqual(@as(f64, 2.0), moved.width);
+    try testing.expectEqual(@as(f64, 2.0), moved.height);
+
+    var scaled = Transform{};
+    scaled.scale(2, 3);
+    const expanded = scaled.rect(2, 4, 3, 2).?;
+    try testing.expectEqual(@as(f64, 4.0), expanded.x);
+    try testing.expectEqual(@as(f64, 12.0), expanded.y);
+    try testing.expectEqual(@as(f64, 6.0), expanded.width);
+    try testing.expectEqual(@as(f64, 6.0), expanded.height);
 }
 
 test "CanvasBitmap image patch copies dirty pixels and rejects overflowing bounds" {

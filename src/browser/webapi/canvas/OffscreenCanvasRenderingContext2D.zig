@@ -43,6 +43,7 @@ _line_width: f64 = 1.0,
 _font: []const u8 = CanvasBitmap.default_font,
 _paint_stack: CanvasBitmap.PaintStack = .{},
 _path: CanvasPath = .{},
+_transform: CanvasBitmap.Transform = .{},
 
 pub fn getCanvas(self: *const OffscreenCanvasRenderingContext2D) *OffscreenCanvas {
     return self._canvas;
@@ -185,28 +186,45 @@ pub fn getImageData(
 
 pub fn save(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn restore(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn scale(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
-pub fn rotate(_: *OffscreenCanvasRenderingContext2D, _: f64) void {}
-pub fn translate(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
-pub fn transform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
+pub fn scale(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64) void {
+    self._transform.scale(x, y);
+}
+pub fn rotate(self: *OffscreenCanvasRenderingContext2D, angle: f64) void {
+    self._transform.rotate(angle);
+}
+pub fn translate(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64) void {
+    self._transform.translate(x, y);
+}
+pub fn transform(self: *OffscreenCanvasRenderingContext2D, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) void {
+    self._transform.transform(a, b, c, d, e, f);
+}
+pub fn setTransform(self: *OffscreenCanvasRenderingContext2D, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) void {
+    self._transform.set(a, b, c, d, e, f);
+}
+pub fn resetTransform(self: *OffscreenCanvasRenderingContext2D) void {
+    self._transform.reset();
+}
 pub fn clearRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
-    self._paint_stack.appendClearRect(x, y, width, height);
+    if (self._transform.rect(x, y, width, height)) |bounds| {
+        self._paint_stack.appendClearRect(bounds.x, bounds.y, bounds.width, bounds.height);
+    }
 }
 
 pub fn fillRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     if (width <= 0 or height <= 0) return;
-    self._paint_stack.appendRect(.{
+    const transformed_rect = self._transform.filledRect(.{
         .x = x,
         .y = y,
         .width = width,
         .height = height,
         .rgba = self._fill_style,
-    });
+    }) orelse return;
+    self._paint_stack.appendRect(transformed_rect);
 }
 pub fn strokeRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
-    self._paint_stack.appendStrokeRect(x, y, width, height, self._line_width, self._stroke_style);
+    if (self._transform.rect(x, y, width, height)) |bounds| {
+        self._paint_stack.appendStrokeRect(bounds.x, bounds.y, bounds.width, bounds.height, self._line_width * self._transform.strokeScale(), self._stroke_style);
+    }
 }
 pub fn beginPath(self: *OffscreenCanvasRenderingContext2D) void {
     self._path.begin();
@@ -219,7 +237,9 @@ pub fn bezierCurveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f
 pub fn arc(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
 pub fn arcTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn rect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
-    self._path.rect(x, y, width, height);
+    if (self._transform.rect(x, y, width, height)) |bounds| {
+        self._path.rect(bounds.x, bounds.y, bounds.width, bounds.height);
+    }
 }
 pub fn fill(self: *OffscreenCanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void {
     self._paint_stack.appendPath(self._path, self._fill_style, maybe_fill_rule);
@@ -227,10 +247,16 @@ pub fn fill(self: *OffscreenCanvasRenderingContext2D, maybe_fill_rule: ?[]const 
 pub fn stroke(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn fillText(self: *OffscreenCanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
-    self._paint_stack.appendText(text, x, y, max_width, self._fill_style, self._font);
+    const text_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font) orelse return;
+    if (self._transform.filledRect(text_rect)) |transformed| {
+        self._paint_stack.appendRect(transformed);
+    }
 }
 pub fn strokeText(self: *OffscreenCanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
-    self._paint_stack.appendText(text, x, y, max_width, self._fill_style, self._font);
+    const text_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font) orelse return;
+    if (self._transform.filledRect(text_rect)) |transformed| {
+        self._paint_stack.appendRect(transformed);
+    }
 }
 pub fn measureText(self: *const OffscreenCanvasRenderingContext2D, text: []const u8, exec: *Execution) !*TextMetrics {
     const font_size = CanvasBitmap.fontPixelSize(self._font);
@@ -294,12 +320,12 @@ pub const JsApi = struct {
     pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
     pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{ .noop = true });
-    pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{ .noop = true });
-    pub const rotate = bridge.function(OffscreenCanvasRenderingContext2D.rotate, .{ .noop = true });
-    pub const translate = bridge.function(OffscreenCanvasRenderingContext2D.translate, .{ .noop = true });
-    pub const transform = bridge.function(OffscreenCanvasRenderingContext2D.transform, .{ .noop = true });
-    pub const setTransform = bridge.function(OffscreenCanvasRenderingContext2D.setTransform, .{ .noop = true });
-    pub const resetTransform = bridge.function(OffscreenCanvasRenderingContext2D.resetTransform, .{ .noop = true });
+    pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{});
+    pub const rotate = bridge.function(OffscreenCanvasRenderingContext2D.rotate, .{});
+    pub const translate = bridge.function(OffscreenCanvasRenderingContext2D.translate, .{});
+    pub const transform = bridge.function(OffscreenCanvasRenderingContext2D.transform, .{});
+    pub const setTransform = bridge.function(OffscreenCanvasRenderingContext2D.setTransform, .{});
+    pub const resetTransform = bridge.function(OffscreenCanvasRenderingContext2D.resetTransform, .{});
     pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{});
     pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{});
     pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{});
