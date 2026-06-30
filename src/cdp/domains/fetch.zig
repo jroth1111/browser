@@ -274,7 +274,7 @@ fn continueRequest(cmd: *CDP.Command) !void {
         request.headers.deinit();
 
         var buf: std.ArrayList(u8) = .empty;
-        var new_headers = try bc.cdp.browser.http_client.newHeaders();
+        var new_headers = try bc.cdp.browser.http_client.newHeadersForUrl(request.url);
         for (headers) |hdr| {
             defer buf.clearRetainingCapacity();
             try std.fmt.format(buf.writer(cmd.arena), "{s}: {s}", .{ hdr.name, hdr.value });

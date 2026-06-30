@@ -118,7 +118,7 @@ fn startFetchRequest(self: *Fetch) !void {
     const exec = self._exec;
     const session = exec.session;
     const http_client = &session.browser.http_client;
-    var headers = try http_client.newHeaders();
+    var headers = try http_client.newHeadersForUrl(self._url);
     if (self._request_headers) |h| {
         if (self._mode == .@"no-cors") {
             try Cors.populateNoCorsSafelistedHttpHeaders(h, self._response._arena, &headers);

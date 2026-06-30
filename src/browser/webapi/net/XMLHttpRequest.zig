@@ -275,7 +275,7 @@ fn startXhrRequest(self: *XMLHttpRequest) !void {
     const request_is_cross_origin = !exec.isSameOrigin(self._url);
     const session = exec.session;
     const http_client = &session.browser.http_client;
-    var headers = try http_client.newHeaders();
+    var headers = try http_client.newHeadersForUrl(self._url);
 
     // Only add cookies for same-origin or when withCredentials is true
     const cookie_support = self._with_credentials or !request_is_cross_origin;

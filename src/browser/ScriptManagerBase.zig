@@ -193,7 +193,7 @@ pub fn getSubresourceHeaders(
     mode: []const u8,
     dest: []const u8,
 ) !http.Headers {
-    var headers = try self.client.newHeaders();
+    var headers = try self.client.newHeadersForUrl(request_url);
     try self.owner.addSubresourceHeaders(&headers, allocator, request_url, mode, dest);
     return headers;
 }

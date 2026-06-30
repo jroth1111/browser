@@ -417,6 +417,95 @@ test "cdp.Emulation: Chimera authority navigation sends low entropy client hints
     try testing.expect(!snapshot.high_entropy_client_hint_present);
 }
 
+test "cdp.Emulation: Accept-CH enables high entropy client hints for same origin" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-UA9" });
+    var guard = try ctx.enableManagedAuthority(testing.managedAuthority());
+    defer guard.deinit();
+
+    const opt_in_page = try bc.session.createPage();
+    try opt_in_page.navigate("http://127.0.0.1:9585/client-hints/accept-ch/high-entropy", .{});
+    var opt_in_runner = bc.session.runner(.{});
+    try opt_in_runner.waitForFrame(opt_in_page.frame_id, 2000, .{ .until = .done });
+    opt_in_page.close();
+
+    testing.resetNavigationHeaderSnapshot();
+    const record_page = try bc.session.createPage();
+    try record_page.navigate("http://127.0.0.1:9585/cors/record-navigation-headers", .{});
+    var record_runner = bc.session.runner(.{});
+    try record_runner.waitForFrame(record_page.frame_id, 2000, .{ .until = .done });
+
+    const snapshot = testing.navigationHeaderSnapshot();
+    try testing.expect(snapshot.seen);
+    try testing.expect(snapshot.sec_ch_ua_profile);
+    try testing.expect(snapshot.sec_ch_ua_mobile_profile);
+    try testing.expect(snapshot.sec_ch_ua_platform_profile);
+    try testing.expect(snapshot.high_entropy_client_hint_present);
+    try testing.expect(snapshot.high_entropy_full_version_list_profile);
+    try testing.expect(snapshot.high_entropy_platform_version_profile);
+    try testing.expect(!snapshot.unexpected_high_entropy_client_hint_present);
+}
+
+test "cdp.Emulation: Accept-CH high entropy does not leak to another origin" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-UA10" });
+    var guard = try ctx.enableManagedAuthority(testing.managedAuthority());
+    defer guard.deinit();
+
+    const opt_in_page = try bc.session.createPage();
+    try opt_in_page.navigate("http://127.0.0.1:9585/client-hints/accept-ch/high-entropy", .{});
+    var opt_in_runner = bc.session.runner(.{});
+    try opt_in_runner.waitForFrame(opt_in_page.frame_id, 2000, .{ .until = .done });
+    opt_in_page.close();
+
+    testing.resetNavigationHeaderSnapshot();
+    const record_page = try bc.session.createPage();
+    try record_page.navigate("http://127.0.0.1:9582/cors/record-navigation-headers", .{});
+    var record_runner = bc.session.runner(.{});
+    try record_runner.waitForFrame(record_page.frame_id, 2000, .{ .until = .done });
+
+    const snapshot = testing.navigationHeaderSnapshot();
+    try testing.expect(snapshot.seen);
+    try testing.expect(snapshot.sec_ch_ua_profile);
+    try testing.expect(snapshot.sec_ch_ua_mobile_profile);
+    try testing.expect(snapshot.sec_ch_ua_platform_profile);
+    try testing.expect(!snapshot.high_entropy_client_hint_present);
+}
+
+test "cdp.Emulation: low entropy Accept-CH response clears high entropy opt in" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-UA11" });
+    var guard = try ctx.enableManagedAuthority(testing.managedAuthority());
+    defer guard.deinit();
+
+    const opt_in_page = try bc.session.createPage();
+    try opt_in_page.navigate("http://127.0.0.1:9585/client-hints/accept-ch/high-entropy", .{});
+    var opt_in_runner = bc.session.runner(.{});
+    try opt_in_runner.waitForFrame(opt_in_page.frame_id, 2000, .{ .until = .done });
+    opt_in_page.close();
+    const reset_page = try bc.session.createPage();
+    try reset_page.navigate("http://127.0.0.1:9585/client-hints/accept-ch/low-entropy-only", .{});
+    var reset_runner = bc.session.runner(.{});
+    try reset_runner.waitForFrame(reset_page.frame_id, 2000, .{ .until = .done });
+    reset_page.close();
+
+    testing.resetNavigationHeaderSnapshot();
+    const record_page = try bc.session.createPage();
+    try record_page.navigate("http://127.0.0.1:9585/cors/record-navigation-headers", .{});
+    var record_runner = bc.session.runner(.{});
+    try record_runner.waitForFrame(record_page.frame_id, 2000, .{ .until = .done });
+
+    const snapshot = testing.navigationHeaderSnapshot();
+    try testing.expect(snapshot.seen);
+    try testing.expect(snapshot.sec_ch_ua_profile);
+    try testing.expect(snapshot.sec_ch_ua_mobile_profile);
+    try testing.expect(snapshot.sec_ch_ua_platform_profile);
+    try testing.expect(!snapshot.high_entropy_client_hint_present);
+}
+
 test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     var ctx = try testing.context();
     defer ctx.deinit();

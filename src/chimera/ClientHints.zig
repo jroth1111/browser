@@ -29,12 +29,88 @@ pub const high_entropy_header_names = [_][]const u8{
     sec_ch_ua_platform_version_header_name,
 };
 
+pub const HighEntropyHeaderSet = struct {
+    full_version: bool = false,
+    full_version_list: bool = false,
+    arch: bool = false,
+    bitness: bool = false,
+    model: bool = false,
+    platform_version: bool = false,
+
+    pub fn all() HighEntropyHeaderSet {
+        return .{
+            .full_version = true,
+            .full_version_list = true,
+            .arch = true,
+            .bitness = true,
+            .model = true,
+            .platform_version = true,
+        };
+    }
+
+    pub fn any(self: HighEntropyHeaderSet) bool {
+        return self.full_version or
+            self.full_version_list or
+            self.arch or
+            self.bitness or
+            self.model or
+            self.platform_version;
+    }
+
+    pub fn merge(self: *HighEntropyHeaderSet, other: HighEntropyHeaderSet) void {
+        self.full_version = self.full_version or other.full_version;
+        self.full_version_list = self.full_version_list or other.full_version_list;
+        self.arch = self.arch or other.arch;
+        self.bitness = self.bitness or other.bitness;
+        self.model = self.model or other.model;
+        self.platform_version = self.platform_version or other.platform_version;
+    }
+
+    pub fn containsHeaderName(self: HighEntropyHeaderSet, name: []const u8) bool {
+        if (std.ascii.eqlIgnoreCase(name, sec_ch_ua_full_version_header_name)) return self.full_version;
+        if (std.ascii.eqlIgnoreCase(name, sec_ch_ua_full_version_list_header_name)) return self.full_version_list;
+        if (std.ascii.eqlIgnoreCase(name, sec_ch_ua_arch_header_name)) return self.arch;
+        if (std.ascii.eqlIgnoreCase(name, sec_ch_ua_bitness_header_name)) return self.bitness;
+        if (std.ascii.eqlIgnoreCase(name, sec_ch_ua_model_header_name)) return self.model;
+        if (std.ascii.eqlIgnoreCase(name, sec_ch_ua_platform_version_header_name)) return self.platform_version;
+        return false;
+    }
+};
+
 pub fn isHighEntropyHeaderName(name: []const u8) bool {
     return containsHeaderName(high_entropy_header_names[0..], name);
 }
 
 pub fn isLowEntropyHeaderName(name: []const u8) bool {
     return containsHeaderName(low_entropy_header_names[0..], name);
+}
+
+pub fn acceptChRequestsHighEntropy(value: []const u8) bool {
+    return highEntropyHeaderSetFromAcceptCH(value).any();
+}
+
+pub fn highEntropyHeaderSetFromAcceptCH(value: []const u8) HighEntropyHeaderSet {
+    var set = HighEntropyHeaderSet{};
+    var it = std.mem.splitScalar(u8, value, ',');
+    while (it.next()) |part| {
+        const item = std.mem.trim(u8, part, &std.ascii.whitespace);
+        const param_start = std.mem.indexOfScalar(u8, item, ';') orelse item.len;
+        const token = std.mem.trim(u8, item[0..param_start], "\" \t");
+        if (std.ascii.eqlIgnoreCase(token, sec_ch_ua_full_version_header_name)) {
+            set.full_version = true;
+        } else if (std.ascii.eqlIgnoreCase(token, sec_ch_ua_full_version_list_header_name)) {
+            set.full_version_list = true;
+        } else if (std.ascii.eqlIgnoreCase(token, sec_ch_ua_arch_header_name)) {
+            set.arch = true;
+        } else if (std.ascii.eqlIgnoreCase(token, sec_ch_ua_bitness_header_name)) {
+            set.bitness = true;
+        } else if (std.ascii.eqlIgnoreCase(token, sec_ch_ua_model_header_name)) {
+            set.model = true;
+        } else if (std.ascii.eqlIgnoreCase(token, sec_ch_ua_platform_version_header_name)) {
+            set.platform_version = true;
+        }
+    }
+    return set;
 }
 
 pub fn formatBrandListValue(allocator: Allocator, brands: []const Profile.Brand) ![]const u8 {
@@ -132,6 +208,20 @@ test "chimera.ClientHints classifies entropy-bearing headers" {
     try testing.expect(isHighEntropyHeaderName("sec-ch-ua-full-version-list"));
     try testing.expect(isHighEntropyHeaderName(sec_ch_ua_platform_version_header_name));
     try testing.expect(!isHighEntropyHeaderName(sec_ch_ua_platform_header_name));
+}
+
+test "chimera.ClientHints detects high-entropy Accept-CH requests" {
+    try testing.expect(!acceptChRequestsHighEntropy(""));
+    try testing.expect(!acceptChRequestsHighEntropy("Sec-CH-UA, Sec-CH-UA-Mobile"));
+    try testing.expect(acceptChRequestsHighEntropy("Sec-CH-UA-Full-Version-List, Sec-CH-UA-Platform"));
+    try testing.expect(acceptChRequestsHighEntropy("sec-ch-ua-platform-version"));
+    try testing.expect(acceptChRequestsHighEntropy("\"Sec-CH-UA-Arch\"; foo=bar"));
+
+    const set = highEntropyHeaderSetFromAcceptCH("Sec-CH-UA-Arch, Sec-CH-UA-Platform-Version");
+    try testing.expect(set.arch);
+    try testing.expect(set.platform_version);
+    try testing.expect(!set.full_version);
+    try testing.expect(!set.model);
 }
 
 test "chimera.ClientHints rejects unsafe structured string values" {

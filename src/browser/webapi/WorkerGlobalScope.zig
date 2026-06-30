@@ -389,7 +389,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
 
     const http_client = &session.browser.http_client;
 
-    var headers = try http_client.newHeaders();
+    var headers = try http_client.newHeadersForUrl(resolved_url);
     try self.headersForSubresourceRequest(&headers, arena, resolved_url, "no-cors", "script");
 
     const response = http_client.syncRequest(arena, .{

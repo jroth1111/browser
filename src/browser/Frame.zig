@@ -774,7 +774,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         .header = if (opts.header) |h| try self.arena.dupeZ(u8, h) else null,
     };
 
-    var headers = try http_client.newHeaders();
+    var headers = try http_client.newHeadersForUrl(self.url);
     try headers.add(lp.Config.HttpHeaders.navigation_accept);
     if (opts.header) |hdr| {
         try headers.add(hdr);
@@ -2133,7 +2133,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     };
 
     const http_client = &session.browser.http_client;
-    var headers = try http_client.newHeaders();
+    var headers = try http_client.newHeadersForUrl(resolved);
     try headers.add("Accept: text/css,*/*;q=0.1");
     try self.headersForSubresourceRequest(&headers, arena, resolved, "no-cors", "style");
 

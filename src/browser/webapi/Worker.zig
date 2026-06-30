@@ -101,7 +101,7 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         return self;
     }
 
-    var headers = try session.browser.http_client.newHeaders();
+    var headers = try session.browser.http_client.newHeadersForUrl(resolved_url);
     try frame.headersForSubresourceRequest(
         &headers,
         arena,

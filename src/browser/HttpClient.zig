@@ -364,6 +364,11 @@ language_override_items: ?[]const []const u8 = null,
 navigator_platform_override: ?[:0]const u8 = null,
 ua_data_override: ?UADataOverride = null,
 
+// Session-scoped Client Hints opt-ins learned from response Accept-CH headers.
+// High-entropy values stay off by default and are only sent back to the exact
+// HTTP(S) origin that requested them.
+high_entropy_client_hint_origins: std.StringHashMapUnmanaged(ClientHints.HighEntropyHeaderSet) = .empty,
+
 // The CDP layer we dispatch inbox messages to. Set in CDP.init for
 // `serve` mode; null in all other modes. Since this is set early, BEFORE the
 // CDP socket is registered with the network thread, we also have the
@@ -496,6 +501,7 @@ pub fn deinit(self: *Client) void {
     if (self.http_proxy_owned) |owned| {
         self.allocator.free(owned);
     }
+    self.clearHighEntropyClientHintOrigins();
 
     self.robots_layer.deinit(self.allocator);
     self.deferring_layer.deinit();
@@ -657,12 +663,21 @@ pub fn changeProxy(self: *Client, proxy: ?[:0]const u8) !void {
 }
 
 pub fn newHeaders(self: *const Client) !http.Headers {
+    return self.newHeadersWithHighEntropy(.{});
+}
+
+pub fn newHeadersForUrl(self: *const Client, request_url: [:0]const u8) !http.Headers {
+    return self.newHeadersWithHighEntropy(self.highEntropyClientHintsForUrl(request_url));
+}
+
+fn newHeadersWithHighEntropy(self: *const Client, high_entropy_client_hints: ClientHints.HighEntropyHeaderSet) !http.Headers {
     const ua_header = self.user_agent_header_override orelse self.network.config.http_headers.user_agent_header;
     const ua_data = if (self.ua_data_override) |*value| value else null;
     return http.Headers.initBrowserWithOverrides(&self.network.config.http_headers, .{
         .user_agent_header = ua_header,
         .accept_language_header = self.accept_language_header_override,
         .client_hints_enabled = if (ua_data) |value| value.client_hints_enabled else true,
+        .high_entropy_client_hints = high_entropy_client_hints,
         .sec_ch_ua_header = if (ua_data) |value| value.sec_ch_ua_header else null,
         .sec_ch_ua_mobile_header = if (ua_data) |value| value.sec_ch_ua_mobile_header else null,
         .sec_ch_ua_platform_header = if (ua_data) |value| value.sec_ch_ua_platform_header else null,
@@ -698,6 +713,39 @@ pub fn getUADataOverride(self: *const Client) ?*const ChimeraProfile.UAData {
         return &value.data;
     }
     return null;
+}
+
+fn allocOriginKey(allocator: Allocator, raw: [:0]const u8) !?[]u8 {
+    const protocol = URL.getProtocol(raw);
+    if (!std.ascii.eqlIgnoreCase(protocol, "http:") and !std.ascii.eqlIgnoreCase(protocol, "https:")) {
+        return null;
+    }
+
+    const hostname = URL.getHostname(raw);
+    if (hostname.len == 0) return null;
+
+    const port = URL.getPort(raw);
+    const include_port = port.len > 0 and !((std.ascii.eqlIgnoreCase(protocol, "http:") and std.mem.eql(u8, port, "80")) or
+        (std.ascii.eqlIgnoreCase(protocol, "https:") and std.mem.eql(u8, port, "443")));
+
+    var key = try std.ArrayList(u8).initCapacity(
+        allocator,
+        protocol.len + 2 + hostname.len + if (include_port) port.len + 1 else 0,
+    );
+    errdefer key.deinit(allocator);
+
+    for (protocol) |ch| {
+        key.appendAssumeCapacity(std.ascii.toLower(ch));
+    }
+    key.appendSliceAssumeCapacity("//");
+    for (hostname) |ch| {
+        key.appendAssumeCapacity(std.ascii.toLower(ch));
+    }
+    if (include_port) {
+        key.appendAssumeCapacity(':');
+        key.appendSliceAssumeCapacity(port);
+    }
+    return try key.toOwnedSlice(allocator);
 }
 
 fn parseAcceptLanguage(allocator: Allocator, value: []const u8) ![]const []const u8 {
@@ -1201,6 +1249,43 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 
     self.http_proxy = self.network.config.httpProxy();
     self.use_proxy = self.http_proxy != null;
+}
+
+pub fn noteAcceptCHForUrl(self: *Client, request_url: [:0]const u8, value: []const u8) !void {
+    return self.setHighEntropyClientHintsForUrl(request_url, ClientHints.highEntropyHeaderSetFromAcceptCH(value));
+}
+
+fn setHighEntropyClientHintsForUrl(self: *Client, request_url: [:0]const u8, requested: ClientHints.HighEntropyHeaderSet) !void {
+    const origin = (try allocOriginKey(self.allocator, request_url)) orelse return;
+    defer self.allocator.free(origin);
+
+    if (requested.any()) {
+        const gop = try self.high_entropy_client_hint_origins.getOrPut(self.allocator, origin);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try self.allocator.dupe(u8, origin);
+        }
+        gop.value_ptr.* = requested;
+        return;
+    }
+
+    if (self.high_entropy_client_hint_origins.fetchRemove(origin)) |entry| {
+        self.allocator.free(entry.key);
+    }
+}
+
+fn highEntropyClientHintsForUrl(self: *const Client, request_url: [:0]const u8) ClientHints.HighEntropyHeaderSet {
+    const origin = (allocOriginKey(self.allocator, request_url) catch null) orelse return .{};
+    defer self.allocator.free(origin);
+    return self.high_entropy_client_hint_origins.get(origin) orelse .{};
+}
+
+fn clearHighEntropyClientHintOrigins(self: *Client) void {
+    var it = self.high_entropy_client_hint_origins.iterator();
+    while (it.next()) |entry| {
+        self.allocator.free(entry.key_ptr.*);
+    }
+    self.high_entropy_client_hint_origins.deinit(self.allocator);
+    self.high_entropy_client_hint_origins = .empty;
 }
 
 fn makeRequest(self: *Client, conn: *http.Connection, transfer: *Transfer) anyerror!void {
@@ -2367,7 +2452,7 @@ pub const Transfer = struct {
         self.req.headers.deinit();
 
         var buf: std.ArrayList(u8) = .empty;
-        var new_headers = try self.client.newHeaders();
+        var new_headers = try self.client.newHeadersForUrl(self.req.url);
         for (headers) |hdr| {
             // safe to re-use this buffer, because Headers.add because curl copies
             // the value we pass into curl_slist_append.
@@ -2412,6 +2497,18 @@ pub const Transfer = struct {
                 i += 1;
                 if (i >= ct.?.amount) break;
             }
+        }
+
+        var accept_ch_hints = ClientHints.HighEntropyHeaderSet{};
+        var accept_ch_i: usize = 0;
+        while (true) {
+            const hdr = conn.getResponseHeader("accept-ch", accept_ch_i) orelse break;
+            accept_ch_hints.merge(ClientHints.highEntropyHeaderSetFromAcceptCH(hdr.value));
+            accept_ch_i += 1;
+            if (accept_ch_i >= hdr.amount) break;
+        }
+        if (accept_ch_i > 0) {
+            try transfer.client.setHighEntropyClientHintsForUrl(transfer.req.url, accept_ch_hints);
         }
 
         if (transfer.getContentLength()) |cl| {

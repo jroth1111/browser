@@ -555,6 +555,9 @@ pub const NavigationHeaderSnapshot = struct {
     sec_ch_ua_mobile_profile: bool = false,
     sec_ch_ua_platform_profile: bool = false,
     high_entropy_client_hint_present: bool = false,
+    high_entropy_full_version_list_profile: bool = false,
+    high_entropy_platform_version_profile: bool = false,
+    unexpected_high_entropy_client_hint_present: bool = false,
 };
 
 pub const SubresourceHeaderSnapshot = struct {
@@ -1223,8 +1226,15 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.sec_ch_ua_mobile_profile = std.mem.eql(u8, h.value, "?0");
             } else if (std.ascii.eqlIgnoreCase(h.name, ClientHints.sec_ch_ua_platform_header_name)) {
                 snapshot.sec_ch_ua_platform_profile = std.mem.eql(u8, h.value, "\"macOS\"");
+            } else if (std.ascii.eqlIgnoreCase(h.name, ClientHints.sec_ch_ua_full_version_list_header_name)) {
+                snapshot.high_entropy_client_hint_present = true;
+                snapshot.high_entropy_full_version_list_profile = std.mem.eql(u8, h.value, "\"Chromium\";v=\"136.0.0.0\"");
+            } else if (std.ascii.eqlIgnoreCase(h.name, ClientHints.sec_ch_ua_platform_version_header_name)) {
+                snapshot.high_entropy_client_hint_present = true;
+                snapshot.high_entropy_platform_version_profile = std.mem.eql(u8, h.value, "\"15.0.0\"");
             } else if (ClientHints.isHighEntropyHeaderName(h.name)) {
                 snapshot.high_entropy_client_hint_present = true;
+                snapshot.unexpected_high_entropy_client_hint_present = true;
             }
         }
         snapshot.referer_none = !referer_seen;
@@ -1236,6 +1246,24 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("<!doctype html><title>navigation recorded</title>", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/client-hints/accept-ch/high-entropy")) {
+        return req.respond("<!doctype html><title>client hints accepted</title>", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html" },
+                .{ .name = "Accept-CH", .value = "Sec-CH-UA-Full-Version-List, Sec-CH-UA-Platform-Version" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/client-hints/accept-ch/low-entropy-only")) {
+        return req.respond("<!doctype html><title>client hints reset</title>", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html" },
+                .{ .name = "Accept-CH", .value = "Sec-CH-UA, Sec-CH-UA-Mobile" },
             },
         });
     }

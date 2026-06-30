@@ -117,7 +117,7 @@ pub const Headers = struct {
         user_agent_header: ?[:0]const u8 = null,
         accept_language_header: ?[:0]const u8 = null,
         client_hints_enabled: bool = true,
-        high_entropy_client_hints_enabled: bool = false,
+        high_entropy_client_hints: ClientHints.HighEntropyHeaderSet = .{},
         sec_ch_ua_header: ?[:0]const u8 = null,
         sec_ch_ua_mobile_header: ?[:0]const u8 = null,
         sec_ch_ua_platform_header: ?[:0]const u8 = null,
@@ -150,14 +150,18 @@ pub const Headers = struct {
             try headers.set(overrides.sec_ch_ua_header orelse http_headers.sec_ch_ua_header);
             try headers.setOptional(overrides.sec_ch_ua_mobile_header, http_headers.sec_ch_ua_mobile_header);
             try headers.setOptional(overrides.sec_ch_ua_platform_header, http_headers.sec_ch_ua_platform_header);
-            if (overrides.high_entropy_client_hints_enabled) {
+            if (overrides.high_entropy_client_hints.full_version)
                 try headers.setOptional(overrides.sec_ch_ua_full_version_header, http_headers.sec_ch_ua_full_version_header);
+            if (overrides.high_entropy_client_hints.full_version_list)
                 try headers.setOptional(overrides.sec_ch_ua_full_version_list_header, http_headers.sec_ch_ua_full_version_list_header);
+            if (overrides.high_entropy_client_hints.arch)
                 try headers.setOptional(overrides.sec_ch_ua_arch_header, http_headers.sec_ch_ua_arch_header);
+            if (overrides.high_entropy_client_hints.bitness)
                 try headers.setOptional(overrides.sec_ch_ua_bitness_header, http_headers.sec_ch_ua_bitness_header);
+            if (overrides.high_entropy_client_hints.model)
                 try headers.setOptional(overrides.sec_ch_ua_model_header, http_headers.sec_ch_ua_model_header);
+            if (overrides.high_entropy_client_hints.platform_version)
                 try headers.setOptional(overrides.sec_ch_ua_platform_version_header, http_headers.sec_ch_ua_platform_version_header);
-            }
         }
         return headers;
     }
@@ -978,7 +982,7 @@ test "Headers.initBrowserWithOverrides updates identity headers together" {
     try expectHighEntropyHeadersAbsent(headers);
 }
 
-test "Headers.initBrowserWithOverrides can opt into high-entropy client hints" {
+test "Headers.initBrowserWithOverrides can opt into selected high-entropy client hints" {
     const http_headers = Config.HttpHeaders{
         .user_agent = "Profile/1.0",
         .user_agent_header = "User-Agent: Profile/1.0",
@@ -994,7 +998,13 @@ test "Headers.initBrowserWithOverrides can opt into high-entropy client hints" {
         .sec_ch_ua_platform_version_header = "Sec-CH-UA-Platform-Version: \"10.0.0\"",
         .proxy_bearer_header = null,
     };
-    var headers = try Headers.initBrowserWithOverrides(&http_headers, .{ .high_entropy_client_hints_enabled = true });
+    var headers = try Headers.initBrowserWithOverrides(&http_headers, .{
+        .high_entropy_client_hints = .{
+            .full_version_list = true,
+            .arch = true,
+            .platform_version = true,
+        },
+    });
     defer headers.deinit();
 
     try expectHeader(headers, "User-Agent", "Profile/1.0");
@@ -1002,12 +1012,12 @@ test "Headers.initBrowserWithOverrides can opt into high-entropy client hints" {
     try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"120\"");
     try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectHeader(headers, "Sec-CH-UA-Platform", "\"Windows\"");
-    try expectHeader(headers, "Sec-CH-UA-Full-Version", "\"120.0.0.0\"");
     try expectHeader(headers, "Sec-CH-UA-Full-Version-List", "\"Chromium\";v=\"120.0.0.0\"");
     try expectHeader(headers, "Sec-CH-UA-Arch", "\"x86\"");
-    try expectHeader(headers, "Sec-CH-UA-Bitness", "\"64\"");
-    try expectHeader(headers, "Sec-CH-UA-Model", "\"\"");
     try expectHeader(headers, "Sec-CH-UA-Platform-Version", "\"10.0.0\"");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Bitness");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Model");
 }
 
 test "Headers.initBrowserWithOverrides can suppress client hints" {
