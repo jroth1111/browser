@@ -4,6 +4,39 @@ const Profile = @import("Profile.zig");
 
 const Allocator = std.mem.Allocator;
 
+pub const sec_ch_ua_header_name = "Sec-CH-UA";
+pub const sec_ch_ua_mobile_header_name = "Sec-CH-UA-Mobile";
+pub const sec_ch_ua_platform_header_name = "Sec-CH-UA-Platform";
+pub const sec_ch_ua_full_version_header_name = "Sec-CH-UA-Full-Version";
+pub const sec_ch_ua_full_version_list_header_name = "Sec-CH-UA-Full-Version-List";
+pub const sec_ch_ua_arch_header_name = "Sec-CH-UA-Arch";
+pub const sec_ch_ua_bitness_header_name = "Sec-CH-UA-Bitness";
+pub const sec_ch_ua_model_header_name = "Sec-CH-UA-Model";
+pub const sec_ch_ua_platform_version_header_name = "Sec-CH-UA-Platform-Version";
+
+pub const low_entropy_header_names = [_][]const u8{
+    sec_ch_ua_header_name,
+    sec_ch_ua_mobile_header_name,
+    sec_ch_ua_platform_header_name,
+};
+
+pub const high_entropy_header_names = [_][]const u8{
+    sec_ch_ua_full_version_header_name,
+    sec_ch_ua_full_version_list_header_name,
+    sec_ch_ua_arch_header_name,
+    sec_ch_ua_bitness_header_name,
+    sec_ch_ua_model_header_name,
+    sec_ch_ua_platform_version_header_name,
+};
+
+pub fn isHighEntropyHeaderName(name: []const u8) bool {
+    return containsHeaderName(high_entropy_header_names[0..], name);
+}
+
+pub fn isLowEntropyHeaderName(name: []const u8) bool {
+    return containsHeaderName(low_entropy_header_names[0..], name);
+}
+
 pub fn formatBrandListValue(allocator: Allocator, brands: []const Profile.Brand) ![]const u8 {
     try validateBrandList(brands);
 
@@ -60,6 +93,13 @@ fn validateStructuredString(value: []const u8) !void {
     }
 }
 
+fn containsHeaderName(candidates: []const []const u8, name: []const u8) bool {
+    for (candidates) |candidate| {
+        if (std.ascii.eqlIgnoreCase(candidate, name)) return true;
+    }
+    return false;
+}
+
 const testing = std.testing;
 
 test "chimera.ClientHints formats brand lists and quoted values" {
@@ -72,7 +112,7 @@ test "chimera.ClientHints formats brand lists and quoted values" {
     defer testing.allocator.free(value);
     try testing.expectEqualStrings("\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"", value);
 
-    const header = try formatBrandListHeader(testing.allocator, "Sec-CH-UA", brands);
+    const header = try formatBrandListHeader(testing.allocator, sec_ch_ua_header_name, brands);
     defer testing.allocator.free(header);
     try testing.expectEqualStrings("Sec-CH-UA: \"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"", header);
 
@@ -82,6 +122,16 @@ test "chimera.ClientHints formats brand lists and quoted values" {
 
     try testing.expectEqualStrings("?0", mobileValue(false));
     try testing.expectEqualStrings("?1", mobileValue(true));
+}
+
+test "chimera.ClientHints classifies entropy-bearing headers" {
+    try testing.expect(isLowEntropyHeaderName("sec-ch-ua"));
+    try testing.expect(isLowEntropyHeaderName(sec_ch_ua_mobile_header_name));
+    try testing.expect(!isLowEntropyHeaderName(sec_ch_ua_full_version_header_name));
+
+    try testing.expect(isHighEntropyHeaderName("sec-ch-ua-full-version-list"));
+    try testing.expect(isHighEntropyHeaderName(sec_ch_ua_platform_version_header_name));
+    try testing.expect(!isHighEntropyHeaderName(sec_ch_ua_platform_header_name));
 }
 
 test "chimera.ClientHints rejects unsafe structured string values" {

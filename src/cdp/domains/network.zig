@@ -31,6 +31,7 @@ const Headers = @import("../../browser/HttpClient.zig").Headers;
 const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Response = @import("../../browser/HttpClient.zig").Response;
 const CdpIdentity = @import("../../chimera/CdpIdentity.zig");
+const ClientHints = @import("../../chimera/ClientHints.zig");
 
 const CdpStorage = @import("storage.zig");
 
@@ -735,12 +736,7 @@ test "cdp.Network: setUserAgentOverride is ignored under Chimera authority" {
     try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\"");
     try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"macOS\"");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Arch");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Bitness");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Model");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
+    try expectHighEntropyRequestHeadersAbsent(headers);
 }
 
 fn expectRequestHeader(headers: Headers, name: []const u8, expected: []const u8) !void {
@@ -759,6 +755,12 @@ fn expectRequestHeaderAbsent(headers: Headers, name: []const u8) !void {
         if (std.ascii.eqlIgnoreCase(header.name, name)) {
             return testing.expect(false);
         }
+    }
+}
+
+fn expectHighEntropyRequestHeadersAbsent(headers: Headers) !void {
+    for (ClientHints.high_entropy_header_names) |name| {
+        try expectRequestHeaderAbsent(headers, name);
     }
 }
 

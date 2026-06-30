@@ -20,6 +20,7 @@ const std = @import("std");
 const posix = std.posix;
 
 const Config = @import("../Config.zig");
+const ClientHints = @import("../chimera/ClientHints.zig");
 const libcurl = @import("../sys/libcurl.zig");
 const IpFilter = @import("IpFilter.zig");
 
@@ -147,47 +148,15 @@ pub const Headers = struct {
         try headers.set(overrides.accept_language_header orelse http_headers.accept_language_header);
         if (overrides.client_hints_enabled) {
             try headers.set(overrides.sec_ch_ua_header orelse http_headers.sec_ch_ua_header);
-            if (overrides.sec_ch_ua_mobile_header) |hdr| {
-                try headers.set(hdr);
-            } else if (http_headers.sec_ch_ua_mobile_header) |hdr| {
-                try headers.set(hdr);
-            }
-            if (overrides.sec_ch_ua_platform_header) |hdr| {
-                try headers.set(hdr);
-            } else if (http_headers.sec_ch_ua_platform_header) |hdr| {
-                try headers.set(hdr);
-            }
+            try headers.setOptional(overrides.sec_ch_ua_mobile_header, http_headers.sec_ch_ua_mobile_header);
+            try headers.setOptional(overrides.sec_ch_ua_platform_header, http_headers.sec_ch_ua_platform_header);
             if (overrides.high_entropy_client_hints_enabled) {
-                if (overrides.sec_ch_ua_full_version_header) |hdr| {
-                    try headers.set(hdr);
-                } else if (http_headers.sec_ch_ua_full_version_header) |hdr| {
-                    try headers.set(hdr);
-                }
-                if (overrides.sec_ch_ua_full_version_list_header) |hdr| {
-                    try headers.set(hdr);
-                } else if (http_headers.sec_ch_ua_full_version_list_header) |hdr| {
-                    try headers.set(hdr);
-                }
-                if (overrides.sec_ch_ua_arch_header) |hdr| {
-                    try headers.set(hdr);
-                } else if (http_headers.sec_ch_ua_arch_header) |hdr| {
-                    try headers.set(hdr);
-                }
-                if (overrides.sec_ch_ua_bitness_header) |hdr| {
-                    try headers.set(hdr);
-                } else if (http_headers.sec_ch_ua_bitness_header) |hdr| {
-                    try headers.set(hdr);
-                }
-                if (overrides.sec_ch_ua_model_header) |hdr| {
-                    try headers.set(hdr);
-                } else if (http_headers.sec_ch_ua_model_header) |hdr| {
-                    try headers.set(hdr);
-                }
-                if (overrides.sec_ch_ua_platform_version_header) |hdr| {
-                    try headers.set(hdr);
-                } else if (http_headers.sec_ch_ua_platform_version_header) |hdr| {
-                    try headers.set(hdr);
-                }
+                try headers.setOptional(overrides.sec_ch_ua_full_version_header, http_headers.sec_ch_ua_full_version_header);
+                try headers.setOptional(overrides.sec_ch_ua_full_version_list_header, http_headers.sec_ch_ua_full_version_list_header);
+                try headers.setOptional(overrides.sec_ch_ua_arch_header, http_headers.sec_ch_ua_arch_header);
+                try headers.setOptional(overrides.sec_ch_ua_bitness_header, http_headers.sec_ch_ua_bitness_header);
+                try headers.setOptional(overrides.sec_ch_ua_model_header, http_headers.sec_ch_ua_model_header);
+                try headers.setOptional(overrides.sec_ch_ua_platform_version_header, http_headers.sec_ch_ua_platform_version_header);
             }
         }
         return headers;
@@ -243,6 +212,14 @@ pub const Headers = struct {
         const value = std.mem.trim(u8, header_str[colon_pos + 1 ..], " \t");
 
         return .{ .name = name, .value = value };
+    }
+
+    fn setOptional(self: *Headers, override_header: ?[:0]const u8, fallback_header: ?[:0]const u8) !void {
+        if (override_header) |hdr| {
+            try self.set(hdr);
+        } else if (fallback_header) |hdr| {
+            try self.set(hdr);
+        }
     }
 
     pub fn iterator(self: Headers) HeaderIterator {
@@ -886,6 +863,12 @@ fn expectHeaderAbsent(headers: Headers, name: []const u8) !void {
     try testing.expectEqual(@as(usize, 0), findHeader(headers, name).count);
 }
 
+fn expectHighEntropyHeadersAbsent(headers: Headers) !void {
+    for (ClientHints.high_entropy_header_names) |name| {
+        try expectHeaderAbsent(headers, name);
+    }
+}
+
 test "Headers.set replaces an existing header instead of duplicating it" {
     var headers = try Headers.init("User-Agent: Lightpanda/1.0");
     defer headers.deinit();
@@ -939,12 +922,7 @@ test "Headers.initBrowser adds low-entropy browser headers by default" {
     try expectHeader(headers, "Sec-CH-UA", "\"Lightpanda\";v=\"1\"");
     try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectHeader(headers, "Sec-CH-UA-Platform", "\"macOS\"");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Arch");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Bitness");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Model");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
+    try expectHighEntropyHeadersAbsent(headers);
 }
 
 test "Headers.initBrowser keeps configured profile headers when user agent is overridden" {
@@ -997,12 +975,7 @@ test "Headers.initBrowserWithOverrides updates identity headers together" {
     try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
     try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Arch");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Bitness");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Model");
-    try expectHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
+    try expectHighEntropyHeadersAbsent(headers);
 }
 
 test "Headers.initBrowserWithOverrides can opt into high-entropy client hints" {
@@ -1055,12 +1028,7 @@ test "Headers.initBrowserWithOverrides can suppress client hints" {
     try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA").count);
     try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Mobile").count);
     try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Platform").count);
-    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Full-Version").count);
-    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Full-Version-List").count);
-    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Arch").count);
-    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Bitness").count);
-    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Model").count);
-    try testing.expectEqual(@as(usize, 0), findHeader(headers, "Sec-CH-UA-Platform-Version").count);
+    try expectHighEntropyHeadersAbsent(headers);
 }
 
 test "opensocketCallback: private IPv4 returns CURL_SOCKET_BAD" {

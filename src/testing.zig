@@ -43,6 +43,7 @@ pub fn reset() void {
 const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
 const Config = @import("Config.zig");
+const ClientHints = @import("chimera/ClientHints.zig");
 const Frame = @import("browser/Frame.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
@@ -1216,19 +1217,13 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
                 referer_seen = true;
                 snapshot.referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
-            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA")) {
+            } else if (std.ascii.eqlIgnoreCase(h.name, ClientHints.sec_ch_ua_header_name)) {
                 snapshot.sec_ch_ua_profile = std.mem.eql(u8, h.value, "\"Chromium\";v=\"136\"");
-            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Mobile")) {
+            } else if (std.ascii.eqlIgnoreCase(h.name, ClientHints.sec_ch_ua_mobile_header_name)) {
                 snapshot.sec_ch_ua_mobile_profile = std.mem.eql(u8, h.value, "?0");
-            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Platform")) {
+            } else if (std.ascii.eqlIgnoreCase(h.name, ClientHints.sec_ch_ua_platform_header_name)) {
                 snapshot.sec_ch_ua_platform_profile = std.mem.eql(u8, h.value, "\"macOS\"");
-            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Full-Version") or
-                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Full-Version-List") or
-                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Arch") or
-                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Bitness") or
-                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Model") or
-                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Platform-Version"))
-            {
+            } else if (ClientHints.isHighEntropyHeaderName(h.name)) {
                 snapshot.high_entropy_client_hint_present = true;
             }
         }

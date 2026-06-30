@@ -105,55 +105,55 @@ const UADataOverride = struct {
 
         const client_hints_enabled = brands.len > 0;
         const sec_ch_ua_header = if (client_hints_enabled)
-            try ClientHints.formatBrandListHeader(allocator, "Sec-CH-UA", brands)
+            try ClientHints.formatBrandListHeader(allocator, ClientHints.sec_ch_ua_header_name, brands)
         else
             null;
         errdefer if (sec_ch_ua_header) |header| allocator.free(header);
 
         const sec_ch_ua_mobile_header = if (client_hints_enabled)
-            try ClientHints.formatMobileHeader(allocator, "Sec-CH-UA-Mobile", metadata.mobile orelse false)
+            try ClientHints.formatMobileHeader(allocator, ClientHints.sec_ch_ua_mobile_header_name, metadata.mobile orelse false)
         else
             null;
         errdefer if (sec_ch_ua_mobile_header) |header| allocator.free(header);
 
         const sec_ch_ua_platform_header = if (client_hints_enabled)
-            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Platform", platform)
+            try ClientHints.formatQuotedHeader(allocator, ClientHints.sec_ch_ua_platform_header_name, platform)
         else
             null;
         errdefer if (sec_ch_ua_platform_header) |header| allocator.free(header);
 
         const sec_ch_ua_full_version_header = if (client_hints_enabled)
-            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Full-Version", ua_full_version)
+            try ClientHints.formatQuotedHeader(allocator, ClientHints.sec_ch_ua_full_version_header_name, ua_full_version)
         else
             null;
         errdefer if (sec_ch_ua_full_version_header) |header| allocator.free(header);
 
         const sec_ch_ua_full_version_list_header = if (client_hints_enabled)
-            try ClientHints.formatBrandListHeader(allocator, "Sec-CH-UA-Full-Version-List", full_version_list)
+            try ClientHints.formatBrandListHeader(allocator, ClientHints.sec_ch_ua_full_version_list_header_name, full_version_list)
         else
             null;
         errdefer if (sec_ch_ua_full_version_list_header) |header| allocator.free(header);
 
         const sec_ch_ua_arch_header = if (client_hints_enabled)
-            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Arch", architecture)
+            try ClientHints.formatQuotedHeader(allocator, ClientHints.sec_ch_ua_arch_header_name, architecture)
         else
             null;
         errdefer if (sec_ch_ua_arch_header) |header| allocator.free(header);
 
         const sec_ch_ua_bitness_header = if (client_hints_enabled)
-            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Bitness", bitness)
+            try ClientHints.formatQuotedHeader(allocator, ClientHints.sec_ch_ua_bitness_header_name, bitness)
         else
             null;
         errdefer if (sec_ch_ua_bitness_header) |header| allocator.free(header);
 
         const sec_ch_ua_model_header = if (client_hints_enabled)
-            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Model", model)
+            try ClientHints.formatQuotedHeader(allocator, ClientHints.sec_ch_ua_model_header_name, model)
         else
             null;
         errdefer if (sec_ch_ua_model_header) |header| allocator.free(header);
 
         const sec_ch_ua_platform_version_header = if (client_hints_enabled)
-            try ClientHints.formatQuotedHeader(allocator, "Sec-CH-UA-Platform-Version", platform_version)
+            try ClientHints.formatQuotedHeader(allocator, ClientHints.sec_ch_ua_platform_version_header_name, platform_version)
         else
             null;
         errdefer if (sec_ch_ua_platform_version_header) |header| allocator.free(header);

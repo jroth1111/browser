@@ -24,6 +24,7 @@ const Config = @import("../../Config.zig");
 const Frame = @import("../../browser/Frame.zig");
 const HttpClient = @import("../../browser/HttpClient.zig");
 const Viewport = @import("../../browser/Viewport.zig");
+const ClientHints = @import("../../chimera/ClientHints.zig");
 const js = @import("../../browser/js/js.zig");
 const Http = @import("../../network/http.zig");
 
@@ -321,12 +322,7 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
     try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
     try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Arch");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Bitness");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Model");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
+    try expectHighEntropyRequestHeadersAbsent(headers);
 }
 
 test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
@@ -397,12 +393,7 @@ test "cdp.Emulation: setUserAgentOverride is ignored under Chimera authority" {
     try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\"");
     try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"macOS\"");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Arch");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Bitness");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Model");
-    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
+    try expectHighEntropyRequestHeadersAbsent(headers);
 }
 
 test "cdp.Emulation: Chimera authority navigation sends low entropy client hints only" {
@@ -564,5 +555,11 @@ fn expectRequestHeaderAbsent(headers: Http.Headers, name: []const u8) !void {
         if (std.ascii.eqlIgnoreCase(header.name, name)) {
             return testing.expect(false);
         }
+    }
+}
+
+fn expectHighEntropyRequestHeadersAbsent(headers: Http.Headers) !void {
+    for (ClientHints.high_entropy_header_names) |name| {
+        try expectRequestHeaderAbsent(headers, name);
     }
 }
