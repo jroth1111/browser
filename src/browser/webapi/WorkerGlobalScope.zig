@@ -227,8 +227,13 @@ pub fn hasDirectListeners(self: *WorkerGlobalScope, target: *EventTarget, typ: [
 
 // Workers don't have their own Referer; per spec, dedicated worker requests
 // use the parent document's URL. Delegate to the owning frame.
-pub fn headersForRequest(self: *WorkerGlobalScope, headers: *HttpClient.Headers) !void {
-    return self._frame.headersForRequest(headers);
+pub fn headersForRequest(
+    self: *WorkerGlobalScope,
+    headers: *HttpClient.Headers,
+    allocator: Allocator,
+    request_url: [:0]const u8,
+) !void {
+    return self._frame.headersForRequest(headers, allocator, request_url);
 }
 
 pub fn headersForSubresourceRequest(
@@ -239,7 +244,7 @@ pub fn headersForSubresourceRequest(
     mode: []const u8,
     dest: []const u8,
 ) !void {
-    try self.headersForRequest(headers);
+    try self.headersForRequest(headers, allocator, request_url);
     const requesting_origin = try URL.getOrigin(allocator, self.url) orelse "null";
     try Cors.populateFetchMetadataHeaders(headers, allocator, requesting_origin, request_url, mode, dest, false);
 }

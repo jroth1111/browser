@@ -83,9 +83,14 @@ pub fn releaseArena(self: *const Execution, allocator: Allocator) void {
     self.page.releaseArena(allocator);
 }
 
-pub fn headersForRequest(self: *const Execution, headers: *HttpClient.Headers) !void {
+pub fn headersForRequest(
+    self: *const Execution,
+    headers: *HttpClient.Headers,
+    allocator: Allocator,
+    request_url: [:0]const u8,
+) !void {
     return switch (self.js.global) {
-        inline else => |g| g.headersForRequest(headers),
+        inline else => |g| g.headersForRequest(headers, allocator, request_url),
     };
 }
 

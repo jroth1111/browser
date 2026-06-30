@@ -126,7 +126,7 @@ fn startFetchRequest(self: *Fetch) !void {
             try h.populateHttpHeader(self._response._arena, &headers);
         }
     }
-    try exec.headersForRequest(&headers);
+    try exec.headersForRequest(&headers, self._response._arena, self._url);
 
     const request_is_cross_origin = !exec.isSameOrigin(self._url);
     try Cors.populateFetchMetadataHeaders(
@@ -180,7 +180,6 @@ fn startPreflightRequest(self: *Fetch) !void {
     const session = exec.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
-    try exec.headersForRequest(&headers);
     try Cors.populatePreflightHttpHeaders(
         &headers,
         self._response._arena,

@@ -518,11 +518,13 @@ const CorsHeaderSnapshot = struct {
     sec_fetch_mode_no_cors: bool = false,
     sec_fetch_dest_empty: bool = false,
     sec_fetch_site_same_site: bool = false,
+    referer_origin_only: bool = false,
     xhr_origin_matches: bool = false,
     xhr_sec_fetch_mode_cors: bool = false,
     xhr_sec_fetch_dest_empty: bool = false,
     xhr_sec_fetch_site_same_site: bool = false,
     xhr_content_type_present: bool = false,
+    xhr_referer_origin_only: bool = false,
     preflight_seen: bool = false,
     preflight_method_put: bool = false,
     preflight_method_get: bool = false,
@@ -531,9 +533,11 @@ const CorsHeaderSnapshot = struct {
     preflight_sec_fetch_mode_cors: bool = false,
     preflight_sec_fetch_dest_empty: bool = false,
     preflight_sec_fetch_site_same_site: bool = false,
+    preflight_referer_present: bool = false,
     preflight_actual_seen: bool = false,
     preflight_actual_method_put: bool = false,
     preflight_actual_header_matches: bool = false,
+    preflight_actual_referer_origin_only: bool = false,
 };
 
 pub const NavigationHeaderSnapshot = struct {
@@ -544,6 +548,8 @@ pub const NavigationHeaderSnapshot = struct {
     sec_fetch_site_same_site: bool = false,
     sec_fetch_site_none: bool = false,
     origin_present: bool = false,
+    referer_origin_only: bool = false,
+    referer_none: bool = false,
 };
 
 pub const SubresourceHeaderSnapshot = struct {
@@ -552,16 +558,19 @@ pub const SubresourceHeaderSnapshot = struct {
     script_sec_fetch_dest_script: bool = false,
     script_sec_fetch_site_same_site: bool = false,
     script_origin_present: bool = false,
+    script_referer_origin_only: bool = false,
     style_seen: bool = false,
     style_sec_fetch_mode_no_cors: bool = false,
     style_sec_fetch_dest_style: bool = false,
     style_sec_fetch_site_same_site: bool = false,
     style_origin_present: bool = false,
+    style_referer_origin_only: bool = false,
     worker_seen: bool = false,
     worker_sec_fetch_mode_same_origin: bool = false,
     worker_sec_fetch_dest_worker: bool = false,
     worker_sec_fetch_site_same_origin: bool = false,
     worker_origin_present: bool = false,
+    worker_referer_full_url: bool = false,
 };
 
 var cors_header_snapshot_mutex: std.Thread.Mutex = .{};
@@ -625,6 +634,8 @@ fn recordSubresourceHeaders(req: *std.http.Server.Request, kind: SubresourceHead
                     cors_subresource_header_snapshot.script_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
                 } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
                     cors_subresource_header_snapshot.script_origin_present = true;
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                    cors_subresource_header_snapshot.script_referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
                 }
             },
             .style => {
@@ -636,6 +647,8 @@ fn recordSubresourceHeaders(req: *std.http.Server.Request, kind: SubresourceHead
                     cors_subresource_header_snapshot.style_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
                 } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
                     cors_subresource_header_snapshot.style_origin_present = true;
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                    cors_subresource_header_snapshot.style_referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
                 }
             },
             .worker => {
@@ -647,6 +660,8 @@ fn recordSubresourceHeaders(req: *std.http.Server.Request, kind: SubresourceHead
                     cors_subresource_header_snapshot.worker_sec_fetch_site_same_origin = std.mem.eql(u8, h.value, "same-origin");
                 } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
                     cors_subresource_header_snapshot.worker_origin_present = true;
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                    cors_subresource_header_snapshot.worker_referer_full_url = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/src/browser/tests/net/subresource_fetch_metadata.html");
                 }
             },
         }
@@ -939,6 +954,8 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                     snapshot.preflight_sec_fetch_dest_empty = std.mem.eql(u8, h.value, "empty");
                 } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
                     snapshot.preflight_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                    snapshot.preflight_referer_present = true;
                 }
             }
 
@@ -962,6 +979,8 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         while (actual_it.next()) |h| {
             if (std.ascii.eqlIgnoreCase(h.name, "X-Needs-Preflight")) {
                 cors_preflight_snapshot.preflight_actual_header_matches = std.mem.eql(u8, h.value, "1");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                cors_preflight_snapshot.preflight_actual_referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
             }
         }
         cors_header_snapshot_mutex.unlock();
@@ -997,6 +1016,8 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                     snapshot.preflight_sec_fetch_dest_empty = std.mem.eql(u8, h.value, "empty");
                 } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
                     snapshot.preflight_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                    snapshot.preflight_referer_present = true;
                 }
             }
 
@@ -1033,7 +1054,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         var body_buf: [512]u8 = undefined;
         const body = try std.fmt.bufPrint(
             &body_buf,
-            "{{\"preflightSeen\":{},\"methodPut\":{},\"methodGet\":{},\"headerMatches\":{},\"originMatches\":{},\"secFetchModeCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{},\"actualSeen\":{},\"actualMethodPut\":{},\"actualHeaderMatches\":{}}}",
+            "{{\"preflightSeen\":{},\"methodPut\":{},\"methodGet\":{},\"headerMatches\":{},\"originMatches\":{},\"secFetchModeCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{},\"refererPresent\":{},\"actualSeen\":{},\"actualMethodPut\":{},\"actualHeaderMatches\":{},\"actualRefererOriginOnly\":{}}}",
             .{
                 snapshot.preflight_seen,
                 snapshot.preflight_method_put,
@@ -1043,9 +1064,11 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.preflight_sec_fetch_mode_cors,
                 snapshot.preflight_sec_fetch_dest_empty,
                 snapshot.preflight_sec_fetch_site_same_site,
+                snapshot.preflight_referer_present,
                 snapshot.preflight_actual_seen,
                 snapshot.preflight_actual_method_put,
                 snapshot.preflight_actual_header_matches,
+                snapshot.preflight_actual_referer_origin_only,
             },
         );
         return req.respond(body, .{
@@ -1071,6 +1094,8 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.sec_fetch_dest_empty = std.mem.eql(u8, h.value, "empty");
             } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
                 snapshot.sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                snapshot.referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
             }
         }
 
@@ -1090,10 +1115,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         const snapshot = cors_no_cors_header_snapshot;
         cors_header_snapshot_mutex.unlock();
 
-        var body_buf: [256]u8 = undefined;
+        var body_buf: [384]u8 = undefined;
         const body = try std.fmt.bufPrint(
             &body_buf,
-            "{{\"xUnsafeNoCorsPresent\":{},\"contentLanguagePresent\":{},\"contentTypePresent\":{},\"secFetchModeNoCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{}}}",
+            "{{\"xUnsafeNoCorsPresent\":{},\"contentLanguagePresent\":{},\"contentTypePresent\":{},\"secFetchModeNoCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{},\"refererOriginOnly\":{}}}",
             .{
                 snapshot.x_unsafe_no_cors_present,
                 snapshot.content_language_present,
@@ -1101,6 +1126,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.sec_fetch_mode_no_cors,
                 snapshot.sec_fetch_dest_empty,
                 snapshot.sec_fetch_site_same_site,
+                snapshot.referer_origin_only,
             },
         );
         return req.respond(body, .{
@@ -1124,6 +1150,8 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.xhr_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
             } else if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
                 snapshot.xhr_content_type_present = std.mem.startsWith(u8, h.value, "text/plain");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                snapshot.xhr_referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
             }
         }
 
@@ -1146,16 +1174,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         const snapshot = cors_xhr_header_snapshot;
         cors_header_snapshot_mutex.unlock();
 
-        var body_buf: [256]u8 = undefined;
+        var body_buf: [384]u8 = undefined;
         const body = try std.fmt.bufPrint(
             &body_buf,
-            "{{\"originMatches\":{},\"secFetchModeCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{},\"contentTypePresent\":{}}}",
+            "{{\"originMatches\":{},\"secFetchModeCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{},\"contentTypePresent\":{},\"refererOriginOnly\":{}}}",
             .{
                 snapshot.xhr_origin_matches,
                 snapshot.xhr_sec_fetch_mode_cors,
                 snapshot.xhr_sec_fetch_dest_empty,
                 snapshot.xhr_sec_fetch_site_same_site,
                 snapshot.xhr_content_type_present,
+                snapshot.xhr_referer_origin_only,
             },
         );
         return req.respond(body, .{
@@ -1167,6 +1196,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
 
     if (std.mem.eql(u8, path, "/cors/record-navigation-headers")) {
         var snapshot: NavigationHeaderSnapshot = .{ .seen = true };
+        var referer_seen = false;
         var it = req.iterateHeaders();
         while (it.next()) |h| {
             if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
@@ -1179,8 +1209,12 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.sec_fetch_site_none = std.mem.eql(u8, h.value, "none");
             } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
                 snapshot.origin_present = true;
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                referer_seen = true;
+                snapshot.referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
             }
         }
+        snapshot.referer_none = !referer_seen;
 
         cors_header_snapshot_mutex.lock();
         cors_navigation_header_snapshot = snapshot;
@@ -1301,6 +1335,17 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         // via JS and asserts the resulting page reports Referer = this page.
         return req.respond(
             "<html><body><a id=\"link\" href=\"/echo_referer\">go</a></body></html>",
+            .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            },
+        );
+    }
+
+    if (std.mem.eql(u8, path, "/referer_cross_origin_link.html")) {
+        return req.respond(
+            "<html><body><a id=\"link\" href=\"http://127.0.0.1:9585/echo_referer\">go</a></body></html>",
             .{
                 .extra_headers = &.{
                     .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },

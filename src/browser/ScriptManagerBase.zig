@@ -75,12 +75,6 @@ pub const Owner = union(enum) {
         };
     }
 
-    pub fn addHeaders(self: Owner, headers: *HttpClient.Headers) !void {
-        return switch (self) {
-            inline else => |g| g.headersForRequest(headers),
-        };
-    }
-
     pub fn addSubresourceHeaders(
         self: Owner,
         headers: *HttpClient.Headers,
@@ -190,12 +184,6 @@ fn clearList(list: *std.DoublyLinkedList) void {
         const script: *Script = @fieldParentPtr("node", n);
         script.deinit();
     }
-}
-
-pub fn getHeaders(self: *ScriptManagerBase) !http.Headers {
-    var headers = try self.client.newHeaders();
-    try self.owner.addHeaders(&headers);
-    return headers;
 }
 
 pub fn getSubresourceHeaders(

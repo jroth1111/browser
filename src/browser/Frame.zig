@@ -46,6 +46,7 @@ const HtmlElement = @import("webapi/element/Html.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Cors = @import("webapi/net/Cors.zig");
+const Referrer = @import("webapi/net/Referrer.zig");
 const Document = @import("webapi/Document.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
@@ -239,9 +240,6 @@ origin: ?[]const u8 = null,
 // It is set by a <base> tag.
 // If null the url must be used.
 base_url: ?[:0]const u8 = null,
-
-// referer header cache.
-referer_header: ?[:0]const u8 = null,
 
 // Document charset (canonical name from encoding_rs, static lifetime)
 charset: []const u8 = "UTF-8",
@@ -538,25 +536,13 @@ pub fn httpMetadata(self: *const Frame) HttpMetadata {
 
 // Add common headers for a request:
 // * referer
-pub fn headersForRequest(self: *Frame, headers: *HttpClient.Headers) !void {
-    // Build the referer
-    const referer = blk: {
-        if (self.referer_header == null) {
-            // build the cache
-            if (std.mem.startsWith(u8, self.url, "http")) {
-                self.referer_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", self.url }, 0);
-            } else {
-                self.referer_header = "";
-            }
-        }
-
-        break :blk self.referer_header.?;
-    };
-
-    // If the referer is empty, ignore the header.
-    if (referer.len > 0) {
-        try headers.add(referer);
-    }
+pub fn headersForRequest(
+    self: *Frame,
+    headers: *HttpClient.Headers,
+    allocator: Allocator,
+    request_url: [:0]const u8,
+) !void {
+    try Referrer.addStrictOriginWhenCrossOriginHeader(headers, allocator, self.url, request_url);
 }
 
 pub fn headersForSubresourceRequest(
@@ -567,7 +553,7 @@ pub fn headersForSubresourceRequest(
     mode: []const u8,
     dest: []const u8,
 ) !void {
-    try self.headersForRequest(headers);
+    try self.headersForRequest(headers, allocator, request_url);
     const requesting_origin = self.origin orelse try URL.getOrigin(allocator, self.url) orelse "null";
     try Cors.populateFetchMetadataHeaders(headers, allocator, requesting_origin, request_url, mode, dest, false);
 }
@@ -794,8 +780,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         try headers.add(hdr);
     }
     if (opts.referer) |ref| {
-        const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
-        try headers.add(ref_header);
+        try Referrer.addStrictOriginWhenCrossOriginHeader(&headers, self.arena, ref, self.url);
     }
     try Cors.populateNavigationFetchMetadataHeaders(
         &headers,
@@ -961,10 +946,10 @@ fn scheduleNavigationWithArena(originator: *Frame, arena: Allocator, request_url
     // into the QueuedNavigation arena which outlives that tear-down.
     var nav_opts = opts;
     if (std.mem.startsWith(u8, originator.url, "http")) {
-        // The same dup feeds two purposes: Referer header (subject to
-        // Referrer-Policy in the future) and SameSite computation (which
-        // must use the real initiator regardless of policy). We share the
-        // same allocation for both.
+        // The same dup feeds two purposes: Referer header value selection
+        // (subject to Referrer-Policy) and SameSite computation (which must
+        // use the real initiator regardless of policy). We share the same
+        // allocation for both.
         const dup = try arena.dupeZ(u8, originator.url);
         if (nav_opts.referer == null) {
             nav_opts.referer = dup;
@@ -3039,9 +3024,10 @@ pub const NavigateOpts = struct {
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
     // Set by scheduleNavigationWithArena from the originating frame's URL so
-    // anchor click / form submit / location.href navigations carry a Referer.
-    // null on CDP Page.navigate (address-bar) and Page.reload — matches Chrome.
-    referer: ?[]const u8 = null,
+    // anchor click / form submit / location.href navigations can carry a
+    // policy-filtered Referer. null on CDP Page.navigate (address-bar) and
+    // Page.reload — matches Chrome.
+    referer: ?[:0]const u8 = null,
     // The URL of the document that initiated this navigation, used as the
     // "site for cookies" when computing SameSite. Distinct from `referer`
     // because a Referrer-Policy can suppress the Referer header without
@@ -3448,6 +3434,8 @@ test "Frame: navigation fetch metadata headers" {
     try testing.expect(initiated.sec_fetch_site_same_site);
     try testing.expect(!initiated.sec_fetch_site_none);
     try testing.expect(!initiated.origin_present);
+    try testing.expect(initiated.referer_origin_only);
+    try testing.expect(!initiated.referer_none);
 
     testing.resetNavigationHeaderSnapshot();
     const direct_page = try testing.test_session.createPage();
@@ -3466,6 +3454,8 @@ test "Frame: navigation fetch metadata headers" {
     try testing.expect(!direct.sec_fetch_site_same_site);
     try testing.expect(direct.sec_fetch_site_none);
     try testing.expect(!direct.origin_present);
+    try testing.expect(!direct.referer_origin_only);
+    try testing.expect(direct.referer_none);
 }
 
 test "Frame: subresource fetch metadata headers" {
@@ -3479,18 +3469,21 @@ test "Frame: subresource fetch metadata headers" {
     try testing.expect(snapshot.script_sec_fetch_dest_script);
     try testing.expect(snapshot.script_sec_fetch_site_same_site);
     try testing.expect(!snapshot.script_origin_present);
+    try testing.expect(snapshot.script_referer_origin_only);
 
     try testing.expect(snapshot.style_seen);
     try testing.expect(snapshot.style_sec_fetch_mode_no_cors);
     try testing.expect(snapshot.style_sec_fetch_dest_style);
     try testing.expect(snapshot.style_sec_fetch_site_same_site);
     try testing.expect(!snapshot.style_origin_present);
+    try testing.expect(snapshot.style_referer_origin_only);
 
     try testing.expect(snapshot.worker_seen);
     try testing.expect(snapshot.worker_sec_fetch_mode_same_origin);
     try testing.expect(snapshot.worker_sec_fetch_dest_worker);
     try testing.expect(snapshot.worker_sec_fetch_site_same_origin);
     try testing.expect(!snapshot.worker_origin_present);
+    try testing.expect(snapshot.worker_referer_full_url);
 }
 
 test "Frame: httpMetadata 404" {

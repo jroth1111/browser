@@ -1488,6 +1488,45 @@ test "cdp.frame: anchor click sends Referer matching the originating page" {
     }
 }
 
+test "cdp.frame: cross-origin anchor click sends origin-only Referer" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const cdp_inst = ctx.cdp();
+    _ = try cdp_inst.createBrowserContext();
+    var bc = &cdp_inst.browser_context.?;
+    bc.id = "BID-A18C";
+    bc.session_id = "SID-A18C";
+    bc.target_id = "TID-A18C-00000".*;
+
+    {
+        const page = try bc.session.createPage();
+        try page.navigate("http://127.0.0.1:9582/referer_cross_origin_link.html", .{});
+        try testing.waitForPage(bc);
+    }
+
+    {
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        _ = try ls.local.exec("document.getElementById('link').click()", null);
+        try testing.waitForPage(bc);
+    }
+
+    {
+        const f = bc.mainFrame() orelse unreachable;
+        var ls: js.Local.Scope = undefined;
+        f.js.localScope(&ls);
+        defer ls.deinit();
+        const v = try ls.local.exec(
+            "document.body.innerText.includes('referer=http://127.0.0.1:9582/')",
+            null,
+        );
+        try testing.expect(v.toBool());
+    }
+}
+
 test "cdp.frame: address-bar Page.navigate sends no Referer" {
     // Regression guard: navigations initiated by the user agent itself (CDP
     // Page.navigate, address-bar typed URLs, Page.reload) must not leak the

@@ -281,7 +281,7 @@ fn startXhrRequest(self: *XMLHttpRequest) !void {
     const cookie_support = self._with_credentials or !request_is_cross_origin;
 
     try self._request_headers.populateHttpHeader(self._arena, &headers);
-    try exec.headersForRequest(&headers);
+    try exec.headersForRequest(&headers, self._arena, self._url);
     const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
     const request_origin_value = request_origin orelse "null";
     try Cors.populateFetchMetadataHeaders(&headers, self._arena, request_origin_value, self._url, "cors", "empty", request_is_cross_origin);
@@ -317,7 +317,6 @@ fn startPreflightRequest(self: *XMLHttpRequest) !void {
     const session = exec.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
-    try exec.headersForRequest(&headers);
     try Cors.populatePreflightHttpHeaders(
         &headers,
         self._arena,
