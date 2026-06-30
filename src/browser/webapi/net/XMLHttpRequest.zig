@@ -32,6 +32,7 @@ const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
 
 const Headers = @import("Headers.zig");
+const Cors = @import("Cors.zig");
 const BodyInit = @import("body_init.zig").BodyInit;
 const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 const XMLHttpRequestUpload = @import("XMLHttpRequestUpload.zig");
@@ -199,14 +200,22 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
     self._request_body = null;
 
     const exec = self._exec;
-    self._method = try parseMethod(method_);
-    self._url = try URL.resolve(self._arena, exec.base(), url, .{ .always_dupe = true, .encoding = exec.charset.* });
+    const method = try parseMethod(method_);
+    const resolved_url = try URL.resolve(self._arena, exec.base(), url, .{ .always_dupe = true, .encoding = exec.charset.* });
+    if (!exec.isSameOrigin(resolved_url) and !Cors.isSafelistedMethod(method)) {
+        return error.TypeError;
+    }
+    self._method = method;
+    self._url = resolved_url;
     try self.stateChanged(.opened, exec);
 }
 
 pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8, exec: *const Execution) !void {
     if (self._ready_state != .opened) {
         return error.InvalidStateError;
+    }
+    if (!self._exec.isSameOrigin(self._url) and !Cors.isSafelistedRequestHeader(name, value)) {
+        return error.TypeError;
     }
     return self._request_headers.append(name, value, exec);
 }
@@ -244,17 +253,30 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     }
 
     const exec = self._exec;
+    const request_is_cross_origin = !exec.isSameOrigin(self._url);
+    if (request_is_cross_origin and try Cors.requestRequiresPreflight(self._method, self._request_headers, exec.call_arena)) {
+        return error.TypeError;
+    }
 
     const session = exec.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
 
     // Only add cookies for same-origin or when withCredentials is true
-    const cookie_support = self._with_credentials or exec.isSameOrigin(self._url);
+    const cookie_support = self._with_credentials or !request_is_cross_origin;
 
     try self._request_headers.populateHttpHeader(exec.call_arena, &headers);
-    if (cookie_support) {
-        try exec.headersForRequest(&headers);
+    try exec.headersForRequest(&headers);
+    if (request_is_cross_origin) {
+        const request_origin = URL.getOrigin(exec.call_arena, exec.url.*) catch null;
+        const request_origin_value = request_origin orelse "null";
+        if (!self._request_headers.has("origin", exec)) {
+            const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin_value}, 0);
+            try headers.set(origin_header.ptr);
+        }
+        if (!self._request_headers.has("sec-fetch-mode", exec)) {
+            try headers.set("Sec-Fetch-Mode: cors");
+        }
     }
 
     self.acquireRef();
@@ -474,6 +496,19 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
         });
     }
 
+    const exec = self._exec;
+    const requesting_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
+    const response_url = response.url();
+    const response_origin = URL.getOrigin(self._arena, response_url) catch null;
+    const is_same_origin = Cors.sameOrigin(requesting_origin, response_origin);
+
+    var response_header_iter = response.headerIterator();
+    const response_headers = (try response_header_iter.collect(self._arena)).items;
+
+    if (!is_same_origin and !Cors.responseAllows(response_headers, requesting_origin orelse "null", self._with_credentials)) {
+        return rejectHeaderXhr(self, error.CorsRejected);
+    }
+
     if (response.contentType()) |ct| {
         self._response_mime = Mime.parse(ct) catch |e| {
             log.info(.http, "invalid content type", .{
@@ -485,8 +520,10 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
         };
     }
 
-    var it = response.headerIterator();
-    while (it.next()) |hdr| {
+    for (response_headers) |hdr| {
+        if (!is_same_origin and !Cors.isExposedResponseHeader(response_headers, hdr.name, self._with_credentials)) {
+            continue;
+        }
         const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
         try self._response_headers.append(self._arena, joined);
     }
@@ -496,9 +533,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
         self._response_len = cl;
         try self._response_data.ensureTotalCapacity(self._arena, cl);
     }
-    self._response_url = try self._arena.dupeZ(u8, response.url());
-
-    const exec = self._exec;
+    self._response_url = try self._arena.dupeZ(u8, response_url);
 
     var ls: js.Local.Scope = undefined;
     exec.js.localScope(&ls);
@@ -509,6 +544,21 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
     try self.stateChanged(.loading, exec);
 
     return .proceed;
+}
+
+fn rejectHeaderXhr(self: *XMLHttpRequest, err: anyerror) HttpClient.HeaderResult {
+    self._http_response = null;
+    self._response = null;
+    self._response_xml = null;
+    self._response_data.clearRetainingCapacity();
+    self._response_status = 0;
+    self._response_len = 0;
+    self._response_url = "";
+    self._response_mime = null;
+    self._response_headers.clearRetainingCapacity();
+    self.handleError(err);
+    self.releaseSelfRef();
+    return .handled;
 }
 
 fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
@@ -605,7 +655,12 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
         try self._proto.dispatch(.load_end, null, exec);
     }
 
-    const level: log.Level = if (err == error.Abort) .debug else .err;
+    const level: log.Level = if (err == error.Abort)
+        .debug
+    else if (err == error.CorsRejected)
+        .info
+    else
+        .err;
     log.log(.http, level, "error", .{
         .url = self._url,
         .err = err,
@@ -686,6 +741,11 @@ pub const JsApi = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: XHR" {
     try testing.htmlRunner("net/xhr.html", .{});
+    try testing.htmlRunner("net/xhr_cors_allowed.html", .{});
+    try testing.htmlRunner("net/xhr_cors_blocked.html", .{});
+    try testing.htmlRunner("net/xhr_cors_credentials_wildcard.html", .{});
+    try testing.htmlRunner("net/xhr_cors_request_headers.html", .{});
+    try testing.htmlRunner("net/xhr_cors_preflight_required.html", .{});
 }
 
 test "WebApi: XHR in worker" {

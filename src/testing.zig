@@ -516,10 +516,14 @@ const CorsHeaderSnapshot = struct {
     content_language_present: bool = false,
     content_type_present: bool = false,
     sec_fetch_mode_no_cors: bool = false,
+    xhr_origin_matches: bool = false,
+    xhr_sec_fetch_mode_cors: bool = false,
+    xhr_content_type_present: bool = false,
 };
 
 var cors_header_snapshot_mutex: std.Thread.Mutex = .{};
 var cors_no_cors_header_snapshot: CorsHeaderSnapshot = .{};
+var cors_xhr_header_snapshot: CorsHeaderSnapshot = .{};
 
 var test_config: Config = undefined;
 
@@ -821,6 +825,55 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.content_language_present,
                 snapshot.content_type_present,
                 snapshot.sec_fetch_mode_no_cors,
+            },
+        );
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/record-xhr-headers")) {
+        var snapshot: CorsHeaderSnapshot = .{};
+        var it = req.iterateHeaders();
+        while (it.next()) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
+                snapshot.xhr_origin_matches = std.mem.eql(u8, h.value, "http://127.0.0.1:9582");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                snapshot.xhr_sec_fetch_mode_cors = std.mem.eql(u8, h.value, "cors");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
+                snapshot.xhr_content_type_present = std.mem.startsWith(u8, h.value, "text/plain");
+            }
+        }
+
+        cors_header_snapshot_mutex.lock();
+        cors_xhr_header_snapshot = snapshot;
+        cors_header_snapshot_mutex.unlock();
+
+        return req.respond("xhr-recorded", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Access-Control-Allow-Origin", .value = "http://127.0.0.1:9582" },
+                .{ .name = "Access-Control-Expose-Headers", .value = "X-Cors-Proof" },
+                .{ .name = "X-Cors-Proof", .value = "visible" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/read-xhr-headers")) {
+        cors_header_snapshot_mutex.lock();
+        const snapshot = cors_xhr_header_snapshot;
+        cors_header_snapshot_mutex.unlock();
+
+        var body_buf: [256]u8 = undefined;
+        const body = try std.fmt.bufPrint(
+            &body_buf,
+            "{{\"originMatches\":{},\"secFetchModeCors\":{},\"contentTypePresent\":{}}}",
+            .{
+                snapshot.xhr_origin_matches,
+                snapshot.xhr_sec_fetch_mode_cors,
+                snapshot.xhr_content_type_present,
             },
         );
         return req.respond(body, .{

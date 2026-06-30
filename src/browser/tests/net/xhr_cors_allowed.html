@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=xhr_cors_allowed type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => state.resolve();
+    req.open('GET', `${testing.CORS_ORIGIN}/cors/allowed`);
+    req.send();
+
+    await state.done(() => {
+      const allHeaders = req.getAllResponseHeaders().toLowerCase();
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('OK', req.statusText);
+      testing.expectEqual('cors-ok', req.responseText);
+      testing.expectEqual('text/plain', req.getResponseHeader('content-type'));
+      testing.expectEqual('visible', req.getResponseHeader('x-cors-proof'));
+      testing.expectEqual(null, req.getResponseHeader('x-hidden-proof'));
+      testing.expectEqual(null, req.getResponseHeader('access-control-allow-origin'));
+      testing.expectEqual(true, allHeaders.includes('content-type: text/plain'));
+      testing.expectEqual(true, allHeaders.includes('x-cors-proof: visible'));
+      testing.expectEqual(false, allHeaders.includes('x-hidden-proof'));
+      testing.expectEqual(false, allHeaders.includes('access-control-allow-origin'));
+    });
+  }
+</script>

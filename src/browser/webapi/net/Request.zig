@@ -26,6 +26,7 @@ const Blob = @import("../Blob.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 
 const Headers = @import("Headers.zig");
+const Cors = @import("Cors.zig");
 const body_init = @import("body_init.zig");
 const BodyInit = body_init.BodyInit;
 
@@ -152,7 +153,7 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .url => .cors,
         .request => |r| r._mode,
     };
-    if (mode == .@"no-cors" and !isCorsSafelistedMethod(method)) {
+    if (mode == .@"no-cors" and !Cors.isSafelistedMethod(method)) {
         return error.TypeError;
     }
 
@@ -187,10 +188,6 @@ fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
         .{ "propfind", .PROPFIND },
     });
     return method_lookup.get(lower) orelse return error.InvalidMethod;
-}
-
-fn isCorsSafelistedMethod(method: http.Method) bool {
-    return method == .GET or method == .HEAD or method == .POST;
 }
 
 pub fn getUrl(self: *const Request) []const u8 {

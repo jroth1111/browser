@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_cors_preflight_required type=module>
+  {
+    const state = await testing.async();
+
+    let customHeaderBlocked = false;
+    try {
+      await fetch(`${testing.CORS_ORIGIN}/cors/allowed`, {
+        mode: 'cors',
+        headers: {
+          'X-Needs-Preflight': '1',
+        },
+      });
+    } catch (error) {
+      customHeaderBlocked = error instanceof TypeError;
+    }
+
+    let methodBlocked = false;
+    try {
+      await fetch(`${testing.CORS_ORIGIN}/cors/allowed`, {
+        mode: 'cors',
+        method: 'PUT',
+      });
+    } catch (error) {
+      methodBlocked = error instanceof TypeError;
+    }
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, customHeaderBlocked);
+      testing.expectEqual(true, methodBlocked);
+    });
+  }
+</script>

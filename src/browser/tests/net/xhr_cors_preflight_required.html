@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=xhr_cors_preflight_required>
+  testing.expectError('TypeError', () => {
+    const req = new XMLHttpRequest();
+    req.open('PUT', `${testing.CORS_ORIGIN}/cors/allowed`);
+  });
+
+  testing.expectError('TypeError', () => {
+    const req = new XMLHttpRequest();
+    req.open('GET', `${testing.CORS_ORIGIN}/cors/allowed`);
+    req.setRequestHeader('X-Needs-Preflight', '1');
+  });
+</script>

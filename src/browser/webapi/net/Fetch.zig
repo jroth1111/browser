@@ -25,7 +25,7 @@ const URL = @import("../../URL.zig");
 
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
-const Headers = @import("Headers.zig");
+const Cors = @import("Cors.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 const DOMException = @import("../DOMException.zig");
 
@@ -86,23 +86,32 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     var headers = try http_client.newHeaders();
     if (request._headers) |h| {
         if (request._mode == .@"no-cors") {
-            try populateNoCorsSafelistedHttpHeaders(h, exec.call_arena, &headers);
+            try Cors.populateNoCorsSafelistedHttpHeaders(h, exec.call_arena, &headers);
         } else {
             try h.populateHttpHeader(exec.call_arena, &headers);
         }
     }
     try exec.headersForRequest(&headers);
 
+    const request_is_cross_origin = !exec.isSameOrigin(request._url);
     if (request._mode == .@"same-origin" and !exec.isSameOrigin(request._url)) {
         response._http_response = null;
         response.deinit(exec.page);
         resolver.rejectError("fetch same-origin mode rejected cross-origin URL", .{ .type_error = "fetch error" });
         return resolver.promise();
     }
+    if (request._mode == .cors and request_is_cross_origin and
+        try Cors.requestRequiresPreflight(request._method, request._headers, exec.call_arena))
+    {
+        response._http_response = null;
+        response.deinit(exec.page);
+        resolver.rejectError("fetch CORS preflight required", .{ .type_error = "fetch error" });
+        return resolver.promise();
+    }
 
     const request_origin = URL.getOrigin(exec.call_arena, exec.url.*) catch null;
     const request_origin_value = request_origin orelse "null";
-    if (!exec.isSameOrigin(request._url)) {
+    if (request_is_cross_origin) {
         if (request._headers == null or !request._headers.?.has("origin", exec)) {
             const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin_value}, 0);
             try headers.set(origin_header.ptr);
@@ -148,149 +157,6 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .shutdown_callback = httpShutdownCallback,
     }) catch {};
     return resolver.promise();
-}
-
-fn sameOrigin(requesting_origin: ?[]const u8, response_origin: ?[]const u8) bool {
-    const ro = response_origin orelse return true;
-    const qo = requesting_origin orelse return false;
-    return std.mem.eql(u8, qo, ro);
-}
-
-fn responseHeaderValue(response: HttpClient.Response, name: []const u8) ?[]const u8 {
-    var it = response.headerIterator();
-    while (it.next()) |hdr| {
-        if (std.ascii.eqlIgnoreCase(hdr.name, name)) {
-            return std.mem.trim(u8, hdr.value, " \t");
-        }
-    }
-    return null;
-}
-
-fn isCorsUnsafeRequestHeaderByte(byte: u8) bool {
-    return switch (byte) {
-        0x00...0x08, 0x0A...0x1F, 0x7F, '"', '(', ')', ':', '<', '>', '?', '@', '[', '\\', ']', '{', '}' => true,
-        else => false,
-    };
-}
-
-fn isCorsSafelistedLanguageValue(value: []const u8) bool {
-    if (value.len > 128) {
-        return false;
-    }
-    for (value) |byte| {
-        if (std.ascii.isAlphanumeric(byte)) {
-            continue;
-        }
-        switch (byte) {
-            ' ', '*', ',', '-', '.', ';', '=' => {},
-            else => return false,
-        }
-    }
-    return true;
-}
-
-fn isCorsSafelistedValue(value: []const u8) bool {
-    if (value.len > 128) {
-        return false;
-    }
-    for (value) |byte| {
-        if (isCorsUnsafeRequestHeaderByte(byte)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-fn isCorsSafelistedContentType(value: []const u8) bool {
-    if (!isCorsSafelistedValue(value)) {
-        return false;
-    }
-    const semicolon = std.mem.indexOfScalar(u8, value, ';') orelse value.len;
-    const essence = std.mem.trim(u8, value[0..semicolon], " \t");
-    return std.ascii.eqlIgnoreCase(essence, "application/x-www-form-urlencoded") or
-        std.ascii.eqlIgnoreCase(essence, "multipart/form-data") or
-        std.ascii.eqlIgnoreCase(essence, "text/plain");
-}
-
-fn isNoCorsSafelistedRequestHeader(name: []const u8, value: []const u8) bool {
-    if (std.ascii.eqlIgnoreCase(name, "accept")) {
-        return isCorsSafelistedValue(value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "accept-language") or
-        std.ascii.eqlIgnoreCase(name, "content-language"))
-    {
-        return isCorsSafelistedLanguageValue(value);
-    }
-    if (std.ascii.eqlIgnoreCase(name, "content-type")) {
-        return isCorsSafelistedContentType(value);
-    }
-    return false;
-}
-
-fn populateNoCorsSafelistedHttpHeaders(
-    request_headers: *Headers,
-    allocator: std.mem.Allocator,
-    http_headers: *HttpClient.Headers,
-) !void {
-    const pairs = try request_headers.snapshotPairs(allocator);
-    for (pairs) |pair| {
-        if (!isNoCorsSafelistedRequestHeader(pair[0], pair[1])) {
-            continue;
-        }
-        const merged = try std.mem.concatWithSentinel(allocator, u8, &.{ pair[0], ": ", pair[1] }, 0);
-        try http_headers.set(merged);
-    }
-}
-
-fn responseAllowsCors(response: HttpClient.Response, requesting_origin: []const u8, credentials: Request.Credentials) bool {
-    const allow_origin = responseHeaderValue(response, "access-control-allow-origin") orelse return false;
-    const allow_credentials = responseHeaderValue(response, "access-control-allow-credentials") orelse "";
-
-    if (std.mem.eql(u8, allow_origin, "*")) {
-        return credentials != .include;
-    }
-    if (!std.mem.eql(u8, allow_origin, requesting_origin)) {
-        return false;
-    }
-    if (credentials == .include and !std.ascii.eqlIgnoreCase(allow_credentials, "true")) {
-        return false;
-    }
-    return true;
-}
-
-fn headerListContains(list: []const u8, name: []const u8, allow_wildcard: bool) bool {
-    var it = std.mem.splitScalar(u8, list, ',');
-    while (it.next()) |raw| {
-        const item = std.mem.trim(u8, raw, " \t");
-        if (std.mem.eql(u8, item, "*")) {
-            if (allow_wildcard or std.mem.eql(u8, name, "*")) {
-                return true;
-            }
-            continue;
-        }
-        if (std.ascii.eqlIgnoreCase(item, name)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn isCorsSafelistedResponseHeader(name: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(name, "cache-control") or
-        std.ascii.eqlIgnoreCase(name, "content-language") or
-        std.ascii.eqlIgnoreCase(name, "content-length") or
-        std.ascii.eqlIgnoreCase(name, "content-type") or
-        std.ascii.eqlIgnoreCase(name, "expires") or
-        std.ascii.eqlIgnoreCase(name, "last-modified") or
-        std.ascii.eqlIgnoreCase(name, "pragma");
-}
-
-fn isCorsExposedResponseHeader(response: HttpClient.Response, name: []const u8, credentials: Request.Credentials) bool {
-    if (isCorsSafelistedResponseHeader(name)) {
-        return true;
-    }
-    const exposed = responseHeaderValue(response, "access-control-expose-headers") orelse return false;
-    return headerListContains(exposed, name, credentials != .include);
 }
 
 fn rejectHeaderFetch(self: *Fetch, comptime message: []const u8) HttpClient.HeaderResult {
@@ -354,7 +220,7 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
     const exec = self._exec;
     const requesting_origin = URL.getOrigin(arena, exec.url.*) catch null;
     const response_origin = URL.getOrigin(arena, res._url) catch null;
-    const is_same_origin = sameOrigin(requesting_origin, response_origin);
+    const is_same_origin = Cors.sameOrigin(requesting_origin, response_origin);
 
     if (is_same_origin) {
         res._type = .basic;
@@ -365,15 +231,20 @@ fn httpHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResul
         res._url = "";
         res._is_redirected = false;
         return .proceed;
-    } else if (!responseAllowsCors(response, requesting_origin orelse "null", self._credentials)) {
+    }
+
+    var response_header_iter = response.headerIterator();
+    const response_headers = (try response_header_iter.collect(arena)).items;
+
+    if (res._type != .basic and !Cors.responseAllows(response_headers, requesting_origin orelse "null", self._credentials == .include)) {
         return rejectHeaderFetch(self, "fetch CORS check failed");
-    } else {
+    }
+    if (!is_same_origin) {
         res._type = .cors;
     }
 
-    var it = response.headerIterator();
-    while (it.next()) |hdr| {
-        if (res._type == .cors and !isCorsExposedResponseHeader(response, hdr.name, self._credentials)) {
+    for (response_headers) |hdr| {
+        if (res._type == .cors and !Cors.isExposedResponseHeader(response_headers, hdr.name, self._credentials == .include)) {
             continue;
         }
         try res._headers.append(hdr.name, hdr.value, exec);
@@ -479,5 +350,6 @@ test "WebApi: fetch" {
     try testing.htmlRunner("net/fetch_no_cors_opaque.html", .{});
     try testing.htmlRunner("net/fetch_no_cors_headers.html", .{});
     try testing.htmlRunner("net/fetch_cors_credentials_wildcard.html", .{});
+    try testing.htmlRunner("net/fetch_cors_preflight_required.html", .{});
     try testing.htmlRunner("net/fetch_hash_route.html", .{});
 }

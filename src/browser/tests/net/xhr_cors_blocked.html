@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=xhr_cors_blocked type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    let loadFired = false;
+    let errorFired = false;
+    req.onload = () => { loadFired = true; };
+    req.onerror = () => { errorFired = true; };
+    req.onloadend = () => state.resolve();
+    req.open('GET', `${testing.CORS_ORIGIN}/cors/blocked`);
+    req.send();
+
+    await state.done(() => {
+      testing.expectEqual(false, loadFired);
+      testing.expectEqual(true, errorFired);
+      testing.expectEqual(XMLHttpRequest.DONE, req.readyState);
+      testing.expectEqual(0, req.status);
+      testing.expectEqual('', req.responseText);
+      testing.expectEqual('', req.responseURL);
+      testing.expectEqual('', req.getAllResponseHeaders());
+      testing.expectEqual(null, req.getResponseHeader('content-type'));
+    });
+  }
+</script>

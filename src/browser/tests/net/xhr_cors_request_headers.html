@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=xhr_cors_request_headers type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = async () => {
+      const snapshot = await (await fetch(`${testing.ORIGIN}/cors/read-xhr-headers`)).json();
+      state.resolve(snapshot);
+    };
+    req.open('POST', `${testing.CORS_ORIGIN}/cors/record-xhr-headers`);
+    req.send('hello');
+
+    await state.done((snapshot) => {
+      testing.expectEqual(true, snapshot.originMatches);
+      testing.expectEqual(true, snapshot.secFetchModeCors);
+      testing.expectEqual(true, snapshot.contentTypePresent);
+    });
+  }
+</script>
