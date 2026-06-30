@@ -25,6 +25,7 @@ const URL = @import("../../URL.zig");
 
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
+const Headers = @import("Headers.zig");
 const Cors = @import("Cors.zig");
 const AbortSignal = @import("../AbortSignal.zig");
 const DOMException = @import("../DOMException.zig");
@@ -36,7 +37,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 const Fetch = @This();
 
 _exec: *const Execution,
-_url: []const u8,
+_url: [:0]const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
 _resolver: js.PromiseResolver.Global,
@@ -44,6 +45,11 @@ _owns_response: bool,
 _signal: ?*AbortSignal,
 _mode: Request.Mode,
 _credentials: Request.Credentials,
+_method: HttpClient.Method,
+_request_headers: ?*Headers,
+_body: ?[]const u8,
+_request_origin: []const u8,
+_preflight_header_names: []const []const u8,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -69,29 +75,24 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     errdefer response.deinit(exec.page);
 
     const fetch = try response._arena.create(Fetch);
+    const request_origin = URL.getOrigin(response._arena, exec.url.*) catch null;
+    const request_origin_value = request_origin orelse "null";
     fetch.* = .{
         ._exec = exec,
         ._buf = .empty,
-        ._url = try response._arena.dupe(u8, request._url),
+        ._url = try response._arena.dupeZ(u8, request._url),
         ._resolver = try resolver.persist(),
         ._response = response,
         ._owns_response = true,
         ._signal = request._signal,
         ._mode = request._mode,
         ._credentials = request._credentials,
+        ._method = request._method,
+        ._request_headers = request._headers,
+        ._body = if (request._body) |body| try response._arena.dupe(u8, body) else null,
+        ._request_origin = request_origin_value,
+        ._preflight_header_names = &.{},
     };
-
-    const session = exec.session;
-    const http_client = &session.browser.http_client;
-    var headers = try http_client.newHeaders();
-    if (request._headers) |h| {
-        if (request._mode == .@"no-cors") {
-            try Cors.populateNoCorsSafelistedHttpHeaders(h, exec.call_arena, &headers);
-        } else {
-            try h.populateHttpHeader(exec.call_arena, &headers);
-        }
-    }
-    try exec.headersForRequest(&headers);
 
     const request_is_cross_origin = !exec.isSameOrigin(request._url);
     if (request._mode == .@"same-origin" and !exec.isSameOrigin(request._url)) {
@@ -100,36 +101,54 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         resolver.rejectError("fetch same-origin mode rejected cross-origin URL", .{ .type_error = "fetch error" });
         return resolver.promise();
     }
-    if (request._mode == .cors and request_is_cross_origin and
-        try Cors.requestRequiresPreflight(request._method, request._headers, exec.call_arena))
-    {
-        response._http_response = null;
-        response.deinit(exec.page);
-        resolver.rejectError("fetch CORS preflight required", .{ .type_error = "fetch error" });
-        return resolver.promise();
-    }
 
-    const request_origin = URL.getOrigin(exec.call_arena, exec.url.*) catch null;
-    const request_origin_value = request_origin orelse "null";
-    if (request_is_cross_origin) {
-        if (request._headers == null or !request._headers.?.has("origin", exec)) {
-            const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin_value}, 0);
-            try headers.set(origin_header.ptr);
+    if (request._mode == .cors and request_is_cross_origin) {
+        fetch._preflight_header_names = try Cors.unsafeRequestHeaderNames(request._headers, response._arena);
+        if (!Cors.isSafelistedMethod(request._method) or fetch._preflight_header_names.len > 0) {
+            try fetch.startPreflightRequest();
+            return resolver.promise();
         }
     }
-    if (request._headers == null or !request._headers.?.has("sec-fetch-mode", exec)) {
-        const mode_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Sec-Fetch-Mode: {s}", .{@tagName(request._mode)}, 0);
+
+    try fetch.startFetchRequest();
+    return resolver.promise();
+}
+
+fn startFetchRequest(self: *Fetch) !void {
+    const exec = self._exec;
+    const session = exec.session;
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeaders();
+    if (self._request_headers) |h| {
+        if (self._mode == .@"no-cors") {
+            try Cors.populateNoCorsSafelistedHttpHeaders(h, self._response._arena, &headers);
+        } else {
+            try h.populateHttpHeader(self._response._arena, &headers);
+        }
+    }
+    try exec.headersForRequest(&headers);
+
+    const request_is_cross_origin = !exec.isSameOrigin(self._url);
+    if (request_is_cross_origin) {
+        try Cors.populateCorsMetadataHeaders(&headers, self._response._arena, self._request_origin, @tagName(self._mode));
+    } else {
+        const mode_header = try std.fmt.allocPrintSentinel(
+            self._response._arena,
+            "Sec-Fetch-Mode: {s}",
+            .{@tagName(self._mode)},
+            0,
+        );
         try headers.set(mode_header.ptr);
     }
 
     if (comptime IS_DEBUG) {
-        log.debug(.http, "fetch", .{ .url = request._url });
+        log.debug(.http, "fetch", .{ .url = self._url });
     }
 
-    const cookie_jar = switch (request._credentials) {
+    const cookie_jar = switch (self._credentials) {
         .omit => null,
         .include => &session.cookie_jar,
-        .@"same-origin" => if (exec.isSameOrigin(request._url)) &session.cookie_jar else null,
+        .@"same-origin" => if (!request_is_cross_origin) &session.cookie_jar else null,
     };
 
     // Synchronous failures from request layers (e.g. RobotsLayer returning
@@ -138,12 +157,12 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
     // releases response._arena. Propagating the error from here would also
     // fire the `errdefer response.deinit` above and double-free the arena.
     exec.makeRequest(.{
-        .ctx = fetch,
-        .url = request._url,
-        .method = request._method,
+        .ctx = self,
+        .url = self._url,
+        .method = self._method,
         .frame_id = exec.frameId(),
         .loader_id = exec.loaderId(),
-        .body = request._body,
+        .body = self._body,
         .headers = headers,
         .resource_type = .fetch,
         .cookie_jar = cookie_jar,
@@ -156,7 +175,95 @@ pub fn init(input: Input, options: ?InitOpts, exec: *const Execution) !js.Promis
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
     }) catch {};
-    return resolver.promise();
+}
+
+fn startPreflightRequest(self: *Fetch) !void {
+    const exec = self._exec;
+    const session = exec.session;
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeaders();
+    try exec.headersForRequest(&headers);
+    try Cors.populatePreflightHttpHeaders(
+        &headers,
+        self._response._arena,
+        self._request_origin,
+        self._method,
+        self._preflight_header_names,
+    );
+
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "fetch preflight", .{ .url = self._url });
+    }
+
+    exec.makeRequest(.{
+        .ctx = self,
+        .url = self._url,
+        .method = .OPTIONS,
+        .frame_id = exec.frameId(),
+        .loader_id = exec.loaderId(),
+        .body = null,
+        .headers = headers,
+        .resource_type = .preflight,
+        .cookie_jar = null,
+        .cookie_origin = exec.url.*,
+        .notification = session.notification,
+        .start_callback = preflightStartCallback,
+        .header_callback = preflightHeaderDoneCallback,
+        .data_callback = preflightDataCallback,
+        .done_callback = preflightDoneCallback,
+        .error_callback = preflightErrorCallback,
+        .shutdown_callback = httpShutdownCallback,
+    }) catch {};
+}
+
+fn preflightStartCallback(response: HttpClient.Response) !void {
+    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "preflight start", .{ .url = self._url, .source = "fetch" });
+    }
+}
+
+fn preflightHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
+    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
+
+    if (self._signal) |signal| {
+        if (signal._aborted) {
+            return .abort;
+        }
+    }
+
+    var response_header_iter = response.headerIterator();
+    const response_headers = (try response_header_iter.collect(self._response._arena)).items;
+    if (!Cors.preflightAllows(
+        response.status(),
+        response_headers,
+        self._method,
+        self._preflight_header_names,
+        self._request_origin,
+        self._credentials == .include,
+    )) {
+        return rejectHeaderFetch(self, "fetch CORS preflight failed");
+    }
+    return .proceed;
+}
+
+fn preflightDataCallback(_: HttpClient.Response, _: []const u8) !void {}
+
+fn preflightDoneCallback(ctx: *anyopaque) !void {
+    const self: *Fetch = @ptrCast(@alignCast(ctx));
+    self.startFetchRequest() catch |err| {
+        httpErrorCallback(ctx, err);
+    };
+}
+
+fn preflightErrorCallback(ctx: *anyopaque, err: anyerror) void {
+    const self: *Fetch = @ptrCast(@alignCast(ctx));
+    log.info(.http, "preflight error", .{
+        .source = "fetch",
+        .url = self._url,
+        .err = err,
+    });
+    httpErrorCallback(ctx, err);
 }
 
 fn rejectHeaderFetch(self: *Fetch, comptime message: []const u8) HttpClient.HeaderResult {
@@ -350,6 +457,7 @@ test "WebApi: fetch" {
     try testing.htmlRunner("net/fetch_no_cors_opaque.html", .{});
     try testing.htmlRunner("net/fetch_no_cors_headers.html", .{});
     try testing.htmlRunner("net/fetch_cors_credentials_wildcard.html", .{});
+    try testing.htmlRunner("net/fetch_cors_preflight_success.html", .{});
     try testing.htmlRunner("net/fetch_cors_preflight_required.html", .{});
     try testing.htmlRunner("net/fetch_hash_route.html", .{});
 }

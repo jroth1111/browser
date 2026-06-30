@@ -70,6 +70,19 @@ pub fn isSafelistedMethod(method: http.Method) bool {
     return method == .GET or method == .HEAD or method == .POST;
 }
 
+pub fn methodName(method: http.Method) []const u8 {
+    return switch (method) {
+        .GET => "GET",
+        .PUT => "PUT",
+        .POST => "POST",
+        .DELETE => "DELETE",
+        .HEAD => "HEAD",
+        .OPTIONS => "OPTIONS",
+        .PATCH => "PATCH",
+        .PROPFIND => "PROPFIND",
+    };
+}
+
 pub fn isSafelistedRequestHeader(name: []const u8, value: []const u8) bool {
     if (std.ascii.eqlIgnoreCase(name, "accept")) {
         return isSafelistedValue(value);
@@ -83,6 +96,42 @@ pub fn isSafelistedRequestHeader(name: []const u8, value: []const u8) bool {
         return isSafelistedContentType(value);
     }
     return false;
+}
+
+fn hasHeaderName(names: []const []const u8, name: []const u8) bool {
+    for (names) |existing| {
+        if (std.ascii.eqlIgnoreCase(existing, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn lessThanHeaderName(_: void, lhs: []const u8, rhs: []const u8) bool {
+    return std.mem.lessThan(u8, lhs, rhs);
+}
+
+pub fn unsafeRequestHeaderNames(
+    request_headers: ?*Headers,
+    allocator: std.mem.Allocator,
+) ![]const []const u8 {
+    const headers = request_headers orelse return &.{};
+    const pairs = try headers.snapshotPairs(allocator);
+
+    var names: std.ArrayList([]const u8) = .empty;
+    for (pairs) |pair| {
+        if (isSafelistedRequestHeader(pair[0], pair[1])) {
+            continue;
+        }
+        if (hasHeaderName(names.items, pair[0])) {
+            continue;
+        }
+        const lowered = try allocator.dupe(u8, pair[0]);
+        _ = std.ascii.lowerString(lowered, pair[0]);
+        try names.append(allocator, lowered);
+    }
+    std.mem.sort([]const u8, names.items, {}, lessThanHeaderName);
+    return try names.toOwnedSlice(allocator);
 }
 
 pub fn requestRequiresPreflight(
@@ -101,6 +150,48 @@ pub fn requestRequiresPreflight(
         }
     }
     return false;
+}
+
+pub fn populateCorsMetadataHeaders(
+    http_headers: *HttpClient.Headers,
+    allocator: std.mem.Allocator,
+    origin: []const u8,
+    mode: []const u8,
+) !void {
+    const origin_header = try std.fmt.allocPrintSentinel(allocator, "Origin: {s}", .{origin}, 0);
+    try http_headers.set(origin_header.ptr);
+
+    const mode_header = try std.fmt.allocPrintSentinel(allocator, "Sec-Fetch-Mode: {s}", .{mode}, 0);
+    try http_headers.set(mode_header.ptr);
+}
+
+pub fn populatePreflightHttpHeaders(
+    http_headers: *HttpClient.Headers,
+    allocator: std.mem.Allocator,
+    origin: []const u8,
+    method: http.Method,
+    request_header_names: []const []const u8,
+) !void {
+    try populateCorsMetadataHeaders(http_headers, allocator, origin, "cors");
+
+    const method_header = try std.fmt.allocPrintSentinel(
+        allocator,
+        "Access-Control-Request-Method: {s}",
+        .{methodName(method)},
+        0,
+    );
+    try http_headers.set(method_header.ptr);
+
+    if (request_header_names.len > 0) {
+        const joined = try std.mem.join(allocator, ", ", request_header_names);
+        const header = try std.mem.concatWithSentinel(
+            allocator,
+            u8,
+            &.{ "Access-Control-Request-Headers: ", joined },
+            0,
+        );
+        try http_headers.set(header.ptr);
+    }
 }
 
 pub fn populateNoCorsSafelistedHttpHeaders(
@@ -149,6 +240,42 @@ fn headerListContains(list: []const u8, name: []const u8, allow_wildcard: bool) 
         }
     }
     return false;
+}
+
+pub fn preflightAllows(
+    status: ?u16,
+    headers: []const http.Header,
+    method: http.Method,
+    request_header_names: []const []const u8,
+    requesting_origin: []const u8,
+    credentials_include: bool,
+) bool {
+    const code = status orelse return false;
+    if (code < 200 or code > 299) {
+        return false;
+    }
+
+    if (!responseAllows(headers, requesting_origin, credentials_include)) {
+        return false;
+    }
+
+    if (!isSafelistedMethod(method)) {
+        const allow_methods = responseHeaderValue(headers, "access-control-allow-methods") orelse return false;
+        if (!headerListContains(allow_methods, methodName(method), !credentials_include)) {
+            return false;
+        }
+    }
+
+    if (request_header_names.len > 0) {
+        const allow_headers = responseHeaderValue(headers, "access-control-allow-headers") orelse return false;
+        for (request_header_names) |name| {
+            if (!headerListContains(allow_headers, name, !credentials_include)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 pub fn isSafelistedResponseHeader(name: []const u8) bool {

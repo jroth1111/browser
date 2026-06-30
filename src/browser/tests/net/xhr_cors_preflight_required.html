@@ -1,15 +1,28 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 
-<script id=xhr_cors_preflight_required>
-  testing.expectError('TypeError', () => {
+<script id=xhr_cors_preflight_required type=module>
+  {
+    const state = await testing.async();
     const req = new XMLHttpRequest();
-    req.open('PUT', `${testing.CORS_ORIGIN}/cors/allowed`);
-  });
-
-  testing.expectError('TypeError', () => {
-    const req = new XMLHttpRequest();
-    req.open('GET', `${testing.CORS_ORIGIN}/cors/allowed`);
+    req.onload = () => testing.fail('denied preflight XHR should not load');
+    req.onerror = async () => {
+      const snapshot = await (await fetch(`${testing.ORIGIN}/cors/read-preflight`)).json();
+      state.resolve(snapshot);
+    };
+    req.open('GET', `${testing.CORS_ORIGIN}/cors/preflight-blocked`);
     req.setRequestHeader('X-Needs-Preflight', '1');
-  });
+    req.send();
+
+    await state.done((snapshot) => {
+      testing.expectEqual(true, snapshot.preflightSeen);
+      testing.expectEqual(true, snapshot.methodGet);
+      testing.expectEqual(true, snapshot.headerMatches);
+      testing.expectEqual(true, snapshot.originMatches);
+      testing.expectEqual(true, snapshot.secFetchModeCors);
+      testing.expectEqual(false, snapshot.actualSeen);
+      testing.expectEqual(0, req.status);
+      testing.expectEqual('', req.responseText);
+    });
+  }
 </script>

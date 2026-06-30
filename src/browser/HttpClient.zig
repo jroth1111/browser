@@ -1676,6 +1676,7 @@ pub const Request = struct {
         script,
         fetch,
         stylesheet,
+        preflight,
 
         // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
         // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
@@ -1688,6 +1689,7 @@ pub const Request = struct {
                 .script => "Script",
                 .fetch => "Fetch",
                 .stylesheet => "Stylesheet",
+                .preflight => "Preflight",
             };
         }
     };

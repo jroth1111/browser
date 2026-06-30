@@ -519,11 +519,21 @@ const CorsHeaderSnapshot = struct {
     xhr_origin_matches: bool = false,
     xhr_sec_fetch_mode_cors: bool = false,
     xhr_content_type_present: bool = false,
+    preflight_seen: bool = false,
+    preflight_method_put: bool = false,
+    preflight_method_get: bool = false,
+    preflight_header_matches: bool = false,
+    preflight_origin_matches: bool = false,
+    preflight_sec_fetch_mode_cors: bool = false,
+    preflight_actual_seen: bool = false,
+    preflight_actual_method_put: bool = false,
+    preflight_actual_header_matches: bool = false,
 };
 
 var cors_header_snapshot_mutex: std.Thread.Mutex = .{};
 var cors_no_cors_header_snapshot: CorsHeaderSnapshot = .{};
 var cors_xhr_header_snapshot: CorsHeaderSnapshot = .{};
+var cors_preflight_snapshot: CorsHeaderSnapshot = .{};
 
 var test_config: Config = undefined;
 
@@ -781,6 +791,138 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 .{ .name = "Access-Control-Allow-Credentials", .value = "true" },
                 .{ .name = "Access-Control-Expose-Headers", .value = "*" },
                 .{ .name = "X-Wildcard-Credentials-Proof", .value = "hidden" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/preflight-ok")) {
+        if (req.head.method == .OPTIONS) {
+            var snapshot: CorsHeaderSnapshot = .{
+                .preflight_seen = true,
+                .preflight_method_put = false,
+                .preflight_method_get = false,
+                .preflight_header_matches = false,
+                .preflight_origin_matches = false,
+                .preflight_sec_fetch_mode_cors = false,
+                .preflight_actual_seen = false,
+            };
+            var it = req.iterateHeaders();
+            while (it.next()) |h| {
+                if (std.ascii.eqlIgnoreCase(h.name, "Access-Control-Request-Method")) {
+                    snapshot.preflight_method_put = std.ascii.eqlIgnoreCase(h.value, "PUT");
+                    snapshot.preflight_method_get = std.ascii.eqlIgnoreCase(h.value, "GET");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Access-Control-Request-Headers")) {
+                    snapshot.preflight_header_matches = std.mem.indexOf(u8, h.value, "x-needs-preflight") != null;
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
+                    snapshot.preflight_origin_matches = std.mem.eql(u8, h.value, "http://127.0.0.1:9582");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                    snapshot.preflight_sec_fetch_mode_cors = std.mem.eql(u8, h.value, "cors");
+                }
+            }
+
+            cors_header_snapshot_mutex.lock();
+            cors_preflight_snapshot = snapshot;
+            cors_header_snapshot_mutex.unlock();
+
+            return req.respond("", .{
+                .extra_headers = &.{
+                    .{ .name = "Access-Control-Allow-Origin", .value = "http://127.0.0.1:9582" },
+                    .{ .name = "Access-Control-Allow-Methods", .value = "PUT" },
+                    .{ .name = "Access-Control-Allow-Headers", .value = "x-needs-preflight" },
+                },
+            });
+        }
+
+        cors_header_snapshot_mutex.lock();
+        cors_preflight_snapshot.preflight_actual_seen = true;
+        cors_preflight_snapshot.preflight_actual_method_put = req.head.method == .PUT;
+        var actual_it = req.iterateHeaders();
+        while (actual_it.next()) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "X-Needs-Preflight")) {
+                cors_preflight_snapshot.preflight_actual_header_matches = std.mem.eql(u8, h.value, "1");
+            }
+        }
+        cors_header_snapshot_mutex.unlock();
+
+        return req.respond("preflight-ok", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Access-Control-Allow-Origin", .value = "http://127.0.0.1:9582" },
+                .{ .name = "Access-Control-Expose-Headers", .value = "X-Cors-Proof" },
+                .{ .name = "X-Cors-Proof", .value = "visible" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/preflight-blocked")) {
+        if (req.head.method == .OPTIONS) {
+            var snapshot: CorsHeaderSnapshot = .{
+                .preflight_seen = true,
+                .preflight_actual_seen = false,
+            };
+            var it = req.iterateHeaders();
+            while (it.next()) |h| {
+                if (std.ascii.eqlIgnoreCase(h.name, "Access-Control-Request-Method")) {
+                    snapshot.preflight_method_put = std.ascii.eqlIgnoreCase(h.value, "PUT");
+                    snapshot.preflight_method_get = std.ascii.eqlIgnoreCase(h.value, "GET");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Access-Control-Request-Headers")) {
+                    snapshot.preflight_header_matches = std.mem.indexOf(u8, h.value, "x-needs-preflight") != null;
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
+                    snapshot.preflight_origin_matches = std.mem.eql(u8, h.value, "http://127.0.0.1:9582");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                    snapshot.preflight_sec_fetch_mode_cors = std.mem.eql(u8, h.value, "cors");
+                }
+            }
+
+            cors_header_snapshot_mutex.lock();
+            cors_preflight_snapshot = snapshot;
+            cors_header_snapshot_mutex.unlock();
+
+            return req.respond("blocked-preflight", .{
+                .status = .forbidden,
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/plain" },
+                },
+            });
+        }
+
+        cors_header_snapshot_mutex.lock();
+        cors_preflight_snapshot.preflight_actual_seen = true;
+        cors_preflight_snapshot.preflight_actual_method_put = req.head.method == .PUT;
+        cors_header_snapshot_mutex.unlock();
+
+        return req.respond("blocked-actual", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Access-Control-Allow-Origin", .value = "http://127.0.0.1:9582" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/read-preflight")) {
+        cors_header_snapshot_mutex.lock();
+        const snapshot = cors_preflight_snapshot;
+        cors_header_snapshot_mutex.unlock();
+
+        var body_buf: [512]u8 = undefined;
+        const body = try std.fmt.bufPrint(
+            &body_buf,
+            "{{\"preflightSeen\":{},\"methodPut\":{},\"methodGet\":{},\"headerMatches\":{},\"originMatches\":{},\"secFetchModeCors\":{},\"actualSeen\":{},\"actualMethodPut\":{},\"actualHeaderMatches\":{}}}",
+            .{
+                snapshot.preflight_seen,
+                snapshot.preflight_method_put,
+                snapshot.preflight_method_get,
+                snapshot.preflight_header_matches,
+                snapshot.preflight_origin_matches,
+                snapshot.preflight_sec_fetch_mode_cors,
+                snapshot.preflight_actual_seen,
+                snapshot.preflight_actual_method_put,
+                snapshot.preflight_actual_header_matches,
+            },
+        );
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/json" },
             },
         });
     }

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_cors_preflight_success type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch(`${testing.CORS_ORIGIN}/cors/preflight-ok`, {
+      mode: 'cors',
+      method: 'PUT',
+      headers: {
+        'X-Needs-Preflight': '1',
+      },
+      body: 'hello',
+    });
+    const text = await response.text();
+    const snapshot = await (await fetch(`${testing.ORIGIN}/cors/read-preflight`)).json();
+
+    state.resolve({ response, text, snapshot });
+    await state.done(({ response, text, snapshot }) => {
+      testing.expectEqual('cors', response.type);
+      testing.expectEqual(200, response.status);
+      testing.expectEqual('preflight-ok', text);
+      testing.expectEqual('visible', response.headers.get('x-cors-proof'));
+      testing.expectEqual(true, snapshot.preflightSeen);
+      testing.expectEqual(true, snapshot.methodPut);
+      testing.expectEqual(true, snapshot.headerMatches);
+      testing.expectEqual(true, snapshot.originMatches);
+      testing.expectEqual(true, snapshot.secFetchModeCors);
+      testing.expectEqual(true, snapshot.actualSeen);
+      testing.expectEqual(true, snapshot.actualMethodPut);
+      testing.expectEqual(true, snapshot.actualHeaderMatches);
+    });
+  }
+</script>

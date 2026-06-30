@@ -7,7 +7,7 @@
 
     let customHeaderBlocked = false;
     try {
-      await fetch(`${testing.CORS_ORIGIN}/cors/allowed`, {
+      await fetch(`${testing.CORS_ORIGIN}/cors/preflight-blocked`, {
         mode: 'cors',
         headers: {
           'X-Needs-Preflight': '1',
@@ -16,21 +16,35 @@
     } catch (error) {
       customHeaderBlocked = error instanceof TypeError;
     }
+    const customHeaderSnapshot = await (await fetch(`${testing.ORIGIN}/cors/read-preflight`)).json();
 
     let methodBlocked = false;
     try {
-      await fetch(`${testing.CORS_ORIGIN}/cors/allowed`, {
+      await fetch(`${testing.CORS_ORIGIN}/cors/preflight-blocked`, {
         mode: 'cors',
         method: 'PUT',
+        body: 'hello',
       });
     } catch (error) {
       methodBlocked = error instanceof TypeError;
     }
+    const methodSnapshot = await (await fetch(`${testing.ORIGIN}/cors/read-preflight`)).json();
 
-    state.resolve();
-    await state.done(() => {
+    state.resolve({ customHeaderSnapshot, methodSnapshot });
+    await state.done(({ customHeaderSnapshot, methodSnapshot }) => {
       testing.expectEqual(true, customHeaderBlocked);
+      testing.expectEqual(true, customHeaderSnapshot.preflightSeen);
+      testing.expectEqual(true, customHeaderSnapshot.methodGet);
+      testing.expectEqual(true, customHeaderSnapshot.headerMatches);
+      testing.expectEqual(true, customHeaderSnapshot.originMatches);
+      testing.expectEqual(true, customHeaderSnapshot.secFetchModeCors);
+      testing.expectEqual(false, customHeaderSnapshot.actualSeen);
       testing.expectEqual(true, methodBlocked);
+      testing.expectEqual(true, methodSnapshot.preflightSeen);
+      testing.expectEqual(true, methodSnapshot.methodPut);
+      testing.expectEqual(true, methodSnapshot.originMatches);
+      testing.expectEqual(true, methodSnapshot.secFetchModeCors);
+      testing.expectEqual(false, methodSnapshot.actualSeen);
     });
   }
 </script>

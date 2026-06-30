@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=xhr_cors_preflight_success type=module>
+  {
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = async () => {
+      const snapshot = await (await fetch(`${testing.ORIGIN}/cors/read-preflight`)).json();
+      state.resolve({ req, snapshot });
+    };
+    req.onerror = () => testing.fail('preflighted XHR should load');
+    req.open('PUT', `${testing.CORS_ORIGIN}/cors/preflight-ok`);
+    req.setRequestHeader('X-Needs-Preflight', '1');
+    req.send('hello');
+
+    await state.done(({ req, snapshot }) => {
+      testing.expectEqual(200, req.status);
+      testing.expectEqual('preflight-ok', req.responseText);
+      testing.expectEqual('visible', req.getResponseHeader('x-cors-proof'));
+      testing.expectEqual(true, snapshot.preflightSeen);
+      testing.expectEqual(true, snapshot.methodPut);
+      testing.expectEqual(true, snapshot.headerMatches);
+      testing.expectEqual(true, snapshot.originMatches);
+      testing.expectEqual(true, snapshot.secFetchModeCors);
+      testing.expectEqual(true, snapshot.actualSeen);
+      testing.expectEqual(true, snapshot.actualMethodPut);
+      testing.expectEqual(true, snapshot.actualHeaderMatches);
+    });
+  }
+</script>

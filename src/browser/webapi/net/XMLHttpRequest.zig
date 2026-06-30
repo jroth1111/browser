@@ -58,6 +58,7 @@ _url: [:0]const u8 = "",
 _method: http.Method = .GET,
 _request_headers: *Headers,
 _request_body: ?[]const u8 = null,
+_preflight_header_names: []const []const u8 = &.{},
 
 _response: ?Response = null,
 _response_data: std.ArrayList(u8) = .empty,
@@ -202,9 +203,6 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
     const exec = self._exec;
     const method = try parseMethod(method_);
     const resolved_url = try URL.resolve(self._arena, exec.base(), url, .{ .always_dupe = true, .encoding = exec.charset.* });
-    if (!exec.isSameOrigin(resolved_url) and !Cors.isSafelistedMethod(method)) {
-        return error.TypeError;
-    }
     self._method = method;
     self._url = resolved_url;
     try self.stateChanged(.opened, exec);
@@ -213,9 +211,6 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
 pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8, exec: *const Execution) !void {
     if (self._ready_state != .opened) {
         return error.InvalidStateError;
-    }
-    if (!self._exec.isSameOrigin(self._url) and !Cors.isSafelistedRequestHeader(name, value)) {
-        return error.TypeError;
     }
     return self._request_headers.append(name, value, exec);
 }
@@ -254,10 +249,30 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
 
     const exec = self._exec;
     const request_is_cross_origin = !exec.isSameOrigin(self._url);
-    if (request_is_cross_origin and try Cors.requestRequiresPreflight(self._method, self._request_headers, exec.call_arena)) {
-        return error.TypeError;
+
+    self.acquireRef();
+    self._active_requests += 1;
+
+    if (request_is_cross_origin) {
+        self._preflight_header_names = try Cors.unsafeRequestHeaderNames(self._request_headers, self._arena);
+        if (!Cors.isSafelistedMethod(self._method) or self._preflight_header_names.len > 0) {
+            self.startPreflightRequest() catch |err| {
+                self.releaseSelfRef();
+                return err;
+            };
+            return;
+        }
     }
 
+    self.startXhrRequest() catch |err| {
+        self.releaseSelfRef();
+        return err;
+    };
+}
+
+fn startXhrRequest(self: *XMLHttpRequest) !void {
+    const exec = self._exec;
+    const request_is_cross_origin = !exec.isSameOrigin(self._url);
     const session = exec.session;
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
@@ -265,24 +280,15 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
     // Only add cookies for same-origin or when withCredentials is true
     const cookie_support = self._with_credentials or !request_is_cross_origin;
 
-    try self._request_headers.populateHttpHeader(exec.call_arena, &headers);
+    try self._request_headers.populateHttpHeader(self._arena, &headers);
     try exec.headersForRequest(&headers);
     if (request_is_cross_origin) {
-        const request_origin = URL.getOrigin(exec.call_arena, exec.url.*) catch null;
+        const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
         const request_origin_value = request_origin orelse "null";
-        if (!self._request_headers.has("origin", exec)) {
-            const origin_header = try std.fmt.allocPrintSentinel(exec.call_arena, "Origin: {s}", .{request_origin_value}, 0);
-            try headers.set(origin_header.ptr);
-        }
-        if (!self._request_headers.has("sec-fetch-mode", exec)) {
-            try headers.set("Sec-Fetch-Mode: cors");
-        }
+        try Cors.populateCorsMetadataHeaders(&headers, self._arena, request_origin_value, "cors");
     }
 
-    self.acquireRef();
-    self._active_requests += 1;
-
-    exec.makeRequest(.{
+    try exec.makeRequest(.{
         .ctx = self,
         .url = self._url,
         .method = self._method,
@@ -302,10 +308,47 @@ pub fn send(self: *XMLHttpRequest, body_: ?BodyInit, exec_: *const Execution) !v
         .error_callback = httpErrorCallback,
         .shutdown_callback = httpShutdownCallback,
         .body_outlives_request = true,
-    }) catch |err| {
-        self.releaseSelfRef();
-        return err;
-    };
+    });
+}
+
+fn startPreflightRequest(self: *XMLHttpRequest) !void {
+    const exec = self._exec;
+    const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
+    const request_origin_value = request_origin orelse "null";
+
+    const session = exec.session;
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeaders();
+    try exec.headersForRequest(&headers);
+    try Cors.populatePreflightHttpHeaders(
+        &headers,
+        self._arena,
+        request_origin_value,
+        self._method,
+        self._preflight_header_names,
+    );
+
+    try exec.makeRequest(.{
+        .ctx = self,
+        .url = self._url,
+        .method = .OPTIONS,
+        .headers = headers,
+        .frame_id = exec.frameId(),
+        .loader_id = exec.loaderId(),
+        .body = null,
+        .cookie_jar = null,
+        .cookie_origin = exec.url.*,
+        .resource_type = .preflight,
+        .timeout_ms = self._timeout,
+        .notification = session.notification,
+        .start_callback = preflightStartCallback,
+        .header_callback = preflightHeaderDoneCallback,
+        .data_callback = preflightDataCallback,
+        .done_callback = preflightDoneCallback,
+        .error_callback = preflightErrorCallback,
+        .shutdown_callback = httpShutdownCallback,
+        .body_outlives_request = true,
+    });
 }
 
 // https://xhr.spec.whatwg.org/#the-upload-attribute
@@ -469,6 +512,54 @@ pub fn getResponseXML(self: *XMLHttpRequest, exec: *const Execution) !?*Node.Doc
         },
         .worker => return error.NotSupportedInWorker,
     }
+}
+
+fn preflightStartCallback(response: HttpClient.Response) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "preflight start", .{ .method = self._method, .url = self._url, .source = "xhr" });
+    }
+    self._http_response = response;
+}
+
+fn preflightHeaderDoneCallback(response: HttpClient.Response) !HttpClient.HeaderResult {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
+    const exec = self._exec;
+    const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
+    const request_origin_value = request_origin orelse "null";
+
+    var response_header_iter = response.headerIterator();
+    const response_headers = (try response_header_iter.collect(self._arena)).items;
+    if (!Cors.preflightAllows(
+        response.status(),
+        response_headers,
+        self._method,
+        self._preflight_header_names,
+        request_origin_value,
+        self._with_credentials,
+    )) {
+        return rejectHeaderXhr(self, error.CorsRejected);
+    }
+    return .proceed;
+}
+
+fn preflightDataCallback(_: HttpClient.Response, _: []const u8) !void {}
+
+fn preflightDoneCallback(ctx: *anyopaque) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
+    self._http_response = null;
+    self.startXhrRequest() catch |err| {
+        self.handleError(err);
+        self.releaseSelfRef();
+    };
+}
+
+fn preflightErrorCallback(ctx: *anyopaque, err: anyerror) void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "preflight error", .{ .url = self._url, .err = err, .source = "xhr" });
+    }
+    httpErrorCallback(ctx, err);
 }
 
 fn httpStartCallback(response: HttpClient.Response) !void {
@@ -745,6 +836,7 @@ test "WebApi: XHR" {
     try testing.htmlRunner("net/xhr_cors_blocked.html", .{});
     try testing.htmlRunner("net/xhr_cors_credentials_wildcard.html", .{});
     try testing.htmlRunner("net/xhr_cors_request_headers.html", .{});
+    try testing.htmlRunner("net/xhr_cors_preflight_success.html", .{});
     try testing.htmlRunner("net/xhr_cors_preflight_required.html", .{});
 }
 
