@@ -15,6 +15,8 @@
     await state.done((snapshot) => {
       testing.expectEqual(true, snapshot.originMatches);
       testing.expectEqual(true, snapshot.secFetchModeCors);
+      testing.expectEqual(true, snapshot.secFetchDestEmpty);
+      testing.expectEqual(true, snapshot.secFetchSiteSameSite);
       testing.expectEqual(true, snapshot.contentTypePresent);
     });
   }

@@ -38,12 +38,16 @@
       testing.expectEqual(true, customHeaderSnapshot.headerMatches);
       testing.expectEqual(true, customHeaderSnapshot.originMatches);
       testing.expectEqual(true, customHeaderSnapshot.secFetchModeCors);
+      testing.expectEqual(true, customHeaderSnapshot.secFetchDestEmpty);
+      testing.expectEqual(true, customHeaderSnapshot.secFetchSiteSameSite);
       testing.expectEqual(false, customHeaderSnapshot.actualSeen);
       testing.expectEqual(true, methodBlocked);
       testing.expectEqual(true, methodSnapshot.preflightSeen);
       testing.expectEqual(true, methodSnapshot.methodPut);
       testing.expectEqual(true, methodSnapshot.originMatches);
       testing.expectEqual(true, methodSnapshot.secFetchModeCors);
+      testing.expectEqual(true, methodSnapshot.secFetchDestEmpty);
+      testing.expectEqual(true, methodSnapshot.secFetchSiteSameSite);
       testing.expectEqual(false, methodSnapshot.actualSeen);
     });
   }

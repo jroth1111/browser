@@ -23,6 +23,7 @@ const URL = @import("../../URL.zig");
 const DateTime = @import("../../../datetime.zig").DateTime;
 const Notification = @import("../../../Notification.zig");
 const public_suffix_list = @import("../../../data/public_suffix_list.zig").lookup;
+const Site = @import("../../Site.zig");
 
 const log = lp.log;
 const Allocator = std.mem.Allocator;
@@ -637,24 +638,7 @@ fn areCookiesEqual(a: *const Cookie, b: *const Cookie) bool {
 fn areSameSite(origin_url_: ?[:0]const u8, target_host: []const u8) !bool {
     const origin_url = origin_url_ orelse return true;
     const origin_host = URL.getHostname(origin_url);
-
-    // common case
-    if (std.mem.eql(u8, target_host, origin_host)) {
-        return true;
-    }
-
-    return std.mem.eql(u8, findSecondLevelDomain(target_host), findSecondLevelDomain(origin_host));
-}
-
-fn findSecondLevelDomain(host: []const u8) []const u8 {
-    var i = std.mem.lastIndexOfScalar(u8, host, '.') orelse return host;
-    while (true) {
-        i = std.mem.lastIndexOfScalar(u8, host[0..i], '.') orelse return host;
-        const strip = i + 1;
-        if (public_suffix_list(host[strip..]) == false) {
-            return host[strip..];
-        }
-    }
+    return Site.sameSiteHosts(target_host, origin_host);
 }
 
 pub const PreparedUri = struct {
@@ -693,24 +677,6 @@ fn toLower(str: []u8) []u8 {
 
 const testing = @import("../../../testing.zig");
 const test_url = "http://lightpanda.io/";
-test "cookie: findSecondLevelDomain" {
-    const cases = [_]struct { []const u8, []const u8 }{
-        .{ "", "" },
-        .{ "com", "com" },
-        .{ "lightpanda.io", "lightpanda.io" },
-        .{ "lightpanda.io", "test.lightpanda.io" },
-        .{ "lightpanda.io", "first.test.lightpanda.io" },
-        .{ "www.gov.uk", "www.gov.uk" },
-        .{ "stats.gov.uk", "www.stats.gov.uk" },
-        .{ "api.gov.uk", "api.gov.uk" },
-        .{ "dev.api.gov.uk", "dev.api.gov.uk" },
-        .{ "dev.api.gov.uk", "1.dev.api.gov.uk" },
-    };
-    for (cases) |c| {
-        try testing.expectEqual(c.@"0", findSecondLevelDomain(c.@"1"));
-    }
-}
-
 test "Jar: add" {
     const expectCookies = struct {
         fn expect(expected: []const struct { []const u8, []const u8 }, jar: Jar) !void {

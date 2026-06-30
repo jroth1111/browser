@@ -3,6 +3,8 @@ const std = @import("std");
 const HttpClient = @import("../../HttpClient.zig");
 const http = @import("../../../network/http.zig");
 
+const Site = @import("../../Site.zig");
+const URL = @import("../../URL.zig");
 const Headers = @import("Headers.zig");
 
 pub fn sameOrigin(requesting_origin: ?[]const u8, response_origin: ?[]const u8) bool {
@@ -152,27 +154,58 @@ pub fn requestRequiresPreflight(
     return false;
 }
 
-pub fn populateCorsMetadataHeaders(
+pub fn fetchMetadataSite(
+    allocator: std.mem.Allocator,
+    requesting_origin: []const u8,
+    request_url: [:0]const u8,
+) ![]const u8 {
+    const request_origin = try URL.getOrigin(allocator, request_url) orelse return "cross-site";
+    if (std.mem.eql(u8, requesting_origin, request_origin)) {
+        return "same-origin";
+    }
+    if (Site.sameSiteOriginToUrl(requesting_origin, request_url)) {
+        return "same-site";
+    }
+    return "cross-site";
+}
+
+pub fn populateFetchMetadataHeaders(
     http_headers: *HttpClient.Headers,
     allocator: std.mem.Allocator,
-    origin: []const u8,
+    requesting_origin: []const u8,
+    request_url: [:0]const u8,
     mode: []const u8,
+    include_origin: bool,
 ) !void {
-    const origin_header = try std.fmt.allocPrintSentinel(allocator, "Origin: {s}", .{origin}, 0);
-    try http_headers.set(origin_header.ptr);
+    if (include_origin) {
+        const origin_header = try std.fmt.allocPrintSentinel(allocator, "Origin: {s}", .{requesting_origin}, 0);
+        try http_headers.set(origin_header.ptr);
+    }
 
     const mode_header = try std.fmt.allocPrintSentinel(allocator, "Sec-Fetch-Mode: {s}", .{mode}, 0);
     try http_headers.set(mode_header.ptr);
+
+    const dest_header = try std.fmt.allocPrintSentinel(allocator, "Sec-Fetch-Dest: empty", .{}, 0);
+    try http_headers.set(dest_header.ptr);
+
+    const site_header = try std.fmt.allocPrintSentinel(
+        allocator,
+        "Sec-Fetch-Site: {s}",
+        .{try fetchMetadataSite(allocator, requesting_origin, request_url)},
+        0,
+    );
+    try http_headers.set(site_header.ptr);
 }
 
 pub fn populatePreflightHttpHeaders(
     http_headers: *HttpClient.Headers,
     allocator: std.mem.Allocator,
     origin: []const u8,
+    request_url: [:0]const u8,
     method: http.Method,
     request_header_names: []const []const u8,
 ) !void {
-    try populateCorsMetadataHeaders(http_headers, allocator, origin, "cors");
+    try populateFetchMetadataHeaders(http_headers, allocator, origin, request_url, "cors", true);
 
     const method_header = try std.fmt.allocPrintSentinel(
         allocator,

@@ -129,17 +129,14 @@ fn startFetchRequest(self: *Fetch) !void {
     try exec.headersForRequest(&headers);
 
     const request_is_cross_origin = !exec.isSameOrigin(self._url);
-    if (request_is_cross_origin) {
-        try Cors.populateCorsMetadataHeaders(&headers, self._response._arena, self._request_origin, @tagName(self._mode));
-    } else {
-        const mode_header = try std.fmt.allocPrintSentinel(
-            self._response._arena,
-            "Sec-Fetch-Mode: {s}",
-            .{@tagName(self._mode)},
-            0,
-        );
-        try headers.set(mode_header.ptr);
-    }
+    try Cors.populateFetchMetadataHeaders(
+        &headers,
+        self._response._arena,
+        self._request_origin,
+        self._url,
+        @tagName(self._mode),
+        request_is_cross_origin,
+    );
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = self._url });
@@ -187,6 +184,7 @@ fn startPreflightRequest(self: *Fetch) !void {
         &headers,
         self._response._arena,
         self._request_origin,
+        self._url,
         self._method,
         self._preflight_header_names,
     );

@@ -516,8 +516,12 @@ const CorsHeaderSnapshot = struct {
     content_language_present: bool = false,
     content_type_present: bool = false,
     sec_fetch_mode_no_cors: bool = false,
+    sec_fetch_dest_empty: bool = false,
+    sec_fetch_site_same_site: bool = false,
     xhr_origin_matches: bool = false,
     xhr_sec_fetch_mode_cors: bool = false,
+    xhr_sec_fetch_dest_empty: bool = false,
+    xhr_sec_fetch_site_same_site: bool = false,
     xhr_content_type_present: bool = false,
     preflight_seen: bool = false,
     preflight_method_put: bool = false,
@@ -525,6 +529,8 @@ const CorsHeaderSnapshot = struct {
     preflight_header_matches: bool = false,
     preflight_origin_matches: bool = false,
     preflight_sec_fetch_mode_cors: bool = false,
+    preflight_sec_fetch_dest_empty: bool = false,
+    preflight_sec_fetch_site_same_site: bool = false,
     preflight_actual_seen: bool = false,
     preflight_actual_method_put: bool = false,
     preflight_actual_header_matches: bool = false,
@@ -817,6 +823,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                     snapshot.preflight_origin_matches = std.mem.eql(u8, h.value, "http://127.0.0.1:9582");
                 } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
                     snapshot.preflight_sec_fetch_mode_cors = std.mem.eql(u8, h.value, "cors");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                    snapshot.preflight_sec_fetch_dest_empty = std.mem.eql(u8, h.value, "empty");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                    snapshot.preflight_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
                 }
             }
 
@@ -871,6 +881,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                     snapshot.preflight_origin_matches = std.mem.eql(u8, h.value, "http://127.0.0.1:9582");
                 } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
                     snapshot.preflight_sec_fetch_mode_cors = std.mem.eql(u8, h.value, "cors");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                    snapshot.preflight_sec_fetch_dest_empty = std.mem.eql(u8, h.value, "empty");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                    snapshot.preflight_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
                 }
             }
 
@@ -907,7 +921,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         var body_buf: [512]u8 = undefined;
         const body = try std.fmt.bufPrint(
             &body_buf,
-            "{{\"preflightSeen\":{},\"methodPut\":{},\"methodGet\":{},\"headerMatches\":{},\"originMatches\":{},\"secFetchModeCors\":{},\"actualSeen\":{},\"actualMethodPut\":{},\"actualHeaderMatches\":{}}}",
+            "{{\"preflightSeen\":{},\"methodPut\":{},\"methodGet\":{},\"headerMatches\":{},\"originMatches\":{},\"secFetchModeCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{},\"actualSeen\":{},\"actualMethodPut\":{},\"actualHeaderMatches\":{}}}",
             .{
                 snapshot.preflight_seen,
                 snapshot.preflight_method_put,
@@ -915,6 +929,8 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.preflight_header_matches,
                 snapshot.preflight_origin_matches,
                 snapshot.preflight_sec_fetch_mode_cors,
+                snapshot.preflight_sec_fetch_dest_empty,
+                snapshot.preflight_sec_fetch_site_same_site,
                 snapshot.preflight_actual_seen,
                 snapshot.preflight_actual_method_put,
                 snapshot.preflight_actual_header_matches,
@@ -939,6 +955,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.content_type_present = std.mem.startsWith(u8, h.value, "text/plain");
             } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
                 snapshot.sec_fetch_mode_no_cors = std.mem.eql(u8, h.value, "no-cors");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                snapshot.sec_fetch_dest_empty = std.mem.eql(u8, h.value, "empty");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                snapshot.sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
             }
         }
 
@@ -961,12 +981,14 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         var body_buf: [256]u8 = undefined;
         const body = try std.fmt.bufPrint(
             &body_buf,
-            "{{\"xUnsafeNoCorsPresent\":{},\"contentLanguagePresent\":{},\"contentTypePresent\":{},\"secFetchModeNoCors\":{}}}",
+            "{{\"xUnsafeNoCorsPresent\":{},\"contentLanguagePresent\":{},\"contentTypePresent\":{},\"secFetchModeNoCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{}}}",
             .{
                 snapshot.x_unsafe_no_cors_present,
                 snapshot.content_language_present,
                 snapshot.content_type_present,
                 snapshot.sec_fetch_mode_no_cors,
+                snapshot.sec_fetch_dest_empty,
+                snapshot.sec_fetch_site_same_site,
             },
         );
         return req.respond(body, .{
@@ -984,6 +1006,10 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
                 snapshot.xhr_origin_matches = std.mem.eql(u8, h.value, "http://127.0.0.1:9582");
             } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
                 snapshot.xhr_sec_fetch_mode_cors = std.mem.eql(u8, h.value, "cors");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                snapshot.xhr_sec_fetch_dest_empty = std.mem.eql(u8, h.value, "empty");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                snapshot.xhr_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
             } else if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
                 snapshot.xhr_content_type_present = std.mem.startsWith(u8, h.value, "text/plain");
             }
@@ -1011,10 +1037,12 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         var body_buf: [256]u8 = undefined;
         const body = try std.fmt.bufPrint(
             &body_buf,
-            "{{\"originMatches\":{},\"secFetchModeCors\":{},\"contentTypePresent\":{}}}",
+            "{{\"originMatches\":{},\"secFetchModeCors\":{},\"secFetchDestEmpty\":{},\"secFetchSiteSameSite\":{},\"contentTypePresent\":{}}}",
             .{
                 snapshot.xhr_origin_matches,
                 snapshot.xhr_sec_fetch_mode_cors,
+                snapshot.xhr_sec_fetch_dest_empty,
+                snapshot.xhr_sec_fetch_site_same_site,
                 snapshot.xhr_content_type_present,
             },
         );

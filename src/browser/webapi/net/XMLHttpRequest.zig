@@ -282,11 +282,9 @@ fn startXhrRequest(self: *XMLHttpRequest) !void {
 
     try self._request_headers.populateHttpHeader(self._arena, &headers);
     try exec.headersForRequest(&headers);
-    if (request_is_cross_origin) {
-        const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
-        const request_origin_value = request_origin orelse "null";
-        try Cors.populateCorsMetadataHeaders(&headers, self._arena, request_origin_value, "cors");
-    }
+    const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
+    const request_origin_value = request_origin orelse "null";
+    try Cors.populateFetchMetadataHeaders(&headers, self._arena, request_origin_value, self._url, "cors", request_is_cross_origin);
 
     try exec.makeRequest(.{
         .ctx = self,
@@ -324,6 +322,7 @@ fn startPreflightRequest(self: *XMLHttpRequest) !void {
         &headers,
         self._arena,
         request_origin_value,
+        self._url,
         self._method,
         self._preflight_header_names,
     );
