@@ -97,7 +97,7 @@ pub const Transform = struct {
             finite(self.d) and finite(self.e) and finite(self.f);
     }
 
-    fn point(self: Transform, x: f64, y: f64) Point {
+    pub fn point(self: Transform, x: f64, y: f64) Point {
         return .{
             .x = self.a * x + self.c * y + self.e,
             .y = self.b * x + self.d * y + self.f,
@@ -286,11 +286,33 @@ pub const FilledPath = struct {
     }
 };
 
+pub const StrokedPath = struct {
+    path: CanvasPath,
+    line_width: f64,
+    rgba: color.RGBA,
+
+    pub fn init(path: CanvasPath, line_width: f64, rgba: color.RGBA) ?StrokedPath {
+        if (!finite(line_width) or line_width <= 0 or path.isEmpty()) return null;
+        return .{
+            .path = path,
+            .line_width = line_width,
+            .rgba = rgba,
+        };
+    }
+
+    fn contains(self: *const StrokedPath, x: i64, y: i64) bool {
+        const xf = @as(f64, @floatFromInt(x)) + 0.5;
+        const yf = @as(f64, @floatFromInt(y)) + 0.5;
+        return self.path.strokeContains(xf, yf, self.line_width);
+    }
+};
+
 pub const Paint = union(enum) {
     rect: FilledRect,
     clear_rect: ClearedRect,
     stroke_rect: StrokedRect,
     path: FilledPath,
+    stroke_path: StrokedPath,
     image: ImagePatch,
 
     fn pixelAt(self: *const Paint, x: i64, y: i64) ?color.RGBA {
@@ -299,6 +321,7 @@ pub const Paint = union(enum) {
             .clear_rect => |rect| if (rect.contains(x, y)) color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 } else null,
             .stroke_rect => |rect| if (rect.contains(x, y)) rect.rgba else null,
             .path => |path| if (path.contains(x, y)) path.rgba else null,
+            .stroke_path => |path| if (path.contains(x, y)) path.rgba else null,
             .image => |image| image.pixelAt(x, y),
         };
     }
@@ -352,15 +375,8 @@ pub const PaintStack = struct {
     }
 
     pub fn appendStrokePath(self: *PaintStack, path: CanvasPath, line_width: f64, rgba: color.RGBA) void {
-        for (path.items()) |path_rect| {
-            self.appendStrokeRect(
-                path_rect.left,
-                path_rect.top,
-                path_rect.right - path_rect.left,
-                path_rect.bottom - path_rect.top,
-                line_width,
-                rgba,
-            );
+        if (StrokedPath.init(path, line_width, rgba)) |stroked_path| {
+            self.append(.{ .stroke_path = stroked_path });
         }
     }
 
@@ -533,19 +549,7 @@ pub fn isValidLineWidth(value: f64) bool {
 }
 
 pub fn pathStrokeContains(path: CanvasPath, x: f64, y: f64, line_width: f64) bool {
-    const transparent = color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 };
-    for (path.items()) |path_rect| {
-        const stroked_rect = StrokedRect.init(
-            path_rect.left,
-            path_rect.top,
-            path_rect.right - path_rect.left,
-            path_rect.bottom - path_rect.top,
-            line_width,
-            transparent,
-        ) orelse continue;
-        if (stroked_rect.containsPoint(x, y)) return true;
-    }
-    return false;
+    return path.strokeContains(x, y, line_width);
 }
 
 pub fn textWidth(text: []const u8, font: []const u8) f64 {

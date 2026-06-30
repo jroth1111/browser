@@ -373,6 +373,49 @@
 }
 </script>
 
+<script id=OffscreenCanvasRenderingContext2D#curves and arc path>
+{
+  const canvas = new OffscreenCanvas(96, 36);
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#00aa00";
+  ctx.beginPath();
+  ctx.moveTo(4, 30);
+  ctx.quadraticCurveTo(18, 4, 32, 30);
+  ctx.lineTo(4, 30);
+  ctx.fill();
+  const quadraticInside = ctx.getImageData(18, 24, 1, 1).data;
+  const quadraticOutside = ctx.getImageData(18, 2, 1, 1).data;
+  testing.expectEqual(true, quadraticInside[1] >= 120);
+  testing.expectEqual(true, quadraticInside[3] >= 200);
+  testing.expectEqual(0, quadraticOutside[3]);
+
+  ctx.beginPath();
+  ctx.moveTo(38, 30);
+  ctx.bezierCurveTo(42, 4, 58, 4, 62, 30);
+  ctx.lineTo(38, 30);
+  ctx.fill();
+  const bezierInside = ctx.getImageData(50, 24, 1, 1).data;
+  const bezierOutside = ctx.getImageData(50, 2, 1, 1).data;
+  testing.expectEqual(true, bezierInside[1] >= 120);
+  testing.expectEqual(true, bezierInside[3] >= 200);
+  testing.expectEqual(0, bezierOutside[3]);
+
+  ctx.strokeStyle = "#0033ff";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(80, 18, 8, 0, Math.PI * 2);
+  ctx.stroke();
+  const arcEdge = ctx.getImageData(88, 18, 1, 1).data;
+  const arcCenter = ctx.getImageData(80, 18, 1, 1).data;
+  testing.expectEqual(true, arcEdge[2] >= 180);
+  testing.expectEqual(true, arcEdge[3] >= 200);
+  testing.expectEqual(0, arcCenter[3]);
+  testing.expectEqual(true, ctx.isPointInStroke(88, 18));
+  testing.expectEqual(false, ctx.isPointInStroke(80, 18));
+}
+</script>
+
 <script id=OffscreenCanvasRenderingContext2D#measureText and fillText>
 {
   const canvas = new OffscreenCanvas(96, 32);

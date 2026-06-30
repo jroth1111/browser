@@ -243,12 +243,32 @@ pub fn strokeRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, h
 pub fn beginPath(self: *CanvasRenderingContext2D) void {
     self._path.begin();
 }
-pub fn closePath(_: *CanvasRenderingContext2D) void {}
-pub fn moveTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
-pub fn lineTo(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
-pub fn quadraticCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn bezierCurveTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn arc(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
+pub fn closePath(self: *CanvasRenderingContext2D) void {
+    self._path.closePath();
+}
+pub fn moveTo(self: *CanvasRenderingContext2D, x: f64, y: f64) void {
+    const point = self._transform.point(x, y);
+    self._path.moveTo(point.x, point.y);
+}
+pub fn lineTo(self: *CanvasRenderingContext2D, x: f64, y: f64) void {
+    const point = self._transform.point(x, y);
+    self._path.lineTo(point.x, point.y);
+}
+pub fn quadraticCurveTo(self: *CanvasRenderingContext2D, cpx: f64, cpy: f64, x: f64, y: f64) void {
+    const control = self._transform.point(cpx, cpy);
+    const end = self._transform.point(x, y);
+    self._path.quadraticCurveTo(control.x, control.y, end.x, end.y);
+}
+pub fn bezierCurveTo(self: *CanvasRenderingContext2D, cp1x: f64, cp1y: f64, cp2x: f64, cp2y: f64, x: f64, y: f64) void {
+    const control1 = self._transform.point(cp1x, cp1y);
+    const control2 = self._transform.point(cp2x, cp2y);
+    const end = self._transform.point(x, y);
+    self._path.bezierCurveTo(control1.x, control1.y, control2.x, control2.y, end.x, end.y);
+}
+pub fn arc(self: *CanvasRenderingContext2D, x: f64, y: f64, radius: f64, start_angle: f64, end_angle: f64, maybe_counterclockwise: ?bool) void {
+    const center = self._transform.point(x, y);
+    self._path.arc(center.x, center.y, radius * self._transform.strokeScale(), start_angle, end_angle, maybe_counterclockwise);
+}
 pub fn arcTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn rect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     if (self._transform.rect(x, y, width, height)) |bounds| {
@@ -346,12 +366,12 @@ pub const JsApi = struct {
     pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{});
     pub const strokeRect = bridge.function(CanvasRenderingContext2D.strokeRect, .{});
     pub const beginPath = bridge.function(CanvasRenderingContext2D.beginPath, .{});
-    pub const closePath = bridge.function(CanvasRenderingContext2D.closePath, .{ .noop = true });
-    pub const moveTo = bridge.function(CanvasRenderingContext2D.moveTo, .{ .noop = true });
-    pub const lineTo = bridge.function(CanvasRenderingContext2D.lineTo, .{ .noop = true });
-    pub const quadraticCurveTo = bridge.function(CanvasRenderingContext2D.quadraticCurveTo, .{ .noop = true });
-    pub const bezierCurveTo = bridge.function(CanvasRenderingContext2D.bezierCurveTo, .{ .noop = true });
-    pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{ .noop = true });
+    pub const closePath = bridge.function(CanvasRenderingContext2D.closePath, .{});
+    pub const moveTo = bridge.function(CanvasRenderingContext2D.moveTo, .{});
+    pub const lineTo = bridge.function(CanvasRenderingContext2D.lineTo, .{});
+    pub const quadraticCurveTo = bridge.function(CanvasRenderingContext2D.quadraticCurveTo, .{});
+    pub const bezierCurveTo = bridge.function(CanvasRenderingContext2D.bezierCurveTo, .{});
+    pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{});
     pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{ .noop = true });
     pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{});
     pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{});
