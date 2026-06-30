@@ -266,6 +266,12 @@
       const r = data.results;
 
       testing.expectEqual(true, r.has_navigator);
+      testing.expectEqual('[object WorkerNavigator]', r.navigator_brand);
+      testing.expectEqual('WorkerNavigator', r.constructor_name);
+      testing.expectEqual(true, r.has_worker_navigator_constructor);
+      testing.expectEqual(true, r.worker_navigator_instance);
+      testing.expectEqual(true, r.navigator_prototype_absent);
+      testing.expectEqual(true, r.prototype_is_worker_navigator);
       testing.expectEqual(true, r.user_agent_matches_page);
       testing.expectEqual('Netscape', r.app_name);
       testing.expectTrue(r.platform.length > 0);
@@ -283,14 +289,22 @@
       // NavigatorUAData
       testing.expectEqual(true, r.has_ua_data);
       testing.expectTrue(typeof r.ua_high_entropy_arch === 'string');
+      testing.expectEqual('[object NavigatorUAData]', r.ua_data_brand);
+      testing.expectEqual(true, r.ua_data_to_json_native);
+      testing.expectEqual(true, r.ua_data_high_entropy_native);
 
       // [Exposed=Window] members aren't part of WorkerNavigator.
       testing.expectEqual(true, r.no_plugins);
+      testing.expectEqual(true, r.no_mime_types);
+      testing.expectEqual(true, r.no_pdf_viewer_enabled);
       testing.expectEqual(true, r.no_geolocation);
+      testing.expectEqual(true, r.no_media_devices);
       testing.expectEqual(true, r.no_webkit_temporary_storage);
       testing.expectEqual(true, r.no_webkit_persistent_storage);
       testing.expectEqual(true, r.no_register_protocol_handler);
+      testing.expectEqual(true, r.no_unregister_protocol_handler);
       testing.expectEqual(true, r.no_model_context);
+      testing.expectEqual(true, r.no_send_beacon);
     });
   }
 </script>

@@ -1022,7 +1022,7 @@ pub const WorkerJsApis = flattenTypes(&.{
     @import("../webapi/DedicatedWorkerGlobalScope.zig"),
     @import("../webapi/WorkerGlobalScope.zig"),
     @import("../webapi/WorkerLocation.zig"),
-    @import("../webapi/Navigator.zig"),
+    @import("../webapi/WorkerNavigator.zig"),
     @import("../webapi/NavigatorUAData.zig"),
     @import("../webapi/Permissions.zig"),
     @import("../webapi/StorageManager.zig"),
@@ -1086,6 +1086,7 @@ pub const JsApis = blk: {
         @import("../webapi/DedicatedWorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerGlobalScope.zig").JsApi,
         @import("../webapi/WorkerLocation.zig").JsApi,
+        @import("../webapi/WorkerNavigator.zig").JsApi,
     };
     if (lp.build_config.wpt_extensions == false) {
         break :blk base;

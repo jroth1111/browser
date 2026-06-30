@@ -15,6 +15,12 @@ onmessage = async function(event) {
 
     const results = {
       has_navigator: typeof navigator !== 'undefined',
+      navigator_brand: Object.prototype.toString.call(navigator),
+      constructor_name: navigator.constructor && navigator.constructor.name,
+      has_worker_navigator_constructor: typeof WorkerNavigator === 'function',
+      worker_navigator_instance: typeof WorkerNavigator === 'function' && navigator instanceof WorkerNavigator,
+      navigator_prototype_absent: typeof Navigator === 'undefined',
+      prototype_is_worker_navigator: typeof WorkerNavigator === 'function' && Object.getPrototypeOf(navigator) === WorkerNavigator.prototype,
       // userAgent must match the value the page sees (passed in via postMessage).
       user_agent: navigator.userAgent,
       user_agent_matches_page: navigator.userAgent === event.data.pageUserAgent,
@@ -35,14 +41,22 @@ onmessage = async function(event) {
       // NavigatorUAData
       has_ua_data: ua != null,
       ua_high_entropy_arch: high_entropy ? high_entropy.architecture : null,
+      ua_data_brand: Object.prototype.toString.call(ua),
+      ua_data_to_json_native: Function.prototype.toString.call(ua.toJSON).includes('[native code]'),
+      ua_data_high_entropy_native: Function.prototype.toString.call(ua.getHighEntropyValues).includes('[native code]'),
 
       // [Exposed=Window] members must NOT leak into the worker realm.
       no_plugins: navigator.plugins === undefined,
+      no_mime_types: navigator.mimeTypes === undefined,
+      no_pdf_viewer_enabled: navigator.pdfViewerEnabled === undefined,
       no_geolocation: navigator.geolocation === undefined,
+      no_media_devices: navigator.mediaDevices === undefined,
       no_webkit_temporary_storage: navigator.webkitTemporaryStorage === undefined,
       no_webkit_persistent_storage: navigator.webkitPersistentStorage === undefined,
       no_register_protocol_handler: navigator.registerProtocolHandler === undefined,
+      no_unregister_protocol_handler: navigator.unregisterProtocolHandler === undefined,
       no_model_context: navigator.modelContext === undefined,
+      no_send_beacon: navigator.sendBeacon === undefined,
     };
     postMessage({ ok: true, results });
   } catch (e) {

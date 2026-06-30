@@ -37,7 +37,7 @@ const Blob = @import("Blob.zig");
 const Event = @import("Event.zig");
 const Crypto = @import("Crypto.zig");
 const Console = @import("Console.zig");
-const Navigator = @import("Navigator.zig");
+const WorkerNavigator = @import("WorkerNavigator.zig");
 const Timers = @import("Timers.zig");
 const EventTarget = @import("EventTarget.zig");
 const Performance = @import("Performance.zig");
@@ -100,7 +100,7 @@ _broadcast_channels: std.DoublyLinkedList = .{},
 _proto: *EventTarget,
 _console: Console = .init,
 _crypto: Crypto = .init,
-_navigator: Navigator = .init,
+_navigator: WorkerNavigator = .init,
 _performance: Performance,
 _on_error: ?JS.Function.Global = null,
 _on_rejection_handled: ?JS.Function.Global = null,
@@ -263,7 +263,7 @@ pub fn getCrypto(self: *WorkerGlobalScope) *Crypto {
     return &self._crypto;
 }
 
-pub fn getNavigator(self: *WorkerGlobalScope) *Navigator {
+pub fn getNavigator(self: *WorkerGlobalScope) *WorkerNavigator {
     return &self._navigator;
 }
 
