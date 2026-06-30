@@ -98,8 +98,13 @@ pub fn tailHook(base: *ScriptManagerBase) void {
     }
 }
 
-fn getHeaders(self: *ScriptManager) !HttpClient.Headers {
-    return self.base.getHeaders();
+fn getSubresourceHeaders(
+    self: *ScriptManager,
+    allocator: Allocator,
+    request_url: [:0]const u8,
+    mode: []const u8,
+) !HttpClient.Headers {
+    return self.base.getSubresourceHeaders(allocator, request_url, mode, "script");
 }
 
 // Returns true when a fetch was started: the link's load/error event fires
@@ -140,7 +145,7 @@ pub fn preloadScript(self: *ScriptManager, element: *Element.Html, url: []const 
         .method = .GET,
         .frame_id = frame._frame_id,
         .loader_id = frame._loader_id,
-        .headers = try self.base.getHeaders(),
+        .headers = try self.base.getSubresourceHeaders(arena, owned_url, "no-cors", "script"),
         .cookie_jar = &frame._session.cookie_jar,
         .cookie_origin = frame.url,
         .resource_type = .script,
@@ -353,7 +358,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                     .method = .GET,
                     .frame_id = frame._frame_id,
                     .loader_id = frame._loader_id,
-                    .headers = try self.getHeaders(),
+                    .headers = try self.getSubresourceHeaders(arena, url, if (kind == .module) "cors" else "no-cors"),
                     .cookie_jar = &frame._session.cookie_jar,
                     .cookie_origin = frame.url,
                     .resource_type = .script,
@@ -376,7 +381,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 .method = .GET,
                 .frame_id = frame._frame_id,
                 .loader_id = frame._loader_id,
-                .headers = try self.getHeaders(),
+                .headers = try self.getSubresourceHeaders(arena, url, if (kind == .module) "cors" else "no-cors"),
                 .cookie_jar = &frame._session.cookie_jar,
                 .cookie_origin = frame.url,
                 .resource_type = .script,

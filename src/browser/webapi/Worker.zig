@@ -101,7 +101,14 @@ pub fn init(url: []const u8, options: ?WorkerOptions, frame: *Frame) !*Worker {
         return self;
     }
 
-    const headers = try session.browser.http_client.newHeaders();
+    var headers = try session.browser.http_client.newHeaders();
+    try frame.headersForSubresourceRequest(
+        &headers,
+        arena,
+        resolved_url,
+        if (self._type == .module) "cors" else "same-origin",
+        "worker",
+    );
     frame.makeRequest(.{
         .ctx = self,
         .method = .GET,

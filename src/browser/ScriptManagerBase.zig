@@ -81,6 +81,19 @@ pub const Owner = union(enum) {
         };
     }
 
+    pub fn addSubresourceHeaders(
+        self: Owner,
+        headers: *HttpClient.Headers,
+        allocator: Allocator,
+        request_url: [:0]const u8,
+        mode: []const u8,
+        dest: []const u8,
+    ) !void {
+        return switch (self) {
+            inline else => |g| g.headersForSubresourceRequest(headers, allocator, request_url, mode, dest),
+        };
+    }
+
     pub fn makeRequest(self: Owner, req: HttpClient.Request) !void {
         return switch (self) {
             inline else => |g| g.makeRequest(req),
@@ -185,6 +198,18 @@ pub fn getHeaders(self: *ScriptManagerBase) !http.Headers {
     return headers;
 }
 
+pub fn getSubresourceHeaders(
+    self: *ScriptManagerBase,
+    allocator: Allocator,
+    request_url: [:0]const u8,
+    mode: []const u8,
+    dest: []const u8,
+) !http.Headers {
+    var headers = try self.client.newHeaders();
+    try self.owner.addSubresourceHeaders(&headers, allocator, request_url, mode, dest);
+    return headers;
+}
+
 fn acquireArena(self: *ScriptManagerBase, size_or_bucket: anytype, debug: []const u8) !Allocator {
     return self.owner.session().getArena(size_or_bucket, debug);
 }
@@ -277,7 +302,7 @@ pub fn preloadImport(self: *ScriptManagerBase, url: [:0]const u8, referrer: []co
         .method = .GET,
         .frame_id = owner.frameId(),
         .loader_id = owner.loaderId(),
-        .headers = try self.getHeaders(),
+        .headers = try self.getSubresourceHeaders(arena, url, "cors", "script"),
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = owner.url(),
         .resource_type = .script,
@@ -443,7 +468,7 @@ pub fn getAsyncImport(self: *ScriptManagerBase, url: [:0]const u8, cb: ImportAsy
         .method = .GET,
         .frame_id = owner.frameId(),
         .loader_id = owner.loaderId(),
-        .headers = try self.getHeaders(),
+        .headers = try self.getSubresourceHeaders(arena, url, "cors", "script"),
         .resource_type = .script,
         .cookie_jar = &session.cookie_jar,
         .cookie_origin = owner.url(),

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<link rel="stylesheet" href="http://127.0.0.1:9585/resource/record-style-headers.css">
+<script src="http://127.0.0.1:9585/resource/record-script-headers.js"></script>
+
+<script id=subresource_fetch_metadata type=module>
+  {
+    const state = await testing.async();
+    const worker = new Worker(`${testing.ORIGIN}/resource/record-worker-headers.js`);
+    worker.onmessage = () => {
+      state.resolve();
+      worker.terminate();
+    };
+
+    await state.done(() => {
+      testing.expectEqual(true, window.__subresource_script_loaded);
+    });
+  }
+</script>

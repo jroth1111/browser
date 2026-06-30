@@ -546,11 +546,30 @@ pub const NavigationHeaderSnapshot = struct {
     origin_present: bool = false,
 };
 
+pub const SubresourceHeaderSnapshot = struct {
+    script_seen: bool = false,
+    script_sec_fetch_mode_no_cors: bool = false,
+    script_sec_fetch_dest_script: bool = false,
+    script_sec_fetch_site_same_site: bool = false,
+    script_origin_present: bool = false,
+    style_seen: bool = false,
+    style_sec_fetch_mode_no_cors: bool = false,
+    style_sec_fetch_dest_style: bool = false,
+    style_sec_fetch_site_same_site: bool = false,
+    style_origin_present: bool = false,
+    worker_seen: bool = false,
+    worker_sec_fetch_mode_same_origin: bool = false,
+    worker_sec_fetch_dest_worker: bool = false,
+    worker_sec_fetch_site_same_origin: bool = false,
+    worker_origin_present: bool = false,
+};
+
 var cors_header_snapshot_mutex: std.Thread.Mutex = .{};
 var cors_no_cors_header_snapshot: CorsHeaderSnapshot = .{};
 var cors_xhr_header_snapshot: CorsHeaderSnapshot = .{};
 var cors_preflight_snapshot: CorsHeaderSnapshot = .{};
 var cors_navigation_header_snapshot: NavigationHeaderSnapshot = .{};
+var cors_subresource_header_snapshot: SubresourceHeaderSnapshot = .{};
 
 pub fn resetNavigationHeaderSnapshot() void {
     cors_header_snapshot_mutex.lock();
@@ -563,6 +582,75 @@ pub fn navigationHeaderSnapshot() NavigationHeaderSnapshot {
     const snapshot = cors_navigation_header_snapshot;
     cors_header_snapshot_mutex.unlock();
     return snapshot;
+}
+
+pub fn resetSubresourceHeaderSnapshot() void {
+    cors_header_snapshot_mutex.lock();
+    cors_subresource_header_snapshot = .{};
+    cors_header_snapshot_mutex.unlock();
+}
+
+pub fn subresourceHeaderSnapshot() SubresourceHeaderSnapshot {
+    cors_header_snapshot_mutex.lock();
+    const snapshot = cors_subresource_header_snapshot;
+    cors_header_snapshot_mutex.unlock();
+    return snapshot;
+}
+
+const SubresourceHeaderKind = enum {
+    script,
+    style,
+    worker,
+};
+
+fn recordSubresourceHeaders(req: *std.http.Server.Request, kind: SubresourceHeaderKind) void {
+    cors_header_snapshot_mutex.lock();
+    defer cors_header_snapshot_mutex.unlock();
+
+    switch (kind) {
+        .script => cors_subresource_header_snapshot.script_seen = true,
+        .style => cors_subresource_header_snapshot.style_seen = true,
+        .worker => cors_subresource_header_snapshot.worker_seen = true,
+    }
+
+    var it = req.iterateHeaders();
+    while (it.next()) |h| {
+        switch (kind) {
+            .script => {
+                if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                    cors_subresource_header_snapshot.script_sec_fetch_mode_no_cors = std.mem.eql(u8, h.value, "no-cors");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                    cors_subresource_header_snapshot.script_sec_fetch_dest_script = std.mem.eql(u8, h.value, "script");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                    cors_subresource_header_snapshot.script_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
+                    cors_subresource_header_snapshot.script_origin_present = true;
+                }
+            },
+            .style => {
+                if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                    cors_subresource_header_snapshot.style_sec_fetch_mode_no_cors = std.mem.eql(u8, h.value, "no-cors");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                    cors_subresource_header_snapshot.style_sec_fetch_dest_style = std.mem.eql(u8, h.value, "style");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                    cors_subresource_header_snapshot.style_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
+                    cors_subresource_header_snapshot.style_origin_present = true;
+                }
+            },
+            .worker => {
+                if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                    cors_subresource_header_snapshot.worker_sec_fetch_mode_same_origin = std.mem.eql(u8, h.value, "same-origin");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                    cors_subresource_header_snapshot.worker_sec_fetch_dest_worker = std.mem.eql(u8, h.value, "worker");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                    cors_subresource_header_snapshot.worker_sec_fetch_site_same_origin = std.mem.eql(u8, h.value, "same-origin");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
+                    cors_subresource_header_snapshot.worker_origin_present = true;
+                }
+            },
+        }
+    }
 }
 
 var test_config: Config = undefined;
@@ -1101,6 +1189,33 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("<!doctype html><title>navigation recorded</title>", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/html" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource/record-script-headers.js")) {
+        recordSubresourceHeaders(req, .script);
+        return req.respond("window.__subresource_script_loaded = true;", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/javascript" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource/record-style-headers.css")) {
+        recordSubresourceHeaders(req, .style);
+        return req.respond("body { --subresource-style-loaded: 1; }", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource/record-worker-headers.js")) {
+        recordSubresourceHeaders(req, .worker);
+        return req.respond("postMessage('worker-ready');", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/javascript" },
             },
         });
     }

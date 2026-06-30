@@ -44,6 +44,7 @@ const Performance = @import("Performance.zig");
 const WorkerLocation = @import("WorkerLocation.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const Fetch = @import("net/Fetch.zig");
+const Cors = @import("net/Cors.zig");
 const CookieStore = @import("storage/CookieStore.zig");
 const DedicatedWorkerGlobalScope = @import("DedicatedWorkerGlobalScope.zig");
 
@@ -230,6 +231,19 @@ pub fn headersForRequest(self: *WorkerGlobalScope, headers: *HttpClient.Headers)
     return self._frame.headersForRequest(headers);
 }
 
+pub fn headersForSubresourceRequest(
+    self: *WorkerGlobalScope,
+    headers: *HttpClient.Headers,
+    allocator: Allocator,
+    request_url: [:0]const u8,
+    mode: []const u8,
+    dest: []const u8,
+) !void {
+    try self.headersForRequest(headers);
+    const requesting_origin = try URL.getOrigin(allocator, self.url) orelse "null";
+    try Cors.populateFetchMetadataHeaders(headers, allocator, requesting_origin, request_url, mode, dest, false);
+}
+
 pub fn isSameOrigin(self: *const WorkerGlobalScope, url: [:0]const u8) bool {
     const current_origin = self.origin orelse return false;
 
@@ -371,7 +385,7 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
     const http_client = &session.browser.http_client;
 
     var headers = try http_client.newHeaders();
-    try self.headersForRequest(&headers);
+    try self.headersForSubresourceRequest(&headers, arena, resolved_url, "no-cors", "script");
 
     const response = http_client.syncRequest(arena, .{
         .url = resolved_url,

@@ -559,6 +559,19 @@ pub fn headersForRequest(self: *Frame, headers: *HttpClient.Headers) !void {
     }
 }
 
+pub fn headersForSubresourceRequest(
+    self: *Frame,
+    headers: *HttpClient.Headers,
+    allocator: Allocator,
+    request_url: [:0]const u8,
+    mode: []const u8,
+    dest: []const u8,
+) !void {
+    try self.headersForRequest(headers);
+    const requesting_origin = self.origin orelse try URL.getOrigin(allocator, self.url) orelse "null";
+    try Cors.populateFetchMetadataHeaders(headers, allocator, requesting_origin, request_url, mode, dest, false);
+}
+
 pub fn getArena(self: *Frame, size_or_bucket: anytype, debug: []const u8) !Allocator {
     return self._session.getArena(size_or_bucket, debug);
 }
@@ -2137,7 +2150,7 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     const http_client = &session.browser.http_client;
     var headers = try http_client.newHeaders();
     try headers.add("Accept: text/css,*/*;q=0.1");
-    try self.headersForRequest(&headers);
+    try self.headersForSubresourceRequest(&headers, arena, resolved, "no-cors", "style");
 
     // Set the script-manager `is_evaluating` flag for the same reason
     // `ScriptManager.addFromElement` does: `syncRequest` pumps the CDP
@@ -3453,6 +3466,31 @@ test "Frame: navigation fetch metadata headers" {
     try testing.expect(!direct.sec_fetch_site_same_site);
     try testing.expect(direct.sec_fetch_site_none);
     try testing.expect(!direct.origin_present);
+}
+
+test "Frame: subresource fetch metadata headers" {
+    testing.resetSubresourceHeaderSnapshot();
+
+    try testing.htmlRunner("net/subresource_fetch_metadata.html", .{ .load_external_stylesheets = true });
+
+    const snapshot = testing.subresourceHeaderSnapshot();
+    try testing.expect(snapshot.script_seen);
+    try testing.expect(snapshot.script_sec_fetch_mode_no_cors);
+    try testing.expect(snapshot.script_sec_fetch_dest_script);
+    try testing.expect(snapshot.script_sec_fetch_site_same_site);
+    try testing.expect(!snapshot.script_origin_present);
+
+    try testing.expect(snapshot.style_seen);
+    try testing.expect(snapshot.style_sec_fetch_mode_no_cors);
+    try testing.expect(snapshot.style_sec_fetch_dest_style);
+    try testing.expect(snapshot.style_sec_fetch_site_same_site);
+    try testing.expect(!snapshot.style_origin_present);
+
+    try testing.expect(snapshot.worker_seen);
+    try testing.expect(snapshot.worker_sec_fetch_mode_same_origin);
+    try testing.expect(snapshot.worker_sec_fetch_dest_worker);
+    try testing.expect(snapshot.worker_sec_fetch_site_same_origin);
+    try testing.expect(!snapshot.worker_origin_present);
 }
 
 test "Frame: httpMetadata 404" {
