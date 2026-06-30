@@ -74,6 +74,46 @@
 }
 </script>
 
+<script id=OffscreenCanvasRenderingContext2D#drawImage>
+{
+  const htmlCanvas = document.createElement("canvas");
+  htmlCanvas.width = 4;
+  htmlCanvas.height = 4;
+  const htmlCtx = htmlCanvas.getContext("2d");
+  htmlCtx.fillStyle = "#ff0000";
+  htmlCtx.fillRect(0, 0, 2, 4);
+  htmlCtx.fillStyle = "#0000ff";
+  htmlCtx.fillRect(2, 0, 2, 4);
+
+  const canvas = new OffscreenCanvas(16, 16);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(htmlCanvas, 0, 0, 4, 4, 4, 4, 8, 4);
+  const scaledRed = ctx.getImageData(5, 5, 1, 1).data;
+  const scaledBlue = ctx.getImageData(10, 5, 1, 1).data;
+  testing.expectEqual(255, scaledRed[0]);
+  testing.expectEqual(0, scaledRed[2]);
+  testing.expectEqual(0, scaledBlue[0]);
+  testing.expectEqual(255, scaledBlue[2]);
+
+  const blankOffscreen = new OffscreenCanvas(2, 2);
+  ctx.clearRect(0, 0, 16, 16);
+  testing.expectEqual(undefined, ctx.drawImage(blankOffscreen, 0, 0));
+  testing.expectEqual(0, ctx.getImageData(0, 0, 1, 1).data[3]);
+
+  const sourceOffscreen = new OffscreenCanvas(2, 2);
+  const sourceCtx = sourceOffscreen.getContext("2d");
+  sourceCtx.fillStyle = "#00ff00";
+  sourceCtx.fillRect(0, 0, 2, 2);
+  ctx.clearRect(0, 0, 16, 16);
+  ctx.drawImage(sourceOffscreen, 6, 6);
+  const offscreenCopied = ctx.getImageData(6, 6, 1, 1).data;
+  testing.expectEqual(0, offscreenCopied[0]);
+  testing.expectEqual(255, offscreenCopied[1]);
+  testing.expectEqual(0, offscreenCopied[2]);
+  testing.expectEqual(255, offscreenCopied[3]);
+}
+</script>
+
 <script id=OffscreenCanvasRenderingContext2D#getImageData>
 {
   const canvas = new OffscreenCanvas(100, 50);

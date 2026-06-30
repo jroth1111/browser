@@ -222,6 +222,20 @@ fn canvasRawPixels(self: *const Canvas, allocator: std.mem.Allocator, seed: u64,
     return CanvasBitmap.transparentRawPixels(allocator, width, height, raw_len);
 }
 
+pub fn canvasSourceBitmap(self: *const Canvas) ?CanvasBitmap.SourceBitmap {
+    const width = self.getWidth();
+    const height = self.getHeight();
+    if (width == 0 or height == 0) return null;
+    if (self._cached) |cached| {
+        switch (cached) {
+            .@"2d" => |ctx| return ctx.sourceBitmap(width, height),
+            else => {},
+        }
+    }
+
+    return .{ .width = width, .height = height, .paint_stack = null };
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Canvas);
 

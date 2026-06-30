@@ -350,6 +350,12 @@ pub const ImagePatch = struct {
     }
 };
 
+pub const SourceBitmap = struct {
+    width: u32,
+    height: u32,
+    paint_stack: ?*const PaintStack,
+};
+
 pub const PaintStack = struct {
     ops: [max_paint_ops]Paint = undefined,
     count: usize = 0,
@@ -419,6 +425,57 @@ pub const PaintStack = struct {
         self.append(.{ .image = patch });
     }
 
+    pub fn appendDrawImage(
+        self: *PaintStack,
+        allocator: std.mem.Allocator,
+        source: SourceBitmap,
+        transform: Transform,
+        dx: f64,
+        dy: f64,
+        arg3: ?f64,
+        arg4: ?f64,
+        arg5: ?f64,
+        arg6: ?f64,
+        arg7: ?f64,
+        arg8: ?f64,
+    ) !void {
+        const resolved = drawImageRects(source, transform, dx, dy, arg3, arg4, arg5, arg6, arg7, arg8) orelse return;
+        const patch_len = try pixelBytesLen(resolved.dst.width, resolved.dst.height);
+        if (patch_len > max_png_raw_bytes) return;
+
+        const data = try allocator.alloc(u8, patch_len);
+        var row: u32 = 0;
+        var pos: usize = 0;
+        while (row < resolved.dst.height) : (row += 1) {
+            const src_y = resolved.src.y + @divTrunc(@as(i64, @intCast(row)) * resolved.src.height, @as(i64, @intCast(resolved.dst.height)));
+            var col: u32 = 0;
+            while (col < resolved.dst.width) : (col += 1) {
+                const src_x = resolved.src.x + @divTrunc(@as(i64, @intCast(col)) * resolved.src.width, @as(i64, @intCast(resolved.dst.width)));
+                const rgba = if (src_x < 0 or src_y < 0 or
+                    src_x >= @as(i64, @intCast(source.width)) or
+                    src_y >= @as(i64, @intCast(source.height)))
+                    color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }
+                else if (source.paint_stack) |paint_stack|
+                    paintStackPixelAt(paint_stack, src_x, src_y, 0)
+                else
+                    color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 };
+                data[pos + 0] = rgba.r;
+                data[pos + 1] = rgba.g;
+                data[pos + 2] = rgba.b;
+                data[pos + 3] = rgba.a;
+                pos += 4;
+            }
+        }
+
+        self.append(.{ .image = .{
+            .x = resolved.dst.x,
+            .y = resolved.dst.y,
+            .width = resolved.dst.width,
+            .height = resolved.dst.height,
+            .data = data,
+        } });
+    }
+
     fn append(self: *PaintStack, paint: Paint) void {
         if (self.count < max_paint_ops) {
             self.ops[self.count] = paint;
@@ -442,6 +499,107 @@ pub const PaintStack = struct {
         return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
     }
 };
+
+const SourceRect = struct {
+    x: i64,
+    y: i64,
+    width: i64,
+    height: i64,
+};
+
+const DestRect = struct {
+    x: i64,
+    y: i64,
+    width: u32,
+    height: u32,
+};
+
+const DrawImageRects = struct {
+    src: SourceRect,
+    dst: DestRect,
+};
+
+fn drawImageRects(
+    source: SourceBitmap,
+    transform: Transform,
+    dx: f64,
+    dy: f64,
+    arg3: ?f64,
+    arg4: ?f64,
+    arg5: ?f64,
+    arg6: ?f64,
+    arg7: ?f64,
+    arg8: ?f64,
+) ?DrawImageRects {
+    if (source.width == 0 or source.height == 0) return null;
+
+    var sx: f64 = 0;
+    var sy: f64 = 0;
+    var sw: f64 = @floatFromInt(source.width);
+    var sh: f64 = @floatFromInt(source.height);
+    var dest_x = dx;
+    var dest_y = dy;
+    var dest_width = sw;
+    var dest_height = sh;
+
+    if (arg3 == null and arg4 == null and arg5 == null and arg6 == null and arg7 == null and arg8 == null) {
+        // drawImage(image, dx, dy)
+    } else if (arg3 != null and arg4 != null and arg5 == null and arg6 == null and arg7 == null and arg8 == null) {
+        dest_width = arg3.?;
+        dest_height = arg4.?;
+    } else if (arg3 != null and arg4 != null and arg5 != null and arg6 != null and arg7 != null and arg8 != null) {
+        sx = dx;
+        sy = dy;
+        sw = arg3.?;
+        sh = arg4.?;
+        dest_x = arg5.?;
+        dest_y = arg6.?;
+        dest_width = arg7.?;
+        dest_height = arg8.?;
+    } else {
+        return null;
+    }
+
+    const src = normalizedSourceRect(sx, sy, sw, sh) orelse return null;
+    const dst = transformedDestRect(transform, dest_x, dest_y, dest_width, dest_height) orelse return null;
+    return .{ .src = src, .dst = dst };
+}
+
+fn normalizedSourceRect(x: f64, y: f64, width: f64, height: f64) ?SourceRect {
+    var rect_x = finiteInteger(x) orelse return null;
+    var rect_y = finiteInteger(y) orelse return null;
+    var rect_width = finiteInteger(width) orelse return null;
+    var rect_height = finiteInteger(height) orelse return null;
+
+    if (rect_width < 0) {
+        if (rect_width == std.math.minInt(i64)) return null;
+        rect_x = checkedAddI64(rect_x, rect_width) orelse return null;
+        rect_width = -rect_width;
+    }
+    if (rect_height < 0) {
+        if (rect_height == std.math.minInt(i64)) return null;
+        rect_y = checkedAddI64(rect_y, rect_height) orelse return null;
+        rect_height = -rect_height;
+    }
+    if (rect_width == 0 or rect_height == 0) return null;
+
+    return .{
+        .x = rect_x,
+        .y = rect_y,
+        .width = rect_width,
+        .height = rect_height,
+    };
+}
+
+fn transformedDestRect(transform: Transform, x: f64, y: f64, width: f64, height: f64) ?DestRect {
+    const bounds = transform.rect(x, y, width, height) orelse return null;
+    return .{
+        .x = finiteInteger(bounds.x) orelse return null,
+        .y = finiteInteger(bounds.y) orelse return null,
+        .width = positiveDimension(bounds.width) orelse return null,
+        .height = positiveDimension(bounds.height) orelse return null,
+    };
+}
 
 pub fn imagePatch(
     allocator: std.mem.Allocator,
@@ -609,6 +767,15 @@ fn finiteInteger(value: f64) ?i64 {
     if (value < @as(f64, @floatFromInt(std.math.minInt(i64)))) return null;
     if (value > @as(f64, @floatFromInt(std.math.maxInt(i64)))) return null;
     return @intFromFloat(@trunc(value));
+}
+
+fn positiveDimension(value: f64) ?u32 {
+    if (!finite(value)) return null;
+    if (value <= 0) return null;
+    if (value > @as(f64, @floatFromInt(std.math.maxInt(u32)))) return null;
+    const dimension: u64 = @intFromFloat(@trunc(value));
+    if (dimension == 0 or dimension > std.math.maxInt(u32)) return null;
+    return @intCast(dimension);
 }
 
 fn checkedAddI64(a: i64, b: i64) ?i64 {
@@ -996,4 +1163,63 @@ test "CanvasBitmap image patch copies dirty pixels and rejects overflowing bound
     const min_i64 = @as(f64, @floatFromInt(std.math.minInt(i64)));
     try testing.expect(try imagePatch(allocator, 2, 2, pixels[0..], max_i64, 0, 1, 0, 1, 1) == null);
     try testing.expect(try imagePatch(allocator, 2, 2, pixels[0..], 0, 0, min_i64, 0, -1, 1) == null);
+}
+
+test "CanvasBitmap drawImage copies and scales source paint" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var source = PaintStack{};
+    var dest = PaintStack{};
+    const red = color.RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    const blue = color.RGBA{ .r = 0, .g = 0, .b = 255, .a = 255 };
+
+    source.appendRect(.{ .x = 0, .y = 0, .width = 1, .height = 2, .rgba = red });
+    source.appendRect(.{ .x = 1, .y = 0, .width = 1, .height = 2, .rgba = blue });
+    try dest.appendDrawImage(
+        arena.allocator(),
+        .{ .width = 2, .height = 2, .paint_stack = &source },
+        .{},
+        0,
+        0,
+        4,
+        2,
+        null,
+        null,
+        null,
+        null,
+    );
+
+    try testing.expectEqual(red, paintStackPixelAt(&dest, 0, 0, 0));
+    try testing.expectEqual(red, paintStackPixelAt(&dest, 1, 0, 0));
+    try testing.expectEqual(blue, paintStackPixelAt(&dest, 2, 0, 0));
+    try testing.expectEqual(blue, paintStackPixelAt(&dest, 3, 1, 0));
+}
+
+test "CanvasBitmap drawImage supports source and destination rectangles" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var source = PaintStack{};
+    var dest = PaintStack{};
+    const green = color.RGBA{ .r = 0, .g = 170, .b = 0, .a = 255 };
+
+    source.appendRect(.{ .x = 2, .y = 1, .width = 2, .height = 2, .rgba = green });
+    try dest.appendDrawImage(
+        arena.allocator(),
+        .{ .width = 6, .height = 6, .paint_stack = &source },
+        .{},
+        2,
+        1,
+        2,
+        2,
+        5,
+        6,
+        2,
+        2,
+    );
+
+    try testing.expectEqual(green, paintStackPixelAt(&dest, 5, 6, 0));
+    try testing.expectEqual(green, paintStackPixelAt(&dest, 6, 7, 0));
+    try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&dest, 4, 6, 0));
 }

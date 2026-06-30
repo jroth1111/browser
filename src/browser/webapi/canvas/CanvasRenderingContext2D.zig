@@ -26,6 +26,7 @@ const CanvasBitmap = @import("CanvasBitmap.zig");
 const Canvas = @import("../element/html/Canvas.zig");
 const CanvasPath = @import("CanvasPath.zig");
 const ImageData = @import("../ImageData.zig");
+const OffscreenCanvas = @import("OffscreenCanvas.zig");
 const Seeds = @import("../../../chimera/Seeds.zig");
 const TextMetrics = @import("TextMetrics.zig");
 
@@ -149,9 +150,34 @@ pub fn putImageData(
     );
 }
 
-// CanvasImageSource (HTMLImageElement, HTMLCanvasElement, ImageBitmap, ...) is
-// just taken as a js.Value for now since we don't use it, and that's much easier.
-pub fn drawImage(_: *const CanvasRenderingContext2D, _: js.Value, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+pub fn drawImage(
+    self: *CanvasRenderingContext2D,
+    source_value: js.Value,
+    dx: f64,
+    dy: f64,
+    arg3: ?f64,
+    arg4: ?f64,
+    arg5: ?f64,
+    arg6: ?f64,
+    arg7: ?f64,
+    arg8: ?f64,
+    exec: *Execution,
+) !void {
+    const source = resolveSourceBitmap(source_value) orelse return error.TypeError;
+    try self._paint_stack.appendDrawImage(
+        exec.arena,
+        source,
+        self._transform,
+        dx,
+        dy,
+        arg3,
+        arg4,
+        arg5,
+        arg6,
+        arg7,
+        arg8,
+    );
+}
 
 pub fn getImageData(
     self: *const CanvasRenderingContext2D,
@@ -316,8 +342,26 @@ pub fn pngRawPixels(
     return CanvasBitmap.rawPixelsForPaintStack(allocator, seed, width, height, raw_len, &self._paint_stack);
 }
 
+pub fn sourceBitmap(self: *const CanvasRenderingContext2D, width: u32, height: u32) CanvasBitmap.SourceBitmap {
+    return .{
+        .width = width,
+        .height = height,
+        .paint_stack = &self._paint_stack,
+    };
+}
+
 fn pixelAt(self: *const CanvasRenderingContext2D, x: i64, y: i64, seed: u64) color.RGBA {
     return CanvasBitmap.paintStackPixelAt(&self._paint_stack, x, y, seed);
+}
+
+fn resolveSourceBitmap(source_value: js.Value) ?CanvasBitmap.SourceBitmap {
+    if (source_value.toZig(*Canvas)) |canvas| {
+        return canvas.canvasSourceBitmap();
+    } else |_| {}
+    if (source_value.toZig(*OffscreenCanvas)) |canvas| {
+        return canvas.canvasSourceBitmap();
+    } else |_| {}
+    return null;
 }
 
 fn canvasSeed(exec: *Execution) u64 {
@@ -352,7 +396,7 @@ pub const JsApi = struct {
     pub const createImageData = bridge.function(CanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
 
     pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{});
-    pub const drawImage = bridge.function(CanvasRenderingContext2D.drawImage, .{ .noop = true });
+    pub const drawImage = bridge.function(CanvasRenderingContext2D.drawImage, .{ .dom_exception = true });
     pub const getImageData = bridge.function(CanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
     pub const save = bridge.function(CanvasRenderingContext2D.save, .{});
     pub const restore = bridge.function(CanvasRenderingContext2D.restore, .{});

@@ -131,6 +131,19 @@ fn canvasRawPixels(self: *const OffscreenCanvas, allocator: Allocator, seed: u64
     return CanvasBitmap.transparentRawPixels(allocator, width, height, raw_len);
 }
 
+pub fn canvasSourceBitmap(self: *const OffscreenCanvas) ?CanvasBitmap.SourceBitmap {
+    const width = self.getWidth();
+    const height = self.getHeight();
+    if (width == 0 or height == 0) return null;
+    if (self._cached) |cached| {
+        switch (cached) {
+            .@"2d" => |ctx| return ctx.sourceBitmap(width, height),
+        }
+    }
+
+    return .{ .width = width, .height = height, .paint_stack = null };
+}
+
 fn canvasSeed(exec: *Execution) u64 {
     const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
     if (!authority.profile.canvas.enabled) return 0;

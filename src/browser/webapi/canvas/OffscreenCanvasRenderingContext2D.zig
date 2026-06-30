@@ -23,6 +23,7 @@ const color = @import("../../color.zig");
 
 const CanvasBitmap = @import("CanvasBitmap.zig");
 const CanvasPath = @import("CanvasPath.zig");
+const Canvas = @import("../element/html/Canvas.zig");
 const ImageData = @import("../ImageData.zig");
 const OffscreenCanvas = @import("OffscreenCanvas.zig");
 const Seeds = @import("../../../chimera/Seeds.zig");
@@ -143,6 +144,35 @@ pub fn putImageData(
         dirty_y,
         dirty_width,
         dirty_height,
+    );
+}
+
+pub fn drawImage(
+    self: *OffscreenCanvasRenderingContext2D,
+    source_value: js.Value,
+    dx: f64,
+    dy: f64,
+    arg3: ?f64,
+    arg4: ?f64,
+    arg5: ?f64,
+    arg6: ?f64,
+    arg7: ?f64,
+    arg8: ?f64,
+    exec: *Execution,
+) !void {
+    const source = resolveSourceBitmap(source_value) orelse return error.TypeError;
+    try self._paint_stack.appendDrawImage(
+        exec.arena,
+        source,
+        self._transform,
+        dx,
+        dy,
+        arg3,
+        arg4,
+        arg5,
+        arg6,
+        arg7,
+        arg8,
     );
 }
 
@@ -315,6 +345,24 @@ pub fn pngRawPixels(
     return CanvasBitmap.rawPixelsForPaintStack(allocator, seed, width, height, raw_len, &self._paint_stack);
 }
 
+pub fn sourceBitmap(self: *const OffscreenCanvasRenderingContext2D, width: u32, height: u32) CanvasBitmap.SourceBitmap {
+    return .{
+        .width = width,
+        .height = height,
+        .paint_stack = &self._paint_stack,
+    };
+}
+
+fn resolveSourceBitmap(source_value: js.Value) ?CanvasBitmap.SourceBitmap {
+    if (source_value.toZig(*Canvas)) |canvas| {
+        return canvas.canvasSourceBitmap();
+    } else |_| {}
+    if (source_value.toZig(*OffscreenCanvas)) |canvas| {
+        return canvas.canvasSourceBitmap();
+    } else |_| {}
+    return null;
+}
+
 fn canvasSeed(exec: *Execution) u64 {
     const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
     if (!authority.profile.canvas.enabled) return 0;
@@ -347,6 +395,7 @@ pub const JsApi = struct {
     pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
 
     pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{});
+    pub const drawImage = bridge.function(OffscreenCanvasRenderingContext2D.drawImage, .{ .dom_exception = true });
     pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
     pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{});
     pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{});

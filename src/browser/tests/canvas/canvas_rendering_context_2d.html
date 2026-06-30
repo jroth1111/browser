@@ -131,6 +131,51 @@
 }
 </script>
 
+<script id="CanvasRenderingContext2D#drawImage source pixels">
+{
+  const source = document.createElement("canvas");
+  source.width = 4;
+  source.height = 4;
+  const sourceCtx = source.getContext("2d");
+  sourceCtx.fillStyle = "#ff0000";
+  sourceCtx.fillRect(0, 0, 2, 4);
+  sourceCtx.fillStyle = "#0000ff";
+  sourceCtx.fillRect(2, 0, 2, 4);
+
+  const dest = document.createElement("canvas");
+  dest.width = 16;
+  dest.height = 16;
+  const ctx = dest.getContext("2d");
+  ctx.drawImage(source, 0, 0);
+  const copiedRed = ctx.getImageData(0, 0, 1, 1).data;
+  const copiedBlue = ctx.getImageData(2, 0, 1, 1).data;
+  testing.expectEqual(255, copiedRed[0]);
+  testing.expectEqual(0, copiedRed[2]);
+  testing.expectEqual(255, copiedRed[3]);
+  testing.expectEqual(0, copiedBlue[0]);
+  testing.expectEqual(255, copiedBlue[2]);
+  testing.expectEqual(255, copiedBlue[3]);
+
+  ctx.clearRect(0, 0, 16, 16);
+  ctx.drawImage(source, 0, 0, 4, 4, 4, 4, 8, 4);
+  const scaledRed = ctx.getImageData(5, 5, 1, 1).data;
+  const scaledBlue = ctx.getImageData(10, 5, 1, 1).data;
+  testing.expectEqual(255, scaledRed[0]);
+  testing.expectEqual(0, scaledRed[2]);
+  testing.expectEqual(0, scaledBlue[0]);
+  testing.expectEqual(255, scaledBlue[2]);
+
+  ctx.clearRect(0, 0, 16, 16);
+  ctx.drawImage(source, 2, 0, 2, 4, 6, 6, 2, 4);
+  const sourceRectPixel = ctx.getImageData(6, 6, 1, 1).data;
+  const outside = ctx.getImageData(5, 6, 1, 1).data;
+  testing.expectEqual(0, sourceRectPixel[0]);
+  testing.expectEqual(255, sourceRectPixel[2]);
+  testing.expectEqual(255, sourceRectPixel[3]);
+  testing.expectEqual(0, outside[3]);
+}
+</script>
+
 <script id="CanvasRenderingContext2D#getImageData">
 {
   const element = document.createElement("canvas");
@@ -460,10 +505,15 @@
   const ctx = document.createElement('canvas').getContext('2d');
   const img = new Image();
   const src = document.createElement('canvas');
-  // No-op, but must accept the (image, dx, dy), (image, dx, dy, dw, dh) and
-  // 9-arg overloads without throwing.
-  ctx.drawImage(img, 0, 0);
-  ctx.drawImage(src, 0, 0, 10, 10);
+  let unsupportedImageThrows = false;
+  try {
+    ctx.drawImage(img, 0, 0);
+  } catch (e) {
+    unsupportedImageThrows = e instanceof TypeError;
+  }
+  testing.expectEqual(true, unsupportedImageThrows);
+  testing.expectEqual(undefined, ctx.drawImage(src, 0, 0, 10, 10));
+  testing.expectEqual(0, ctx.getImageData(0, 0, 1, 1).data[3]);
   testing.expectEqual(undefined, ctx.drawImage(src, 0, 0, 10, 10, 0, 0, 10, 10));
 }
 </script>
