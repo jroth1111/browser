@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_cors_blocked type=module>
+  {
+    const state = await testing.async();
+    let blocked = false;
+    try {
+      await fetch(`${testing.CORS_ORIGIN}/cors/blocked`, { mode: 'cors' });
+    } catch (error) {
+      blocked = error instanceof TypeError;
+    }
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(true, blocked);
+    });
+  }
+</script>

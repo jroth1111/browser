@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_same_origin_mode type=module>
+  {
+    const state = await testing.async();
+    const sameOrigin = await fetch(`${testing.ORIGIN}/xhr`, { mode: 'same-origin' });
+    const sameOriginText = await sameOrigin.text();
+
+    let crossOriginBlocked = false;
+    try {
+      await fetch(`${testing.CORS_ORIGIN}/cors/allowed`, { mode: 'same-origin' });
+    } catch (error) {
+      crossOriginBlocked = error instanceof TypeError;
+    }
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('basic', sameOrigin.type);
+      testing.expectEqual(200, sameOrigin.status);
+      testing.expectEqual(100, sameOriginText.length);
+      testing.expectEqual(true, crossOriginBlocked);
+    });
+  }
+</script>

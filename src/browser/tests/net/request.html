@@ -129,9 +129,38 @@
     testing.expectEqual("POST", request2.method);
     testing.expectEqual("omit", request2.credentials);
     testing.expectEqual("reload", request2.cache);
+    testing.expectEqual("cors", request2.mode);
     testing.expectEqual("me", request2.headers.get("SeNdEr"));
     testing.expectEqual("you", request2.headers.get("target"));
   }
+</script>
+
+<script id=mode>
+  {
+    const req = new Request('https://example.com/api');
+    testing.expectEqual('cors', req.mode);
+  }
+
+  {
+    const req = new Request('https://example.com/api', { mode: 'no-cors' });
+    testing.expectEqual('no-cors', req.mode);
+  }
+
+  {
+    const req = new Request('https://example.com/api', { mode: 'same-origin' });
+    testing.expectEqual('same-origin', req.mode);
+  }
+
+  {
+    const original = new Request('https://example.com/api', { mode: 'no-cors' });
+    const cloned = new Request(original);
+    testing.expectEqual('no-cors', cloned.mode);
+  }
+
+  testing.expectError('TypeError', () => new Request('https://example.com/api', {
+    mode: 'no-cors',
+    method: 'PUT'
+  }));
 </script>
 
 <script id=propfind>

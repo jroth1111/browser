@@ -162,6 +162,7 @@
     IS_TEST_RUNNER: IS_TEST_RUNNER,
     HOST: '127.0.0.1',
     ORIGIN: 'http://127.0.0.1:9582',
+    CORS_ORIGIN: 'http://127.0.0.1:9585',
     BASE_URL: 'http://127.0.0.1:9582/src/browser/tests/',
   };
 

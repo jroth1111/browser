@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_no_cors_headers type=module>
+  {
+    const state = await testing.async();
+    await fetch(`${testing.CORS_ORIGIN}/cors/record-no-cors-headers`, {
+      mode: 'no-cors',
+      method: 'POST',
+      headers: {
+        'X-Unsafe-No-Cors': 'leak',
+        'Content-Language': 'en',
+        'Content-Type': 'text/plain;charset=UTF-8',
+      },
+      body: 'hello',
+    });
+    const snapshot = await (await fetch(`${testing.ORIGIN}/cors/read-no-cors-headers`)).json();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual(false, snapshot.xUnsafeNoCorsPresent);
+      testing.expectEqual(true, snapshot.contentLanguagePresent);
+      testing.expectEqual(true, snapshot.contentTypePresent);
+      testing.expectEqual(true, snapshot.secFetchModeNoCors);
+    });
+  }
+</script>

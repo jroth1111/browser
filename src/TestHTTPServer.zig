@@ -24,14 +24,20 @@ const TestHTTPServer = @This();
 shutdown: std.atomic.Value(bool),
 listener: ?std.net.Server,
 handler: Handler,
+port: u16,
 
 const Handler = *const fn (req: *std.http.Server.Request) anyerror!void;
 
 pub fn init(handler: Handler) TestHTTPServer {
+    return initOnPort(handler, 9582);
+}
+
+pub fn initOnPort(handler: Handler, port: u16) TestHTTPServer {
     return .{
         .shutdown = .init(true),
         .listener = null,
         .handler = handler,
+        .port = port,
     };
 }
 
@@ -50,7 +56,7 @@ pub fn stop(self: *TestHTTPServer) void {
 }
 
 pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
-    const address = try std.net.Address.parseIp("127.0.0.1", 9582);
+    const address = try std.net.Address.parseIp("127.0.0.1", self.port);
 
     self.listener = try address.listen(.{ .reuse_address = true });
     var listener = &self.listener.?;

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_cors_allowed type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch(`${testing.CORS_ORIGIN}/cors/allowed`, { mode: 'cors' });
+    const text = await response.text();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('cors', response.type);
+      testing.expectEqual(200, response.status);
+      testing.expectEqual(true, response.ok);
+      testing.expectEqual('cors-ok', text);
+      testing.expectEqual('text/plain', response.headers.get('content-type'));
+      testing.expectEqual('visible', response.headers.get('x-cors-proof'));
+      testing.expectEqual(null, response.headers.get('x-hidden-proof'));
+      testing.expectEqual(null, response.headers.get('access-control-allow-origin'));
+    });
+  }
+</script>

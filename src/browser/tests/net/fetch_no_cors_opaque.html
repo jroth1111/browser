@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_no_cors_opaque type=module>
+  {
+    const state = await testing.async();
+    const response = await fetch(`${testing.CORS_ORIGIN}/cors/blocked`, { mode: 'no-cors' });
+    const text = await response.text();
+
+    state.resolve();
+    await state.done(() => {
+      testing.expectEqual('opaque', response.type);
+      testing.expectEqual(0, response.status);
+      testing.expectEqual(false, response.ok);
+      testing.expectEqual('', response.url);
+      testing.expectEqual(null, response.body);
+      testing.expectEqual(null, response.headers.get('content-type'));
+      testing.expectEqual('', text);
+    });
+  }
+</script>

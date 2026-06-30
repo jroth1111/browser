@@ -41,6 +41,7 @@ _body: ?[]const u8,
 _arena: Allocator,
 _cache: Cache,
 _credentials: Credentials,
+_mode: Mode,
 _signal: ?*AbortSignal,
 _body_used: bool = false,
 
@@ -53,17 +54,25 @@ pub const InitOpts = struct {
     method: ?[]const u8 = null,
     headers: ?Headers.InitOpts = null,
     body: ?BodyInit = null,
-    cache: Cache = .default,
-    credentials: Credentials = .@"same-origin",
+    cache: ?Cache = null,
+    credentials: ?Credentials = null,
+    mode: ?Mode = null,
     signal: ?*AbortSignal = null,
     priority: ?[]const u8 = null,
 };
 
 const Priority = enum { high, low, auto };
 
-const Credentials = enum {
+pub const Credentials = enum {
     omit,
     include,
+    @"same-origin",
+    pub const js_enum_from_string = true;
+};
+
+pub const Mode = enum {
+    cors,
+    @"no-cors",
     @"same-origin",
     pub const js_enum_from_string = true;
 };
@@ -131,13 +140,30 @@ pub fn init(input: Input, opts_: ?InitOpts, exec: *const Execution) !*Request {
         .request => |r| r._signal,
     };
 
+    const cache = opts.cache orelse switch (input) {
+        .url => .default,
+        .request => |r| r._cache,
+    };
+    const credentials = opts.credentials orelse switch (input) {
+        .url => .@"same-origin",
+        .request => |r| r._credentials,
+    };
+    const mode = opts.mode orelse switch (input) {
+        .url => .cors,
+        .request => |r| r._mode,
+    };
+    if (mode == .@"no-cors" and !isCorsSafelistedMethod(method)) {
+        return error.TypeError;
+    }
+
     return exec._factory.create(Request{
         ._url = url,
         ._arena = arena,
         ._method = method,
         ._headers = headers,
-        ._cache = opts.cache,
-        ._credentials = opts.credentials,
+        ._cache = cache,
+        ._credentials = credentials,
+        ._mode = mode,
         ._body = body,
         ._signal = signal,
     });
@@ -163,6 +189,10 @@ fn parseMethod(method: []const u8, exec: *const Execution) !http.Method {
     return method_lookup.get(lower) orelse return error.InvalidMethod;
 }
 
+fn isCorsSafelistedMethod(method: http.Method) bool {
+    return method == .GET or method == .HEAD or method == .POST;
+}
+
 pub fn getUrl(self: *const Request) []const u8 {
     return self._url;
 }
@@ -177,6 +207,10 @@ pub fn getCache(self: *const Request) []const u8 {
 
 pub fn getCredentials(self: *const Request) []const u8 {
     return @tagName(self._credentials);
+}
+
+pub fn getMode(self: *const Request) []const u8 {
+    return @tagName(self._mode);
 }
 
 pub fn getSignal(self: *const Request) ?*AbortSignal {
@@ -271,6 +305,7 @@ pub fn clone(self: *const Request, exec: *const Execution) !*Request {
         ._headers = self._headers,
         ._cache = self._cache,
         ._credentials = self._credentials,
+        ._mode = self._mode,
         ._body = self._body,
         ._signal = self._signal,
     });
@@ -291,6 +326,7 @@ pub const JsApi = struct {
     pub const headers = bridge.accessor(Request.getHeaders, null, .{});
     pub const cache = bridge.accessor(Request.getCache, null, .{});
     pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
+    pub const mode = bridge.accessor(Request.getMode, null, .{});
     pub const signal = bridge.accessor(Request.getSignal, null, .{});
     pub const bodyUsed = bridge.accessor(Request.getBodyUsed, null, .{});
     pub const blob = bridge.function(Request.blob, .{});

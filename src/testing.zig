@@ -505,9 +505,21 @@ const Server = @import("Server.zig");
 var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
+var test_cors_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
+var test_cors_http_server_thread: ?std.Thread = null;
 var test_ws_server: ?TestWSServer = null;
 var test_ws_server_thread: ?std.Thread = null;
+
+const CorsHeaderSnapshot = struct {
+    x_unsafe_no_cors_present: bool = false,
+    content_language_present: bool = false,
+    content_type_present: bool = false,
+    sec_fetch_mode_no_cors: bool = false,
+};
+
+var cors_header_snapshot_mutex: std.Thread.Mutex = .{};
+var cors_no_cors_header_snapshot: CorsHeaderSnapshot = .{};
 
 var test_config: Config = undefined;
 
@@ -536,12 +548,15 @@ test "tests:beforeAll" {
     test_session = try test_browser.newSession(test_notification);
 
     var wg: std.Thread.WaitGroup = .{};
-    wg.startMany(3);
+    wg.startMany(4);
 
     test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
 
     test_http_server = TestHTTPServer.init(testHTTPHandler);
     test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
+
+    test_cors_http_server = TestHTTPServer.initOnPort(testHTTPHandler, 9585);
+    test_cors_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_cors_http_server.?, &wg });
 
     test_ws_server = TestWSServer.init();
     test_ws_server_thread = try std.Thread.spawn(.{}, TestWSServer.run, .{ &test_ws_server.?, &wg });
@@ -563,10 +578,19 @@ test "tests:afterAll" {
     if (test_http_server) |*server| {
         server.stop();
     }
+    if (test_cors_http_server) |*server| {
+        server.stop();
+    }
     if (test_http_server_thread) |thread| {
         thread.join();
     }
+    if (test_cors_http_server_thread) |thread| {
+        thread.join();
+    }
     if (test_http_server) |*server| {
+        server.deinit();
+    }
+    if (test_cors_http_server) |*server| {
         server.deinit();
     }
 
@@ -729,6 +753,88 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/octet-stream" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/allowed")) {
+        return req.respond("cors-ok", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Access-Control-Allow-Origin", .value = "*" },
+                .{ .name = "Access-Control-Expose-Headers", .value = "X-Cors-Proof" },
+                .{ .name = "X-Cors-Proof", .value = "visible" },
+                .{ .name = "X-Hidden-Proof", .value = "hidden" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/credentials-wildcard-expose")) {
+        return req.respond("credentialed-wildcard", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "Access-Control-Allow-Origin", .value = "http://127.0.0.1:9582" },
+                .{ .name = "Access-Control-Allow-Credentials", .value = "true" },
+                .{ .name = "Access-Control-Expose-Headers", .value = "*" },
+                .{ .name = "X-Wildcard-Credentials-Proof", .value = "hidden" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/record-no-cors-headers")) {
+        var snapshot: CorsHeaderSnapshot = .{};
+        var it = req.iterateHeaders();
+        while (it.next()) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "X-Unsafe-No-Cors")) {
+                snapshot.x_unsafe_no_cors_present = true;
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Content-Language")) {
+                snapshot.content_language_present = std.mem.eql(u8, h.value, "en");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Content-Type")) {
+                snapshot.content_type_present = std.mem.startsWith(u8, h.value, "text/plain");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                snapshot.sec_fetch_mode_no_cors = std.mem.eql(u8, h.value, "no-cors");
+            }
+        }
+
+        cors_header_snapshot_mutex.lock();
+        cors_no_cors_header_snapshot = snapshot;
+        cors_header_snapshot_mutex.unlock();
+
+        return req.respond("recorded", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/read-no-cors-headers")) {
+        cors_header_snapshot_mutex.lock();
+        const snapshot = cors_no_cors_header_snapshot;
+        cors_header_snapshot_mutex.unlock();
+
+        var body_buf: [256]u8 = undefined;
+        const body = try std.fmt.bufPrint(
+            &body_buf,
+            "{{\"xUnsafeNoCorsPresent\":{},\"contentLanguagePresent\":{},\"contentTypePresent\":{},\"secFetchModeNoCors\":{}}}",
+            .{
+                snapshot.x_unsafe_no_cors_present,
+                snapshot.content_language_present,
+                snapshot.content_type_present,
+                snapshot.sec_fetch_mode_no_cors,
+            },
+        );
+        return req.respond(body, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/blocked")) {
+        return req.respond("cors-blocked", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+                .{ .name = "X-Hidden-Proof", .value = "hidden" },
             },
         });
     }
