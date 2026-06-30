@@ -6,6 +6,7 @@ const CanvasPath = @import("CanvasPath.zig");
 
 pub const max_png_raw_bytes = 4 * 1024 * 1024;
 pub const max_paint_ops = 32;
+pub const max_clip_masks = 16;
 pub const png_signature = [_]u8{ 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A };
 pub const default_font = "10px sans-serif";
 
@@ -123,6 +124,7 @@ pub const DrawingState = struct {
     line_width: f64,
     font: []const u8,
     transform: Transform,
+    clip_bits: u16,
 };
 
 pub fn drawingState(context: anytype) DrawingState {
@@ -132,6 +134,7 @@ pub fn drawingState(context: anytype) DrawingState {
         .line_width = context._line_width,
         .font = context._font,
         .transform = context._transform,
+        .clip_bits = context._paint_stack.currentClipBits(),
     };
 }
 
@@ -141,6 +144,7 @@ pub fn applyDrawingState(context: anytype, state: DrawingState) void {
     context._line_width = state.line_width;
     context._font = state.font;
     context._transform = state.transform;
+    context._paint_stack.setCurrentClipBits(state.clip_bits);
 }
 
 pub const DrawingStateStack = struct {
@@ -307,6 +311,25 @@ pub const StrokedPath = struct {
     }
 };
 
+pub const ClipMask = struct {
+    path: CanvasPath,
+    fill_rule: CanvasPath.FillRule,
+
+    pub fn init(path: CanvasPath, maybe_fill_rule: ?[]const u8) ?ClipMask {
+        if (path.isEmpty()) return null;
+        return .{
+            .path = path,
+            .fill_rule = CanvasPath.parseFillRule(maybe_fill_rule),
+        };
+    }
+
+    fn contains(self: *const ClipMask, x: i64, y: i64) bool {
+        const xf = @as(f64, @floatFromInt(x)) + 0.5;
+        const yf = @as(f64, @floatFromInt(y)) + 0.5;
+        return self.path.contains(xf, yf, self.fill_rule);
+    }
+};
+
 pub const Paint = union(enum) {
     rect: FilledRect,
     clear_rect: ClearedRect,
@@ -325,6 +348,11 @@ pub const Paint = union(enum) {
             .image => |image| image.pixelAt(x, y),
         };
     }
+};
+
+const PaintOp = struct {
+    paint: Paint,
+    clip_bits: u16,
 };
 
 pub const ImagePatch = struct {
@@ -357,11 +385,16 @@ pub const SourceBitmap = struct {
 };
 
 pub const PaintStack = struct {
-    ops: [max_paint_ops]Paint = undefined,
+    ops: [max_paint_ops]PaintOp = undefined,
     count: usize = 0,
+    clip_masks: [max_clip_masks]ClipMask = undefined,
+    clip_count: usize = 0,
+    current_clip_bits: u16 = 0,
 
     pub fn clear(self: *PaintStack) void {
         self.count = 0;
+        self.clip_count = 0;
+        self.current_clip_bits = 0;
     }
 
     pub fn appendRect(self: *PaintStack, rect: FilledRect) void {
@@ -395,6 +428,22 @@ pub const PaintStack = struct {
     pub fn appendPath(self: *PaintStack, path: CanvasPath, rgba: color.RGBA, maybe_fill_rule: ?[]const u8) void {
         if (path.isEmpty()) return;
         self.append(.{ .path = FilledPath.init(path, rgba, maybe_fill_rule) });
+    }
+
+    pub fn appendClip(self: *PaintStack, path: CanvasPath, maybe_fill_rule: ?[]const u8) void {
+        const mask = ClipMask.init(path, maybe_fill_rule) orelse return;
+        if (self.clip_count >= max_clip_masks) return;
+        self.clip_masks[self.clip_count] = mask;
+        self.current_clip_bits |= @as(u16, 1) << @as(u4, @intCast(self.clip_count));
+        self.clip_count += 1;
+    }
+
+    pub fn currentClipBits(self: *const PaintStack) u16 {
+        return self.current_clip_bits;
+    }
+
+    pub fn setCurrentClipBits(self: *PaintStack, bits: u16) void {
+        self.current_clip_bits = bits & activeClipMask(self.clip_count);
     }
 
     pub fn appendImagePatch(
@@ -477,8 +526,12 @@ pub const PaintStack = struct {
     }
 
     fn append(self: *PaintStack, paint: Paint) void {
+        const op = PaintOp{
+            .paint = paint,
+            .clip_bits = self.current_clip_bits,
+        };
         if (self.count < max_paint_ops) {
-            self.ops[self.count] = paint;
+            self.ops[self.count] = op;
             self.count += 1;
             return;
         }
@@ -487,18 +540,35 @@ pub const PaintStack = struct {
         while (i < max_paint_ops) : (i += 1) {
             self.ops[i - 1] = self.ops[i];
         }
-        self.ops[max_paint_ops - 1] = paint;
+        self.ops[max_paint_ops - 1] = op;
     }
 
     fn basePixelAt(self: *const PaintStack, x: i64, y: i64) color.RGBA {
-        var i = self.count;
-        while (i > 0) {
-            i -= 1;
-            if (self.ops[i].pixelAt(x, y)) |rgba| return rgba;
+        var rgba = color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        for (self.ops[0..self.count]) |*op| {
+            if (!self.clipContains(op.clip_bits, x, y)) continue;
+            if (op.paint.pixelAt(x, y)) |painted| rgba = painted;
         }
-        return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        return rgba;
+    }
+
+    fn clipContains(self: *const PaintStack, clip_bits: u16, x: i64, y: i64) bool {
+        if (clip_bits == 0) return true;
+        var i: usize = 0;
+        while (i < self.clip_count) : (i += 1) {
+            const bit = @as(u16, 1) << @as(u4, @intCast(i));
+            if ((clip_bits & bit) == 0) continue;
+            if (!self.clip_masks[i].contains(x, y)) return false;
+        }
+        return true;
     }
 };
+
+fn activeClipMask(count: usize) u16 {
+    if (count == 0) return 0;
+    if (count >= max_clip_masks) return std.math.maxInt(u16);
+    return (@as(u16, 1) << @as(u4, @intCast(count))) - 1;
+}
 
 const SourceRect = struct {
     x: i64,
@@ -764,8 +834,8 @@ fn finite(value: f64) bool {
 
 fn finiteInteger(value: f64) ?i64 {
     if (!finite(value)) return null;
-    if (value < @as(f64, @floatFromInt(std.math.minInt(i64)))) return null;
-    if (value > @as(f64, @floatFromInt(std.math.maxInt(i64)))) return null;
+    if (value <= @as(f64, @floatFromInt(std.math.minInt(i64)))) return null;
+    if (value >= @as(f64, @floatFromInt(std.math.maxInt(i64)))) return null;
     return @intFromFloat(@trunc(value));
 }
 
@@ -1067,6 +1137,7 @@ test "CanvasBitmap drawing state stack restores latest state" {
         .line_width = 2,
         .font = "16px Arial",
         .transform = .{ .e = 4, .f = 3 },
+        .clip_bits = 0,
     };
 
     try testing.expect(stack.pop() == null);
@@ -1092,6 +1163,7 @@ test "CanvasBitmap drawing state stack keeps deep state without a shallow cap" {
             .line_width = @floatFromInt(i + 1),
             .font = default_font,
             .transform = .{ .e = @floatFromInt(i) },
+            .clip_bits = 0,
         });
     }
 
@@ -1119,6 +1191,43 @@ test "CanvasBitmap clear rect overrides only covered pixels" {
 
     stack.appendClearRect(0, 0, 10, 10);
     try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&stack, 1, 1, 0));
+}
+
+test "CanvasBitmap clip masks future paint and restores clip state" {
+    const red = color.RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    const blue = color.RGBA{ .r = 0, .g = 0, .b = 255, .a = 255 };
+    const green = color.RGBA{ .r = 0, .g = 255, .b = 0, .a = 255 };
+
+    var stack = PaintStack{};
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 10, .height = 10, .rgba = red });
+
+    var clip = CanvasPath{};
+    clip.rect(0, 0, 4, 4);
+    stack.appendClip(clip, null);
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 10, .height = 10, .rgba = blue });
+
+    try testing.expectEqual(blue, paintStackPixelAt(&stack, 1, 1, 0));
+    try testing.expectEqual(red, paintStackPixelAt(&stack, 6, 6, 0));
+
+    const clipped_state = stack.currentClipBits();
+    var narrower = CanvasPath{};
+    narrower.rect(0, 0, 2, 2);
+    stack.appendClip(narrower, null);
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 10, .height = 10, .rgba = green });
+
+    try testing.expectEqual(green, paintStackPixelAt(&stack, 1, 1, 0));
+    try testing.expectEqual(blue, paintStackPixelAt(&stack, 3, 3, 0));
+    try testing.expectEqual(red, paintStackPixelAt(&stack, 6, 6, 0));
+
+    stack.setCurrentClipBits(clipped_state);
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 10, .height = 10, .rgba = green });
+
+    try testing.expectEqual(green, paintStackPixelAt(&stack, 3, 3, 0));
+    try testing.expectEqual(red, paintStackPixelAt(&stack, 6, 6, 0));
+
+    stack.setCurrentClipBits(0);
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 10, .height = 10, .rgba = green });
+    try testing.expectEqual(green, paintStackPixelAt(&stack, 6, 6, 0));
 }
 
 test "CanvasBitmap transform maps simple rect bounds" {

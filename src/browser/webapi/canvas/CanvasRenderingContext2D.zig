@@ -307,7 +307,9 @@ pub fn fill(self: *CanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void 
 pub fn stroke(self: *CanvasRenderingContext2D) void {
     self._paint_stack.appendStrokePath(self._path, self._line_width * self._transform.strokeScale(), self._stroke_style);
 }
-pub fn clip(_: *CanvasRenderingContext2D) void {}
+pub fn clip(self: *CanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void {
+    self._paint_stack.appendClip(self._path, maybe_fill_rule);
+}
 pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
     const text_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font) orelse return;
     if (self._transform.filledRect(text_rect)) |transformed| {
@@ -420,7 +422,7 @@ pub const JsApi = struct {
     pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{});
     pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{});
     pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{});
-    pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
+    pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{});
     pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
     pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{});
     pub const measureText = bridge.function(CanvasRenderingContext2D.measureText, .{});

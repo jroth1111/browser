@@ -413,6 +413,46 @@
 }
 </script>
 
+<script id="OffscreenCanvasRenderingContext2D#clip masks future paint">
+{
+  const canvas = new OffscreenCanvas(24, 24);
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(0, 0, 24, 24);
+  ctx.beginPath();
+  ctx.rect(4, 4, 8, 8);
+  ctx.clip();
+  ctx.fillStyle = "#00aa00";
+  ctx.fillRect(0, 0, 24, 24);
+
+  const clippedInside = ctx.getImageData(5, 5, 1, 1).data;
+  const clippedOutside = ctx.getImageData(1, 1, 1, 1).data;
+  testing.expectEqual(true, clippedInside[1] >= 120);
+  testing.expectEqual(true, clippedInside[3] >= 200);
+  testing.expectEqual(true, clippedOutside[0] >= 200);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(4, 4, 2, 2);
+  ctx.clip();
+  ctx.fillStyle = "#0000ff";
+  ctx.fillRect(0, 0, 24, 24);
+  const nestedInside = ctx.getImageData(5, 5, 1, 1).data;
+  const nestedOutside = ctx.getImageData(7, 7, 1, 1).data;
+  testing.expectEqual(true, nestedInside[2] >= 180);
+  testing.expectEqual(true, nestedOutside[1] >= 120);
+
+  ctx.restore();
+  ctx.fillStyle = "#0000ff";
+  ctx.fillRect(0, 0, 24, 24);
+  const restoredInside = ctx.getImageData(7, 7, 1, 1).data;
+  const restoredOutside = ctx.getImageData(14, 14, 1, 1).data;
+  testing.expectEqual(true, restoredInside[2] >= 180);
+  testing.expectEqual(true, restoredOutside[0] >= 200);
+}
+</script>
+
 <script id=OffscreenCanvasRenderingContext2D#curves and arc path>
 {
   const canvas = new OffscreenCanvas(96, 36);
