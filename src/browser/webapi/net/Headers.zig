@@ -99,6 +99,31 @@ pub fn forEach(self: *Headers, cb_: js.Function, js_this_: ?js.Object) !void {
     }
 }
 
+pub fn snapshotPairs(self: *const Headers, allocator: Allocator) ![][2][]const u8 {
+    const pairs = try allocator.alloc([2][]const u8, self._list._entries.items.len);
+    errdefer allocator.free(pairs);
+    var initialized: usize = 0;
+    errdefer {
+        for (pairs[0..initialized]) |pair| {
+            allocator.free(pair[0]);
+            allocator.free(pair[1]);
+        }
+    }
+    for (self._list._entries.items, 0..) |entry, index| {
+        const name = try allocator.dupe(u8, entry.name.str());
+        const value = allocator.dupe(u8, entry.value.str()) catch |err| {
+            allocator.free(name);
+            return err;
+        };
+        pairs[index] = .{
+            name,
+            value,
+        };
+        initialized += 1;
+    }
+    return pairs;
+}
+
 // TODO: do we really need 2 different header structs??
 const http = @import("../../../network/http.zig");
 pub fn populateHttpHeader(self: *Headers, allocator: Allocator, http_headers: *http.Headers) !void {

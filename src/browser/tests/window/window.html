@@ -492,27 +492,71 @@
     testing.expectEqual('function', typeof window.caches.keys);
     testing.expectEqual('function', typeof window.caches.has);
     testing.expectEqual('function', typeof window.caches.delete);
+    testing.expectEqual('function', typeof window.caches.match);
     testing.expectEqual(true, window.caches.open.toString().includes('[native code]'));
 
     const state = await testing.async();
     const cache = await window.caches.open('chimera-cache');
     const keys = await window.caches.keys();
     const has = await window.caches.has('chimera-cache');
-    const deleted = await window.caches.delete('chimera-cache');
     const matched = await window.caches.match('/missing');
+    const request = new Request('/cached-proof');
+    const response = new Response('cached-body', {
+      status: 203,
+      headers: {
+        'content-type': 'text/plain;charset=UTF-8',
+        'x-cache-proof': 'yes'
+      }
+    });
+    const put = await cache.put(request, response);
+    const matchedResponse = await cache.match('/cached-proof');
+    const matchedText = await matchedResponse.text();
+    const globalMatchedResponse = await window.caches.match(request);
+    const globalMatchedText = await globalMatchedResponse.text();
     const cacheKeys = await cache.keys();
+    const entryDeleted = await cache.delete('/cached-proof');
+    const afterEntryDelete = await cache.match(request);
+    const deleted = await window.caches.delete('chimera-cache');
+    const hasAfterDelete = await window.caches.has('chimera-cache');
 
-    state.resolve({ cache, keys, has, deleted, matched, cacheKeys });
+    state.resolve({
+      cache,
+      keys,
+      has,
+      deleted,
+      matched,
+      put,
+      matchedResponse,
+      matchedText,
+      globalMatchedResponse,
+      globalMatchedText,
+      cacheKeys,
+      entryDeleted,
+      afterEntryDelete,
+      hasAfterDelete
+    });
 
     await state.done((result) => {
       testing.expectEqual(true, result.cache instanceof Cache);
       testing.expectEqual(true, Array.isArray(result.keys));
-      testing.expectEqual(0, result.keys.length);
-      testing.expectEqual(false, result.has);
-      testing.expectEqual(false, result.deleted);
+      testing.expectEqual(true, result.keys.includes('chimera-cache'));
+      testing.expectEqual(true, result.has);
       testing.expectEqual(undefined, result.matched);
+      testing.expectEqual(undefined, result.put);
+      testing.expectEqual(true, result.matchedResponse instanceof Response);
+      testing.expectEqual(203, result.matchedResponse.status);
+      testing.expectEqual('yes', result.matchedResponse.headers.get('x-cache-proof'));
+      testing.expectEqual('cached-body', result.matchedText);
+      testing.expectEqual(true, result.globalMatchedResponse instanceof Response);
+      testing.expectEqual('cached-body', result.globalMatchedText);
       testing.expectEqual(true, Array.isArray(result.cacheKeys));
-      testing.expectEqual(0, result.cacheKeys.length);
+      testing.expectEqual(1, result.cacheKeys.length);
+      testing.expectEqual(true, result.cacheKeys[0] instanceof Request);
+      testing.expectEqual(new URL('/cached-proof', location.href).href, result.cacheKeys[0].url);
+      testing.expectEqual(true, result.entryDeleted);
+      testing.expectEqual(undefined, result.afterEntryDelete);
+      testing.expectEqual(true, result.deleted);
+      testing.expectEqual(false, result.hasAfterDelete);
     });
   }
 </script>

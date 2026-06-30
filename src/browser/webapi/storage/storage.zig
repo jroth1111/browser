@@ -59,7 +59,7 @@ pub const Bucket = struct {
     _allocator: Allocator,
     local: Lookup,
     session: Lookup,
-    caches: std.StringArrayHashMapUnmanaged(void) = .empty,
+    caches: std.StringArrayHashMapUnmanaged(*CacheBucket) = .empty,
 
     pub fn init(allocator: Allocator) Bucket {
         return .{
@@ -70,8 +70,10 @@ pub const Bucket = struct {
     }
 
     pub fn deinit(self: *Bucket) void {
-        for (self.caches.keys()) |key| {
+        for (self.caches.keys(), self.caches.values()) |key, cache| {
             self._allocator.free(key);
+            cache.deinit(self._allocator);
+            self._allocator.destroy(cache);
         }
         self.caches.deinit(self._allocator);
         self.local.deinit();
@@ -82,23 +84,141 @@ pub const Bucket = struct {
         if (self.caches.contains(name)) return;
         const owned = try self._allocator.dupe(u8, name);
         errdefer self._allocator.free(owned);
-        try self.caches.put(self._allocator, owned, {});
+        const cache = try self._allocator.create(CacheBucket);
+        errdefer self._allocator.destroy(cache);
+        cache.* = .{};
+        try self.caches.put(self._allocator, owned, cache);
     }
 
     pub fn hasCache(self: *const Bucket, name: []const u8) bool {
         return self.caches.contains(name);
     }
 
+    pub fn getCache(self: *const Bucket, name: []const u8) ?*CacheBucket {
+        return self.caches.get(name);
+    }
+
     pub fn deleteCache(self: *Bucket, name: []const u8) bool {
         const index = self.caches.getIndex(name) orelse return false;
         const owned = self.caches.keys()[index];
+        const cache = self.caches.values()[index];
         _ = self.caches.orderedRemove(name);
+        cache.deinit(self._allocator);
+        self._allocator.destroy(cache);
         self._allocator.free(owned);
         return true;
     }
 
     pub fn cacheNames(self: *const Bucket) []const []const u8 {
         return self.caches.keys();
+    }
+
+    pub fn matchCacheEntry(self: *const Bucket, request_url: []const u8) ?CachedResponse {
+        for (self.caches.values()) |cache| {
+            if (cache.match(request_url)) |entry| return entry;
+        }
+        return null;
+    }
+};
+
+pub const CachedHeader = [2][]const u8;
+
+pub const CachedResponse = struct {
+    status: u16,
+    status_text: []const u8,
+    url: []const u8,
+    body: []const u8,
+    headers: []const CachedHeader,
+
+    pub fn clone(self: CachedResponse, allocator: Allocator) !CachedResponse {
+        const headers = try allocator.alloc(CachedHeader, self.headers.len);
+        errdefer allocator.free(headers);
+        var initialized: usize = 0;
+        errdefer {
+            for (headers[0..initialized]) |pair| {
+                allocator.free(pair[0]);
+                allocator.free(pair[1]);
+            }
+        }
+        for (self.headers, 0..) |pair, index| {
+            const name = try allocator.dupe(u8, pair[0]);
+            const value = allocator.dupe(u8, pair[1]) catch |err| {
+                allocator.free(name);
+                return err;
+            };
+            headers[index] = .{
+                name,
+                value,
+            };
+            initialized += 1;
+        }
+        const status_text = try allocator.dupe(u8, self.status_text);
+        errdefer allocator.free(status_text);
+        const url = try allocator.dupe(u8, self.url);
+        errdefer allocator.free(url);
+        const body = try allocator.dupe(u8, self.body);
+        errdefer allocator.free(body);
+        return .{
+            .status = self.status,
+            .status_text = status_text,
+            .url = url,
+            .body = body,
+            .headers = headers,
+        };
+    }
+
+    pub fn deinit(self: CachedResponse, allocator: Allocator) void {
+        allocator.free(self.status_text);
+        allocator.free(self.url);
+        allocator.free(self.body);
+        for (self.headers) |pair| {
+            allocator.free(pair[0]);
+            allocator.free(pair[1]);
+        }
+        allocator.free(self.headers);
+    }
+};
+
+pub const CacheBucket = struct {
+    entries: std.StringArrayHashMapUnmanaged(CachedResponse) = .empty,
+
+    pub fn deinit(self: *CacheBucket, allocator: Allocator) void {
+        for (self.entries.keys(), self.entries.values()) |key, response| {
+            allocator.free(key);
+            response.deinit(allocator);
+        }
+        self.entries.deinit(allocator);
+    }
+
+    pub fn put(self: *CacheBucket, allocator: Allocator, request_url: []const u8, response: CachedResponse) !void {
+        const cloned = try response.clone(allocator);
+        errdefer cloned.deinit(allocator);
+        if (self.entries.getPtr(request_url)) |existing| {
+            existing.deinit(allocator);
+            existing.* = cloned;
+            return;
+        }
+        const owned_url = try allocator.dupe(u8, request_url);
+        errdefer allocator.free(owned_url);
+        try self.entries.put(allocator, owned_url, cloned);
+    }
+
+    pub fn match(self: *const CacheBucket, request_url: []const u8) ?CachedResponse {
+        return self.entries.get(request_url);
+    }
+
+    pub fn delete(self: *CacheBucket, allocator: Allocator, request_url: []const u8) bool {
+        const index = self.entries.getIndex(request_url) orelse return false;
+        const owned_url = self.entries.keys()[index];
+        const response = self.entries.values()[index];
+        _ = self.entries.orderedRemove(request_url);
+        response.deinit(allocator);
+        allocator.free(owned_url);
+        return true;
+    }
+
+    pub fn requestUrls(self: *const CacheBucket) []const []const u8 {
+        return self.entries.keys();
     }
 };
 
@@ -222,4 +342,28 @@ test "WebApi: storage bucket tracks CacheStorage names" {
     try std.testing.expect(bucket.deleteCache("asset-cache-a"));
     try std.testing.expect(!bucket.deleteCache("asset-cache-a"));
     try std.testing.expectEqual(@as(usize, 0), bucket.cacheNames().len);
+}
+
+test "WebApi: storage bucket owns CacheStorage request entries" {
+    var bucket = Bucket.init(testing.allocator);
+    defer bucket.deinit();
+
+    try bucket.openCache("asset-cache-a");
+    const cache = bucket.getCache("asset-cache-a").?;
+    try cache.put(testing.allocator, "https://example.test/a", .{
+        .status = 203,
+        .status_text = "Non-Authoritative Information",
+        .url = "https://example.test/a",
+        .body = "cached-body",
+        .headers = &.{},
+    });
+
+    const matched = cache.match("https://example.test/a").?;
+    try std.testing.expectEqual(@as(u16, 203), matched.status);
+    try std.testing.expectEqualStrings("cached-body", matched.body);
+    try std.testing.expectEqual(@as(usize, 1), cache.requestUrls().len);
+    try std.testing.expectEqualStrings("https://example.test/a", cache.requestUrls()[0]);
+    try std.testing.expect(bucket.matchCacheEntry("https://example.test/a") != null);
+    try std.testing.expect(cache.delete(testing.allocator, "https://example.test/a"));
+    try std.testing.expect(cache.match("https://example.test/a") == null);
 }

@@ -28,6 +28,7 @@ const ReadableStream = @import("../streams/ReadableStream.zig");
 
 const Headers = @import("Headers.zig");
 const body_init = @import("body_init.zig");
+const storage = @import("../storage/storage.zig");
 
 const Execution = js.Execution;
 const Allocator = std.mem.Allocator;
@@ -402,6 +403,55 @@ pub fn clone(self: *const Response, exec: *const Execution) !*Response {
         ._http_response = null,
     };
     return cloned;
+}
+
+pub fn snapshotForCache(self: *const Response, allocator: Allocator) !storage.CachedResponse {
+    const body = switch (self._body) {
+        .bytes => |body_bytes| body_bytes,
+        .empty => "",
+        .stream => "",
+    };
+    const status_text = try allocator.dupe(u8, self._status_text);
+    errdefer allocator.free(status_text);
+    const url = try allocator.dupe(u8, self._url);
+    errdefer allocator.free(url);
+    const body_copy = try allocator.dupe(u8, body);
+    errdefer allocator.free(body_copy);
+    const headers = try self._headers.snapshotPairs(allocator);
+    errdefer {
+        for (headers) |pair| {
+            allocator.free(pair[0]);
+            allocator.free(pair[1]);
+        }
+        allocator.free(headers);
+    }
+    return .{
+        .status = self._status,
+        .status_text = status_text,
+        .url = url,
+        .body = body_copy,
+        .headers = headers,
+    };
+}
+
+pub fn fromCacheSnapshot(snapshot: *const storage.CachedResponse, exec: *const Execution) !*Response {
+    const session = exec.session;
+    const arena = try session.getArena(snapshot.body.len + snapshot.url.len + 256, "Response.cache");
+    errdefer session.releaseArena(arena);
+
+    const self = try arena.create(Response);
+    self.* = .{
+        ._arena = arena,
+        ._status = snapshot.status,
+        ._status_text = try arena.dupe(u8, snapshot.status_text),
+        ._url = try arena.dupeZ(u8, snapshot.url),
+        ._body = if (snapshot.body.len == 0) .empty else .{ .bytes = try arena.dupe(u8, snapshot.body) },
+        ._type = .default,
+        ._is_redirected = false,
+        ._headers = try Headers.init(.{ .strings = snapshot.headers }, exec),
+        ._http_response = null,
+    };
+    return self;
 }
 
 pub const JsApi = struct {
