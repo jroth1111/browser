@@ -31,6 +31,7 @@ const DeprecatedStorageQuota = @import("DeprecatedStorageQuota.zig");
 const NavigatorUAData = @import("NavigatorUAData.zig");
 const ModelContext = @import("ModelContext.zig");
 const Geolocation = @import("Geolocation.zig");
+const MediaDevices = @import("MediaDevices.zig");
 const ChimeraProfile = @import("../../chimera/Profile.zig");
 
 const Navigator = @This();
@@ -43,6 +44,7 @@ _webkit_temporary_storage: DeprecatedStorageQuota = .{},
 _webkit_persistent_storage: DeprecatedStorageQuota = .{},
 _ua_data: NavigatorUAData = .{},
 _geolocation: Geolocation = .{},
+_media_devices: ?*MediaDevices = null,
 
 pub const init: Navigator = .{};
 const default_languages = [_][]const u8{ "en-US", "en" };
@@ -213,6 +215,17 @@ pub fn getGeolocation(self: *Navigator) *Geolocation {
     return &self._geolocation;
 }
 
+pub fn getMediaDevices(self: *Navigator, exec: *const Execution) !*MediaDevices {
+    if (self._media_devices) |media_devices| {
+        return media_devices;
+    }
+    const media_devices = try exec._factory.eventTarget(MediaDevices{
+        ._proto = undefined,
+    });
+    self._media_devices = media_devices;
+    return media_devices;
+}
+
 pub fn getModelContext(_: *const Navigator, frame: *Frame) *ModelContext {
     return &frame.window._model_context;
 }
@@ -297,7 +310,6 @@ pub const JsApi = struct {
         pub const name = "Navigator";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
     pub const userAgent = bridge.accessor(Navigator.getUserAgent, null, .{});
@@ -324,6 +336,7 @@ pub const JsApi = struct {
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});
     pub const geolocation = bridge.accessor(Navigator.getGeolocation, null, .{ .exposed = .window });
+    pub const mediaDevices = bridge.accessor(Navigator.getMediaDevices, null, .{ .exposed = .window });
 
     // window only
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{ .exposed = .window });

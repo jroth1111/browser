@@ -14,13 +14,16 @@ _pad: bool = false,
 
 pub fn queryUsageAndQuota(_: *const DeprecatedStorageQuota, success: js.Function, error_callback: ?js.Function, exec: *const js.Execution) !js.Undefined {
     _ = error_callback;
-    try success.call(void, .{ StorageQuota.usageBytes(exec), StorageQuota.quotaBytes(exec) });
+    try success.call(void, .{
+        @as(f64, @floatFromInt(StorageQuota.usageBytes(exec))),
+        @as(f64, @floatFromInt(StorageQuota.quotaBytes(exec))),
+    });
     return .{};
 }
 
 pub fn requestQuota(_: *const DeprecatedStorageQuota, requested_quota: ?u64, success: js.Function, error_callback: ?js.Function, exec: *const js.Execution) !js.Undefined {
     _ = error_callback;
-    try success.call(void, .{StorageQuota.grantedBytes(requested_quota, exec)});
+    try success.call(void, .{@as(f64, @floatFromInt(StorageQuota.grantedBytes(requested_quota, exec)))});
     return .{};
 }
 

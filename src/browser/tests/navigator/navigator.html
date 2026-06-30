@@ -43,13 +43,72 @@
     'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
     'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
     'plugins', 'mimeTypes', 'pdfViewerEnabled', 'doNotTrack', 'globalPrivacyControl',
-    'webkitTemporaryStorage', 'webkitPersistentStorage',
+    'webkitTemporaryStorage', 'webkitPersistentStorage', 'mediaDevices',
   ]) {
     const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
     testing.expectEqual('function', typeof desc.get); // accessor on prototype
     testing.expectEqual(undefined, desc.value);        // not a data property
     testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(navigator, name)); // not own
     testing.expectEqual(true, desc.get.toString().includes('[native code]'));
+  }
+</script>
+
+<script id=mediaDevices type=module>
+  {
+    testing.expectEqual('function', typeof MediaDevices);
+    testing.expectEqual('function', typeof MediaDeviceInfo);
+
+    const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, 'mediaDevices');
+    testing.expectEqual('function', typeof desc.get);
+    testing.expectEqual(true, desc.get.toString().includes('[native code]'));
+    testing.expectEqual(undefined, Object.getOwnPropertyDescriptor(navigator, 'mediaDevices'));
+
+    const mediaDevices = navigator.mediaDevices;
+    testing.expectEqual(true, mediaDevices === navigator.mediaDevices);
+    testing.expectEqual('[object MediaDevices]', Object.prototype.toString.call(mediaDevices));
+    testing.expectEqual(true, mediaDevices instanceof MediaDevices);
+    testing.expectEqual('function', typeof mediaDevices.enumerateDevices);
+    testing.expectEqual(true, mediaDevices.enumerateDevices.toString().includes('[native code]'));
+    testing.expectEqual(true, mediaDevices.getUserMedia.toString().includes('[native code]'));
+    testing.expectEqual(true, mediaDevices.getDisplayMedia.toString().includes('[native code]'));
+    testing.expectEqual(true, mediaDevices.addEventListener.toString().includes('[native code]'));
+    testing.expectEqual(true, mediaDevices.removeEventListener.toString().includes('[native code]'));
+    testing.expectEqual(true, mediaDevices.dispatchEvent.toString().includes('[native code]'));
+
+    const devices = await mediaDevices.enumerateDevices();
+    const kinds = devices.map((device) => device.kind);
+    testing.expectEqual(true, Array.isArray(devices));
+    testing.expectEqual(3, devices.length);
+    testing.expectEqual(1, kinds.filter((kind) => kind === 'audioinput').length);
+    testing.expectEqual(1, kinds.filter((kind) => kind === 'videoinput').length);
+    testing.expectEqual(1, kinds.filter((kind) => kind === 'audiooutput').length);
+    for (const device of devices) {
+      testing.expectEqual('[object MediaDeviceInfo]', Object.prototype.toString.call(device));
+      testing.expectEqual(true, device instanceof MediaDeviceInfo);
+      testing.expectEqual('default', device.deviceId);
+      testing.expectEqual('', device.label);
+      testing.expectEqual('', device.groupId);
+      testing.expectEqual({
+        deviceId: device.deviceId,
+        kind: device.kind,
+        label: device.label,
+        groupId: device.groupId,
+      }, device.toJSON());
+      testing.expectEqual(true, device.toJSON.toString().includes('[native code]'));
+    }
+
+    try {
+      await mediaDevices.getUserMedia({audio: true});
+      testing.fail('getUserMedia should reject without a granted capture device');
+    } catch (e) {
+      testing.expectEqual('NotAllowedError', e.name);
+    }
+    try {
+      await mediaDevices.getDisplayMedia({video: true});
+      testing.fail('getDisplayMedia should reject without a granted capture device');
+    } catch (e) {
+      testing.expectEqual('NotAllowedError', e.name);
+    }
   }
 </script>
 

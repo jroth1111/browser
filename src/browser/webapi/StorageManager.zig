@@ -48,12 +48,12 @@ const StorageEstimate = struct {
     _quota: u64,
     _usage: u64,
 
-    fn getUsage(self: *const StorageEstimate) u64 {
-        return self._usage;
+    fn getUsage(self: *const StorageEstimate) f64 {
+        return @floatFromInt(self._usage);
     }
 
-    fn getQuota(self: *const StorageEstimate) u64 {
-        return self._quota;
+    fn getQuota(self: *const StorageEstimate) f64 {
+        return @floatFromInt(self._quota);
     }
 
     pub const JsApi = struct {

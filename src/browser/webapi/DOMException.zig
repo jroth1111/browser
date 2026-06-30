@@ -67,6 +67,7 @@ pub fn fromError(err: anyerror) ?DOMException {
         error.InvalidAccessError => .{ ._code = .invalid_access_error },
         error.OperationError => .{ ._code = .operation_error },
         error.DataError => .{ ._code = .data_error },
+        error.NotAllowedError => .{ ._code = .not_allowed_error },
         else => null,
     };
 }
@@ -74,7 +75,7 @@ pub fn fromError(err: anyerror) ?DOMException {
 pub fn getCode(self: *const DOMException) u8 {
     return switch (self._code) {
         // WebCrypto-only errors: no legacy numeric code.
-        .operation_error, .data_error => 0,
+        .operation_error, .data_error, .not_allowed_error => 0,
         else => @intFromEnum(self._code),
     };
 }
@@ -109,6 +110,7 @@ pub fn getName(self: *const DOMException) []const u8 {
         .data_clone_error => "DataCloneError",
         .operation_error => "OperationError",
         .data_error => "DataError",
+        .not_allowed_error => "NotAllowedError",
     };
 }
 
@@ -141,6 +143,7 @@ pub fn getMessage(self: *const DOMException) []const u8 {
         .data_clone_error => "The object can not be cloned",
         .operation_error => "The operation failed for an operation-specific reason",
         .data_error => "Data provided to an operation does not meet requirements",
+        .not_allowed_error => "Permission denied",
     };
 }
 
@@ -184,6 +187,8 @@ const Code = enum(u8) {
     data_error = 0xFE,
     /// Defined by WebCrypto; no legacy code, exposed via name only.
     operation_error = 0xFF,
+    /// Defined by Media Capture; no legacy code, exposed via name only.
+    not_allowed_error = 0xFD,
 
     /// Maps a standard error name to its legacy code
     /// Returns .none (code 0) for non-legacy error names
@@ -212,6 +217,7 @@ const Code = enum(u8) {
             .{ "DataCloneError", .data_clone_error },
             .{ "OperationError", .operation_error },
             .{ "DataError", .data_error },
+            .{ "NotAllowedError", .not_allowed_error },
         });
         return lookup.get(name) orelse .none;
     }

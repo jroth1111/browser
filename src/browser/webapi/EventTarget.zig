@@ -52,6 +52,7 @@ pub const Type = union(enum) {
     websocket: *@import("net/WebSocket.zig"),
     cookie_store: *@import("storage/CookieStore.zig"),
     notification: *@import("Notification.zig"),
+    media_devices: *@import("MediaDevices.zig"),
     animation: *@import("animation/Animation.zig"),
 };
 
@@ -166,6 +167,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .websocket => writer.writeAll("<WebSocket>"),
         .cookie_store => writer.writeAll("<CookieStore>"),
         .notification => writer.writeAll("<Notification>"),
+        .media_devices => writer.writeAll("<MediaDevices>"),
         .animation => writer.writeAll("<Animation>"),
     };
 }
@@ -192,6 +194,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .websocket => return "[object WebSocket]",
         .cookie_store => return "[object CookieStore]",
         .notification => return "[object Notification]",
+        .media_devices => return "[object MediaDevices]",
         .animation => return "[object Animation]",
     };
 }
