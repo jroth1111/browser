@@ -322,7 +322,11 @@ pub fn arc(self: *CanvasRenderingContext2D, x: f64, y: f64, radius: f64, start_a
     const center = self._transform.point(x, y);
     self._path.arc(center.x, center.y, radius * self._transform.strokeScale(), start_angle, end_angle, maybe_counterclockwise);
 }
-pub fn arcTo(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
+pub fn arcTo(self: *CanvasRenderingContext2D, x1: f64, y1: f64, x2: f64, y2: f64, radius: f64) void {
+    const control = self._transform.point(x1, y1);
+    const end = self._transform.point(x2, y2);
+    self._path.arcTo(control.x, control.y, end.x, end.y, radius * self._transform.strokeScale());
+}
 pub fn rect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     if (self._transform.rect(x, y, width, height)) |bounds| {
         self._path.rect(bounds.x, bounds.y, bounds.width, bounds.height);
@@ -456,7 +460,7 @@ pub const JsApi = struct {
     pub const quadraticCurveTo = bridge.function(CanvasRenderingContext2D.quadraticCurveTo, .{});
     pub const bezierCurveTo = bridge.function(CanvasRenderingContext2D.bezierCurveTo, .{});
     pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{});
-    pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{ .noop = true });
+    pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{});
     pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{});
     pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{});
     pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{});

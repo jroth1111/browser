@@ -179,6 +179,58 @@ pub fn arc(self: *CanvasPath, x: f64, y: f64, radius: f64, start_angle: f64, end
     }
 }
 
+pub fn arcTo(self: *CanvasPath, x1: f64, y1: f64, x2: f64, y2: f64, radius: f64) void {
+    if (!finite(x1) or !finite(y1) or !finite(x2) or !finite(y2) or !finite(radius)) return;
+    if (radius < 0) return;
+    if (!self.has_current) {
+        self.moveTo(x1, y1);
+        return;
+    }
+
+    const control = Point{ .x = x1, .y = y1 };
+    const end = Point{ .x = x2, .y = y2 };
+    if (radius == 0 or pointsEqual(self.current, control) or pointsEqual(control, end)) {
+        self.lineTo(x1, y1);
+        return;
+    }
+
+    const to_current = normalize(.{ .x = self.current.x - control.x, .y = self.current.y - control.y }) orelse {
+        self.lineTo(x1, y1);
+        return;
+    };
+    const to_end = normalize(.{ .x = end.x - control.x, .y = end.y - control.y }) orelse {
+        self.lineTo(x1, y1);
+        return;
+    };
+    const dot = clamp(dotProduct(to_current, to_end), -1.0, 1.0);
+    const cross = crossProduct(to_current, to_end);
+    if (@abs(cross) <= 0.0000001 or dot <= -0.999999 or dot >= 0.999999) {
+        self.lineTo(x1, y1);
+        return;
+    }
+
+    const tan_half = @sqrt((1.0 - dot) / (1.0 + dot));
+    const sin_half = @sqrt((1.0 - dot) / 2.0);
+    if (tan_half <= 0.0000001 or sin_half <= 0.0000001) {
+        self.lineTo(x1, y1);
+        return;
+    }
+
+    const tangent_distance = radius / tan_half;
+    const tangent1 = pointAddScaled(control, to_current, tangent_distance);
+    const tangent2 = pointAddScaled(control, to_end, tangent_distance);
+    const bisector = normalize(.{ .x = to_current.x + to_end.x, .y = to_current.y + to_end.y }) orelse {
+        self.lineTo(x1, y1);
+        return;
+    };
+    const center = pointAddScaled(control, bisector, radius / sin_half);
+    const start_angle = std.math.atan2(tangent1.y - center.y, tangent1.x - center.x);
+    const end_angle = std.math.atan2(tangent2.y - center.y, tangent2.x - center.x);
+
+    self.lineTo(tangent1.x, tangent1.y);
+    self.arc(center.x, center.y, radius, start_angle, end_angle, cross > 0);
+}
+
 pub fn isPointInPath(self: *const CanvasPath, x: f64, y: f64, maybe_fill_rule: ?[]const u8) bool {
     return self.contains(x, y, parseFillRule(maybe_fill_rule));
 }
@@ -240,6 +292,28 @@ fn distanceToSegment(x: f64, y: f64, segment: Segment) f64 {
     const px = x - projected_x;
     const py = y - projected_y;
     return @sqrt(px * px + py * py);
+}
+
+fn normalize(point: Point) ?Point {
+    const len = @sqrt(point.x * point.x + point.y * point.y);
+    if (len <= 0.0000001 or !finite(len)) return null;
+    return .{ .x = point.x / len, .y = point.y / len };
+}
+
+fn dotProduct(a: Point, b: Point) f64 {
+    return a.x * b.x + a.y * b.y;
+}
+
+fn crossProduct(a: Point, b: Point) f64 {
+    return a.x * b.y - a.y * b.x;
+}
+
+fn pointAddScaled(origin: Point, direction: Point, scale: f64) Point {
+    return .{ .x = origin.x + direction.x * scale, .y = origin.y + direction.y * scale };
+}
+
+fn clamp(value: f64, min: f64, max: f64) f64 {
+    return @max(min, @min(max, value));
 }
 
 fn pointsEqual(a: Point, b: Point) bool {
@@ -310,4 +384,22 @@ test "CanvasPath: arc flattens into segments" {
     try testing.expect(path.segment_count > 4);
     try testing.expect(path.strokeContains(4, 10, 2));
     try testing.expect(!path.strokeContains(10, 2, 2));
+}
+
+test "CanvasPath: arcTo flattens tangent line and corner arc" {
+    const testing = std.testing;
+    var path = CanvasPath{};
+    path.moveTo(0, 0);
+    path.arcTo(10, 0, 10, 10, 5);
+
+    try testing.expect(path.segment_count > 4);
+    try testing.expect(path.strokeContains(5, 0, 2));
+    try testing.expect(path.strokeContains(10, 5, 2));
+    try testing.expect(!path.strokeContains(0, 5, 2));
+
+    path.begin();
+    path.moveTo(0, 0);
+    path.arcTo(10, 0, 10, 10, 0);
+    try testing.expectEqual(@as(usize, 1), path.segment_count);
+    try testing.expect(path.strokeContains(10, 0, 2));
 }

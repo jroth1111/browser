@@ -759,5 +759,23 @@
   testing.expectEqual(0, arcCenter[3]);
   testing.expectEqual(true, ctx.isPointInStroke(88, 18));
   testing.expectEqual(false, ctx.isPointInStroke(80, 18));
+
+  ctx.clearRect(0, 0, 96, 36);
+  ctx.strokeStyle = "#ff0000";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(4, 18);
+  ctx.arcTo(20, 18, 20, 2, 6);
+  ctx.stroke();
+  const arcToLine = ctx.getImageData(10, 18, 1, 1).data;
+  const arcToCurve = ctx.getImageData(20, 12, 1, 1).data;
+  const arcToOutside = ctx.getImageData(4, 10, 1, 1).data;
+  testing.expectEqual(true, arcToLine[0] >= 180);
+  testing.expectEqual(true, arcToLine[3] >= 200);
+  testing.expectEqual(true, arcToCurve[0] >= 180);
+  testing.expectEqual(true, arcToCurve[3] >= 200);
+  testing.expectEqual(0, arcToOutside[3]);
+  testing.expectEqual(true, ctx.isPointInStroke(10, 18));
+  testing.expectEqual(true, ctx.isPointInStroke(20, 12));
 }
 </script>
