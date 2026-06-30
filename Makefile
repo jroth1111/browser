@@ -64,6 +64,19 @@ ifeq ($(strip $(ZIGFLAGS)),)
 endif
 
 
+# Curl-impersonate (real Chrome TLS / JA3-JA4)
+# --------------------------------------------
+# Link the vendored prebuilt curl-impersonate static libs (.curl-impersonate/)
+# so the HTTP backend emits Chrome's ClientHello instead of stock libcurl's.
+# Auto-detected and additive: libs present -> impersonation on (and the managed
+# curl-impersonate transport gate reports available); libs absent -> unchanged
+# stock-libcurl build, no regression. Override the dir with CURL_IMPERSONATE_DIR=.
+CURL_IMPERSONATE_DIR ?= $(BC).curl-impersonate
+ifneq ($(wildcard $(CURL_IMPERSONATE_DIR)/lib/libcurl-impersonate.a),)
+  ZIGFLAGS += -Dcurl_impersonate_path=$(CURL_IMPERSONATE_DIR)
+endif
+
+
 # Infos
 # -----
 .PHONY: help
