@@ -242,6 +242,47 @@
 }
 </script>
 
+<script id="CanvasRenderingContext2D#globalAlpha and globalCompositeOperation">
+{
+  const element = document.createElement("canvas");
+  element.width = 12;
+  element.height = 4;
+  const ctx = element.getContext("2d");
+
+  testing.expectEqual(1, ctx.globalAlpha);
+  testing.expectEqual("source-over", ctx.globalCompositeOperation);
+
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(0, 0, 4, 4);
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = "#0000ff";
+  ctx.fillRect(0, 0, 4, 4);
+  const blended = ctx.getImageData(1, 1, 1, 1).data;
+  testing.expectEqual(true, blended[0] >= 120 && blended[0] <= 135);
+  testing.expectEqual(0, blended[1]);
+  testing.expectEqual(true, blended[2] >= 120 && blended[2] <= 135);
+  testing.expectEqual(255, blended[3]);
+
+  ctx.globalAlpha = -1;
+  testing.expectEqual(0.5, ctx.globalAlpha);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "copy";
+  testing.expectEqual("copy", ctx.globalCompositeOperation);
+  ctx.fillStyle = "#00ff00";
+  ctx.fillRect(6, 0, 2, 2);
+  const copied = ctx.getImageData(6, 0, 1, 1).data;
+  testing.expectEqual(0, copied[0]);
+  testing.expectEqual(255, copied[1]);
+  testing.expectEqual(0, copied[2]);
+  testing.expectEqual(255, copied[3]);
+
+  ctx.globalCompositeOperation = "invalid-operation";
+  testing.expectEqual("copy", ctx.globalCompositeOperation);
+  ctx.globalCompositeOperation = "source-over";
+  testing.expectEqual("source-over", ctx.globalCompositeOperation);
+}
+</script>
+
 <script id="CanvasRenderingContext2D#transform backed paint">
 {
   const element = document.createElement("canvas");
@@ -287,12 +328,16 @@
   ctx.strokeStyle = "#0033ff";
   ctx.lineWidth = 2;
   ctx.font = "16px Arial";
+  ctx.globalAlpha = 0.5;
+  ctx.globalCompositeOperation = "copy";
   ctx.translate(6, 24);
   ctx.save();
   ctx.fillStyle = "#ff0000";
   ctx.strokeStyle = "#ff0000";
   ctx.lineWidth = 6;
   ctx.font = "bold 48px serif";
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
   ctx.translate(20, 0);
   ctx.restore();
 
@@ -300,8 +345,12 @@
   testing.expectEqual("#0033ff", ctx.strokeStyle);
   testing.expectEqual(2, ctx.lineWidth);
   testing.expectEqual("16px Arial", ctx.font);
+  testing.expectEqual(0.5, ctx.globalAlpha);
+  testing.expectEqual("copy", ctx.globalCompositeOperation);
   testing.expectEqual(true, ctx.measureText("Chimera").actualBoundingBoxAscent < 20);
 
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
   ctx.fillRect(0, 0, 2, 2);
   ctx.strokeRect(4, 0, 4, 4);
   const fillPixel = ctx.getImageData(6, 24, 1, 1).data;

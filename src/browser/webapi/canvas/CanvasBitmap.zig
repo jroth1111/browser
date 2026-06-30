@@ -125,6 +125,31 @@ pub const DrawingState = struct {
     font: []const u8,
     transform: Transform,
     clip_bits: u16,
+    global_alpha: f64,
+    global_composite_operation: CompositeOperation,
+};
+
+pub const CompositeOperation = enum {
+    source_over,
+    copy,
+
+    pub fn parse(value: []const u8) ?CompositeOperation {
+        if (std.mem.eql(u8, value, "source-over")) return .source_over;
+        if (std.mem.eql(u8, value, "copy")) return .copy;
+        return null;
+    }
+
+    pub fn label(self: CompositeOperation) []const u8 {
+        return switch (self) {
+            .source_over => "source-over",
+            .copy => "copy",
+        };
+    }
+};
+
+pub const CompositeState = struct {
+    alpha: f64 = 1.0,
+    operation: CompositeOperation = .source_over,
 };
 
 pub fn drawingState(context: anytype) DrawingState {
@@ -135,6 +160,8 @@ pub fn drawingState(context: anytype) DrawingState {
         .font = context._font,
         .transform = context._transform,
         .clip_bits = context._paint_stack.currentClipBits(),
+        .global_alpha = context._global_alpha,
+        .global_composite_operation = context._global_composite_operation,
     };
 }
 
@@ -145,6 +172,12 @@ pub fn applyDrawingState(context: anytype, state: DrawingState) void {
     context._font = state.font;
     context._transform = state.transform;
     context._paint_stack.setCurrentClipBits(state.clip_bits);
+    context._global_alpha = state.global_alpha;
+    context._global_composite_operation = state.global_composite_operation;
+    context._paint_stack.setCurrentComposite(.{
+        .alpha = state.global_alpha,
+        .operation = state.global_composite_operation,
+    });
 }
 
 pub const DrawingStateStack = struct {
@@ -353,6 +386,7 @@ pub const Paint = union(enum) {
 const PaintOp = struct {
     paint: Paint,
     clip_bits: u16,
+    composite: CompositeState,
 };
 
 pub const ImagePatch = struct {
@@ -390,11 +424,13 @@ pub const PaintStack = struct {
     clip_masks: [max_clip_masks]ClipMask = undefined,
     clip_count: usize = 0,
     current_clip_bits: u16 = 0,
+    current_composite: CompositeState = .{},
 
     pub fn clear(self: *PaintStack) void {
         self.count = 0;
         self.clip_count = 0;
         self.current_clip_bits = 0;
+        self.current_composite = .{};
     }
 
     pub fn appendRect(self: *PaintStack, rect: FilledRect) void {
@@ -403,7 +439,7 @@ pub const PaintStack = struct {
 
     pub fn appendClearRect(self: *PaintStack, x: f64, y: f64, width: f64, height: f64) void {
         if (ClearedRect.init(x, y, width, height)) |rect| {
-            self.append(.{ .clear_rect = rect });
+            self.appendWithComposite(.{ .clear_rect = rect }, .{ .operation = .copy });
         }
     }
 
@@ -446,6 +482,17 @@ pub const PaintStack = struct {
         self.current_clip_bits = bits & activeClipMask(self.clip_count);
     }
 
+    pub fn currentComposite(self: *const PaintStack) CompositeState {
+        return self.current_composite;
+    }
+
+    pub fn setCurrentComposite(self: *PaintStack, state: CompositeState) void {
+        self.current_composite = .{
+            .alpha = if (isValidGlobalAlpha(state.alpha)) state.alpha else 1.0,
+            .operation = state.operation,
+        };
+    }
+
     pub fn appendImagePatch(
         self: *PaintStack,
         allocator: std.mem.Allocator,
@@ -471,7 +518,7 @@ pub const PaintStack = struct {
             dirty_width,
             dirty_height,
         ) orelse return;
-        self.append(.{ .image = patch });
+        self.appendWithComposite(.{ .image = patch }, .{ .operation = .copy });
     }
 
     pub fn appendDrawImage(
@@ -526,9 +573,14 @@ pub const PaintStack = struct {
     }
 
     fn append(self: *PaintStack, paint: Paint) void {
+        self.appendWithComposite(paint, self.current_composite);
+    }
+
+    fn appendWithComposite(self: *PaintStack, paint: Paint, composite: CompositeState) void {
         const op = PaintOp{
             .paint = paint,
             .clip_bits = self.current_clip_bits,
+            .composite = composite,
         };
         if (self.count < max_paint_ops) {
             self.ops[self.count] = op;
@@ -547,7 +599,7 @@ pub const PaintStack = struct {
         var rgba = color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 };
         for (self.ops[0..self.count]) |*op| {
             if (!self.clipContains(op.clip_bits, x, y)) continue;
-            if (op.paint.pixelAt(x, y)) |painted| rgba = painted;
+            if (op.paint.pixelAt(x, y)) |painted| rgba = compositePixel(rgba, painted, op.composite);
         }
         return rgba;
     }
@@ -776,6 +828,10 @@ pub fn isValidLineWidth(value: f64) bool {
     return finite(value) and value > 0;
 }
 
+pub fn isValidGlobalAlpha(value: f64) bool {
+    return finite(value) and value >= 0 and value <= 1;
+}
+
 pub fn pathStrokeContains(path: CanvasPath, x: f64, y: f64, line_width: f64) bool {
     return path.strokeContains(x, y, line_width);
 }
@@ -846,6 +902,48 @@ fn positiveDimension(value: f64) ?u32 {
     const dimension: u64 = @intFromFloat(@trunc(value));
     if (dimension == 0 or dimension > std.math.maxInt(u32)) return null;
     return @intCast(dimension);
+}
+
+fn compositePixel(destination: color.RGBA, source: color.RGBA, composite: CompositeState) color.RGBA {
+    return switch (composite.operation) {
+        .copy => applyGlobalAlpha(source, composite.alpha),
+        .source_over => sourceOver(destination, source, composite.alpha),
+    };
+}
+
+fn applyGlobalAlpha(source: color.RGBA, alpha: f64) color.RGBA {
+    return .{
+        .r = source.r,
+        .g = source.g,
+        .b = source.b,
+        .a = roundU8(@as(f64, @floatFromInt(source.a)) * alpha),
+    };
+}
+
+fn sourceOver(destination: color.RGBA, source: color.RGBA, global_alpha: f64) color.RGBA {
+    const src_a = (@as(f64, @floatFromInt(source.a)) / 255.0) * global_alpha;
+    const dst_a = @as(f64, @floatFromInt(destination.a)) / 255.0;
+    const out_a = src_a + dst_a * (1.0 - src_a);
+    if (out_a <= 0) return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+    return .{
+        .r = blendChannel(source.r, destination.r, src_a, dst_a, out_a),
+        .g = blendChannel(source.g, destination.g, src_a, dst_a, out_a),
+        .b = blendChannel(source.b, destination.b, src_a, dst_a, out_a),
+        .a = roundU8(out_a * 255.0),
+    };
+}
+
+fn blendChannel(source: u8, destination: u8, src_a: f64, dst_a: f64, out_a: f64) u8 {
+    const src = @as(f64, @floatFromInt(source));
+    const dst = @as(f64, @floatFromInt(destination));
+    return roundU8((src * src_a + dst * dst_a * (1.0 - src_a)) / out_a);
+}
+
+fn roundU8(value: f64) u8 {
+    if (value <= 0) return 0;
+    if (value >= 255) return 255;
+    return @intFromFloat(@round(value));
 }
 
 fn checkedAddI64(a: i64, b: i64) ?i64 {
@@ -1138,6 +1236,8 @@ test "CanvasBitmap drawing state stack restores latest state" {
         .font = "16px Arial",
         .transform = .{ .e = 4, .f = 3 },
         .clip_bits = 0,
+        .global_alpha = 0.5,
+        .global_composite_operation = .copy,
     };
 
     try testing.expect(stack.pop() == null);
@@ -1149,6 +1249,8 @@ test "CanvasBitmap drawing state stack restores latest state" {
     try testing.expectEqualStrings("16px Arial", restored.font);
     try testing.expectEqual(@as(f64, 4), restored.transform.e);
     try testing.expectEqual(@as(f64, 3), restored.transform.f);
+    try testing.expectEqual(@as(f64, 0.5), restored.global_alpha);
+    try testing.expectEqual(CompositeOperation.copy, restored.global_composite_operation);
     try testing.expect(stack.pop() == null);
 }
 
@@ -1164,6 +1266,8 @@ test "CanvasBitmap drawing state stack keeps deep state without a shallow cap" {
             .font = default_font,
             .transform = .{ .e = @floatFromInt(i) },
             .clip_bits = 0,
+            .global_alpha = 1.0,
+            .global_composite_operation = .source_over,
         });
     }
 
@@ -1191,6 +1295,43 @@ test "CanvasBitmap clear rect overrides only covered pixels" {
 
     stack.appendClearRect(0, 0, 10, 10);
     try testing.expectEqual(color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }, paintStackPixelAt(&stack, 1, 1, 0));
+}
+
+test "CanvasBitmap global alpha blends source over destination" {
+    var stack = PaintStack{};
+    const red = color.RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    const blue = color.RGBA{ .r = 0, .g = 0, .b = 255, .a = 255 };
+
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 4, .height = 4, .rgba = red });
+    stack.setCurrentComposite(.{ .alpha = 0.5, .operation = .source_over });
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 4, .height = 4, .rgba = blue });
+
+    const blended = paintStackPixelAt(&stack, 1, 1, 0);
+    try testing.expect(blended.r >= 120 and blended.r <= 135);
+    try testing.expectEqual(@as(u8, 0), blended.g);
+    try testing.expect(blended.b >= 120 and blended.b <= 135);
+    try testing.expectEqual(@as(u8, 255), blended.a);
+}
+
+test "CanvasBitmap copy composite replaces destination" {
+    var stack = PaintStack{};
+    const red = color.RGBA{ .r = 255, .g = 0, .b = 0, .a = 255 };
+    const blue = color.RGBA{ .r = 0, .g = 0, .b = 255, .a = 255 };
+
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 4, .height = 4, .rgba = red });
+    stack.setCurrentComposite(.{ .operation = .copy });
+    stack.appendRect(.{ .x = 1, .y = 1, .width = 2, .height = 2, .rgba = blue });
+
+    try testing.expectEqual(red, paintStackPixelAt(&stack, 0, 0, 0));
+    try testing.expectEqual(blue, paintStackPixelAt(&stack, 1, 1, 0));
+
+    stack.setCurrentComposite(.{ .alpha = 0.5, .operation = .copy });
+    stack.appendRect(.{ .x = 2, .y = 2, .width = 1, .height = 1, .rgba = blue });
+    const copied = paintStackPixelAt(&stack, 2, 2, 0);
+    try testing.expectEqual(@as(u8, 0), copied.r);
+    try testing.expectEqual(@as(u8, 0), copied.g);
+    try testing.expectEqual(@as(u8, 255), copied.b);
+    try testing.expect(copied.a >= 127 and copied.a <= 128);
 }
 
 test "CanvasBitmap clip masks future paint and restores clip state" {

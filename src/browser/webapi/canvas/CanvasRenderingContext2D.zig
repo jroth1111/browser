@@ -49,6 +49,8 @@ _paint_stack: CanvasBitmap.PaintStack = .{},
 _path: CanvasPath = .{},
 _transform: CanvasBitmap.Transform = .{},
 _state_stack: CanvasBitmap.DrawingStateStack = .{},
+_global_alpha: f64 = 1.0,
+_global_composite_operation: CanvasBitmap.CompositeOperation = .source_over,
 
 pub fn getCanvas(self: *const CanvasRenderingContext2D) *Canvas {
     return self._canvas;
@@ -88,6 +90,28 @@ pub fn getLineWidth(self: *const CanvasRenderingContext2D) f64 {
 pub fn setLineWidth(self: *CanvasRenderingContext2D, value: f64) void {
     if (CanvasBitmap.isValidLineWidth(value)) {
         self._line_width = value;
+    }
+}
+
+pub fn getGlobalAlpha(self: *const CanvasRenderingContext2D) f64 {
+    return self._global_alpha;
+}
+
+pub fn setGlobalAlpha(self: *CanvasRenderingContext2D, value: f64) void {
+    if (CanvasBitmap.isValidGlobalAlpha(value)) {
+        self._global_alpha = value;
+        self.syncComposite();
+    }
+}
+
+pub fn getGlobalCompositeOperation(self: *const CanvasRenderingContext2D) []const u8 {
+    return self._global_composite_operation.label();
+}
+
+pub fn setGlobalCompositeOperation(self: *CanvasRenderingContext2D, value: []const u8) void {
+    if (CanvasBitmap.CompositeOperation.parse(value)) |operation| {
+        self._global_composite_operation = operation;
+        self.syncComposite();
     }
 }
 
@@ -163,6 +187,7 @@ pub fn drawImage(
     arg8: ?f64,
     exec: *Execution,
 ) !void {
+    self.syncComposite();
     const source = resolveSourceBitmap(source_value) orelse return error.TypeError;
     try self._paint_stack.appendDrawImage(
         exec.arena,
@@ -252,6 +277,7 @@ pub fn clearRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, he
 
 pub fn fillRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     if (width <= 0 or height <= 0) return;
+    self.syncComposite();
     const transformed_rect = self._transform.filledRect(.{
         .x = x,
         .y = y,
@@ -263,6 +289,7 @@ pub fn fillRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, hei
 }
 pub fn strokeRect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     if (self._transform.rect(x, y, width, height)) |bounds| {
+        self.syncComposite();
         self._paint_stack.appendStrokeRect(bounds.x, bounds.y, bounds.width, bounds.height, self._line_width * self._transform.strokeScale(), self._stroke_style);
     }
 }
@@ -302,21 +329,25 @@ pub fn rect(self: *CanvasRenderingContext2D, x: f64, y: f64, width: f64, height:
     }
 }
 pub fn fill(self: *CanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void {
+    self.syncComposite();
     self._paint_stack.appendPath(self._path, self._fill_style, maybe_fill_rule);
 }
 pub fn stroke(self: *CanvasRenderingContext2D) void {
+    self.syncComposite();
     self._paint_stack.appendStrokePath(self._path, self._line_width * self._transform.strokeScale(), self._stroke_style);
 }
 pub fn clip(self: *CanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void {
     self._paint_stack.appendClip(self._path, maybe_fill_rule);
 }
 pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
+    self.syncComposite();
     const text_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font) orelse return;
     if (self._transform.filledRect(text_rect)) |transformed| {
         self._paint_stack.appendRect(transformed);
     }
 }
 pub fn strokeText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
+    self.syncComposite();
     const text_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font) orelse return;
     if (self._transform.filledRect(text_rect)) |transformed| {
         self._paint_stack.appendRect(transformed);
@@ -366,6 +397,13 @@ fn resolveSourceBitmap(source_value: js.Value) ?CanvasBitmap.SourceBitmap {
     return null;
 }
 
+fn syncComposite(self: *CanvasRenderingContext2D) void {
+    self._paint_stack.setCurrentComposite(.{
+        .alpha = self._global_alpha,
+        .operation = self._global_composite_operation,
+    });
+}
+
 fn canvasSeed(exec: *Execution) u64 {
     const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
     if (!authority.profile.canvas.enabled) return 0;
@@ -384,8 +422,8 @@ pub const JsApi = struct {
 
     pub const canvas = bridge.accessor(CanvasRenderingContext2D.getCanvas, null, .{});
     pub const font = bridge.accessor(CanvasRenderingContext2D.getFont, CanvasRenderingContext2D.setFont, .{});
-    pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
-    pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
+    pub const globalAlpha = bridge.accessor(CanvasRenderingContext2D.getGlobalAlpha, CanvasRenderingContext2D.setGlobalAlpha, .{});
+    pub const globalCompositeOperation = bridge.accessor(CanvasRenderingContext2D.getGlobalCompositeOperation, CanvasRenderingContext2D.setGlobalCompositeOperation, .{});
     pub const strokeStyle = bridge.accessor(CanvasRenderingContext2D.getStrokeStyle, CanvasRenderingContext2D.setStrokeStyle, .{});
     pub const lineWidth = bridge.accessor(CanvasRenderingContext2D.getLineWidth, CanvasRenderingContext2D.setLineWidth, .{});
     pub const lineCap = bridge.property("butt", .{ .template = false, .readonly = false });
