@@ -135,6 +135,7 @@ fn startFetchRequest(self: *Fetch) !void {
         self._request_origin,
         self._url,
         @tagName(self._mode),
+        "empty",
         request_is_cross_origin,
     );
 

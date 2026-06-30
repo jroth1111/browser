@@ -284,7 +284,7 @@ fn startXhrRequest(self: *XMLHttpRequest) !void {
     try exec.headersForRequest(&headers);
     const request_origin = URL.getOrigin(self._arena, exec.url.*) catch null;
     const request_origin_value = request_origin orelse "null";
-    try Cors.populateFetchMetadataHeaders(&headers, self._arena, request_origin_value, self._url, "cors", request_is_cross_origin);
+    try Cors.populateFetchMetadataHeaders(&headers, self._arena, request_origin_value, self._url, "cors", "empty", request_is_cross_origin);
 
     try exec.makeRequest(.{
         .ctx = self,

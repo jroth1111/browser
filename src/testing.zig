@@ -536,10 +536,34 @@ const CorsHeaderSnapshot = struct {
     preflight_actual_header_matches: bool = false,
 };
 
+pub const NavigationHeaderSnapshot = struct {
+    seen: bool = false,
+    sec_fetch_mode_navigate: bool = false,
+    sec_fetch_dest_document: bool = false,
+    sec_fetch_dest_iframe: bool = false,
+    sec_fetch_site_same_site: bool = false,
+    sec_fetch_site_none: bool = false,
+    origin_present: bool = false,
+};
+
 var cors_header_snapshot_mutex: std.Thread.Mutex = .{};
 var cors_no_cors_header_snapshot: CorsHeaderSnapshot = .{};
 var cors_xhr_header_snapshot: CorsHeaderSnapshot = .{};
 var cors_preflight_snapshot: CorsHeaderSnapshot = .{};
+var cors_navigation_header_snapshot: NavigationHeaderSnapshot = .{};
+
+pub fn resetNavigationHeaderSnapshot() void {
+    cors_header_snapshot_mutex.lock();
+    cors_navigation_header_snapshot = .{};
+    cors_header_snapshot_mutex.unlock();
+}
+
+pub fn navigationHeaderSnapshot() NavigationHeaderSnapshot {
+    cors_header_snapshot_mutex.lock();
+    const snapshot = cors_navigation_header_snapshot;
+    cors_header_snapshot_mutex.unlock();
+    return snapshot;
+}
 
 var test_config: Config = undefined;
 
@@ -1049,6 +1073,34 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond(body, .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/cors/record-navigation-headers")) {
+        var snapshot: NavigationHeaderSnapshot = .{ .seen = true };
+        var it = req.iterateHeaders();
+        while (it.next()) |h| {
+            if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                snapshot.sec_fetch_mode_navigate = std.mem.eql(u8, h.value, "navigate");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                snapshot.sec_fetch_dest_document = std.mem.eql(u8, h.value, "document");
+                snapshot.sec_fetch_dest_iframe = std.mem.eql(u8, h.value, "iframe");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                snapshot.sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
+                snapshot.sec_fetch_site_none = std.mem.eql(u8, h.value, "none");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
+                snapshot.origin_present = true;
+            }
+        }
+
+        cors_header_snapshot_mutex.lock();
+        cors_navigation_header_snapshot = snapshot;
+        cors_header_snapshot_mutex.unlock();
+
+        return req.respond("<!doctype html><title>navigation recorded</title>", .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/html" },
             },
         });
     }

@@ -45,6 +45,7 @@ const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
+const Cors = @import("webapi/net/Cors.zig");
 const Document = @import("webapi/Document.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
@@ -783,6 +784,13 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         const ref_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", ref }, 0);
         try headers.add(ref_header);
     }
+    try Cors.populateNavigationFetchMetadataHeaders(
+        &headers,
+        self.arena,
+        opts.initiator_url,
+        self.url,
+        if (self.parent == null) "document" else "iframe",
+    );
 
     // A root navigation issued against a pending Page (i.e. one allocated by
     // Session.initiateRootNavigation) flags both the notification and the
@@ -3403,6 +3411,48 @@ test "Frame: httpMetadata after navigation" {
     try std.testing.expectEqual(@as(u16, 200), meta.status.?);
     try testing.expect(meta.headers.len > 0);
     try testing.expect(meta.url.len > 0);
+}
+
+test "Frame: navigation fetch metadata headers" {
+    testing.resetNavigationHeaderSnapshot();
+    const page = try testing.test_session.createPage();
+    defer page.close();
+
+    try page.navigate("http://127.0.0.1:9585/cors/record-navigation-headers", .{
+        .reason = .script,
+        .referer = "http://127.0.0.1:9582/source",
+        .initiator_url = "http://127.0.0.1:9582/source",
+    });
+
+    var runner = testing.test_session.runner(.{});
+    try runner.waitForFrame(page.frame_id, 2000, .{ .until = .done });
+
+    const initiated = testing.navigationHeaderSnapshot();
+    try testing.expect(initiated.seen);
+    try testing.expect(initiated.sec_fetch_mode_navigate);
+    try testing.expect(initiated.sec_fetch_dest_document);
+    try testing.expect(!initiated.sec_fetch_dest_iframe);
+    try testing.expect(initiated.sec_fetch_site_same_site);
+    try testing.expect(!initiated.sec_fetch_site_none);
+    try testing.expect(!initiated.origin_present);
+
+    testing.resetNavigationHeaderSnapshot();
+    const direct_page = try testing.test_session.createPage();
+    defer direct_page.close();
+
+    try direct_page.navigate("http://127.0.0.1:9585/cors/record-navigation-headers", .{});
+
+    var direct_runner = testing.test_session.runner(.{});
+    try direct_runner.waitForFrame(direct_page.frame_id, 2000, .{ .until = .done });
+
+    const direct = testing.navigationHeaderSnapshot();
+    try testing.expect(direct.seen);
+    try testing.expect(direct.sec_fetch_mode_navigate);
+    try testing.expect(direct.sec_fetch_dest_document);
+    try testing.expect(!direct.sec_fetch_dest_iframe);
+    try testing.expect(!direct.sec_fetch_site_same_site);
+    try testing.expect(direct.sec_fetch_site_none);
+    try testing.expect(!direct.origin_present);
 }
 
 test "Frame: httpMetadata 404" {
