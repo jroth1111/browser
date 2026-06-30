@@ -550,6 +550,10 @@ pub const NavigationHeaderSnapshot = struct {
     origin_present: bool = false,
     referer_origin_only: bool = false,
     referer_none: bool = false,
+    sec_ch_ua_profile: bool = false,
+    sec_ch_ua_mobile_profile: bool = false,
+    sec_ch_ua_platform_profile: bool = false,
+    high_entropy_client_hint_present: bool = false,
 };
 
 pub const SubresourceHeaderSnapshot = struct {
@@ -1212,6 +1216,20 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
             } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
                 referer_seen = true;
                 snapshot.referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA")) {
+                snapshot.sec_ch_ua_profile = std.mem.eql(u8, h.value, "\"Chromium\";v=\"136\"");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Mobile")) {
+                snapshot.sec_ch_ua_mobile_profile = std.mem.eql(u8, h.value, "?0");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Platform")) {
+                snapshot.sec_ch_ua_platform_profile = std.mem.eql(u8, h.value, "\"macOS\"");
+            } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Full-Version") or
+                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Full-Version-List") or
+                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Arch") or
+                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Bitness") or
+                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Model") or
+                std.ascii.eqlIgnoreCase(h.name, "Sec-CH-UA-Platform-Version"))
+            {
+                snapshot.high_entropy_client_hint_present = true;
             }
         }
         snapshot.referer_none = !referer_seen;

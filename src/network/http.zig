@@ -116,6 +116,7 @@ pub const Headers = struct {
         user_agent_header: ?[:0]const u8 = null,
         accept_language_header: ?[:0]const u8 = null,
         client_hints_enabled: bool = true,
+        high_entropy_client_hints_enabled: bool = false,
         sec_ch_ua_header: ?[:0]const u8 = null,
         sec_ch_ua_mobile_header: ?[:0]const u8 = null,
         sec_ch_ua_platform_header: ?[:0]const u8 = null,
@@ -156,35 +157,37 @@ pub const Headers = struct {
             } else if (http_headers.sec_ch_ua_platform_header) |hdr| {
                 try headers.set(hdr);
             }
-            if (overrides.sec_ch_ua_full_version_header) |hdr| {
-                try headers.set(hdr);
-            } else if (http_headers.sec_ch_ua_full_version_header) |hdr| {
-                try headers.set(hdr);
-            }
-            if (overrides.sec_ch_ua_full_version_list_header) |hdr| {
-                try headers.set(hdr);
-            } else if (http_headers.sec_ch_ua_full_version_list_header) |hdr| {
-                try headers.set(hdr);
-            }
-            if (overrides.sec_ch_ua_arch_header) |hdr| {
-                try headers.set(hdr);
-            } else if (http_headers.sec_ch_ua_arch_header) |hdr| {
-                try headers.set(hdr);
-            }
-            if (overrides.sec_ch_ua_bitness_header) |hdr| {
-                try headers.set(hdr);
-            } else if (http_headers.sec_ch_ua_bitness_header) |hdr| {
-                try headers.set(hdr);
-            }
-            if (overrides.sec_ch_ua_model_header) |hdr| {
-                try headers.set(hdr);
-            } else if (http_headers.sec_ch_ua_model_header) |hdr| {
-                try headers.set(hdr);
-            }
-            if (overrides.sec_ch_ua_platform_version_header) |hdr| {
-                try headers.set(hdr);
-            } else if (http_headers.sec_ch_ua_platform_version_header) |hdr| {
-                try headers.set(hdr);
+            if (overrides.high_entropy_client_hints_enabled) {
+                if (overrides.sec_ch_ua_full_version_header) |hdr| {
+                    try headers.set(hdr);
+                } else if (http_headers.sec_ch_ua_full_version_header) |hdr| {
+                    try headers.set(hdr);
+                }
+                if (overrides.sec_ch_ua_full_version_list_header) |hdr| {
+                    try headers.set(hdr);
+                } else if (http_headers.sec_ch_ua_full_version_list_header) |hdr| {
+                    try headers.set(hdr);
+                }
+                if (overrides.sec_ch_ua_arch_header) |hdr| {
+                    try headers.set(hdr);
+                } else if (http_headers.sec_ch_ua_arch_header) |hdr| {
+                    try headers.set(hdr);
+                }
+                if (overrides.sec_ch_ua_bitness_header) |hdr| {
+                    try headers.set(hdr);
+                } else if (http_headers.sec_ch_ua_bitness_header) |hdr| {
+                    try headers.set(hdr);
+                }
+                if (overrides.sec_ch_ua_model_header) |hdr| {
+                    try headers.set(hdr);
+                } else if (http_headers.sec_ch_ua_model_header) |hdr| {
+                    try headers.set(hdr);
+                }
+                if (overrides.sec_ch_ua_platform_version_header) |hdr| {
+                    try headers.set(hdr);
+                } else if (http_headers.sec_ch_ua_platform_version_header) |hdr| {
+                    try headers.set(hdr);
+                }
             }
         }
         return headers;
@@ -879,6 +882,10 @@ fn expectHeader(headers: Headers, name: []const u8, expected: []const u8) !void 
     try testing.expectString(expected, header.value);
 }
 
+fn expectHeaderAbsent(headers: Headers, name: []const u8) !void {
+    try testing.expectEqual(@as(usize, 0), findHeader(headers, name).count);
+}
+
 test "Headers.set replaces an existing header instead of duplicating it" {
     var headers = try Headers.init("User-Agent: Lightpanda/1.0");
     defer headers.deinit();
@@ -908,7 +915,7 @@ test "Headers.set adds a new header and preserves existing headers" {
     try testing.expectEqual(@as(usize, 0), findHeader(headers, "Accept-Language").count);
 }
 
-test "Headers.initBrowser adds configured browser headers" {
+test "Headers.initBrowser adds low-entropy browser headers by default" {
     const http_headers = Config.HttpHeaders{
         .user_agent = "Lightpanda/1.0",
         .user_agent_header = "User-Agent: Lightpanda/1.0",
@@ -932,12 +939,12 @@ test "Headers.initBrowser adds configured browser headers" {
     try expectHeader(headers, "Sec-CH-UA", "\"Lightpanda\";v=\"1\"");
     try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectHeader(headers, "Sec-CH-UA-Platform", "\"macOS\"");
-    try expectHeader(headers, "Sec-CH-UA-Full-Version", "\"1.0.0.0\"");
-    try expectHeader(headers, "Sec-CH-UA-Full-Version-List", "\"Lightpanda\";v=\"1.0.0.0\"");
-    try expectHeader(headers, "Sec-CH-UA-Arch", "\"arm\"");
-    try expectHeader(headers, "Sec-CH-UA-Bitness", "\"64\"");
-    try expectHeader(headers, "Sec-CH-UA-Model", "\"\"");
-    try expectHeader(headers, "Sec-CH-UA-Platform-Version", "\"15.0.0\"");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Arch");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Bitness");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Model");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
 }
 
 test "Headers.initBrowser keeps configured profile headers when user agent is overridden" {
@@ -990,12 +997,44 @@ test "Headers.initBrowserWithOverrides updates identity headers together" {
     try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
     try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
-    try expectHeader(headers, "Sec-CH-UA-Full-Version", "\"136.0.1.2\"");
-    try expectHeader(headers, "Sec-CH-UA-Full-Version-List", "\"Chromium\";v=\"136.0.1.2\", \"Not.A/Brand\";v=\"24.0.0.0\"");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Arch");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Bitness");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Model");
+    try expectHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
+}
+
+test "Headers.initBrowserWithOverrides can opt into high-entropy client hints" {
+    const http_headers = Config.HttpHeaders{
+        .user_agent = "Profile/1.0",
+        .user_agent_header = "User-Agent: Profile/1.0",
+        .accept_language_header = "Accept-Language: fr-FR,fr;q=0.9",
+        .sec_ch_ua_header = "Sec-CH-UA: \"Chromium\";v=\"120\"",
+        .sec_ch_ua_mobile_header = "Sec-CH-UA-Mobile: ?0",
+        .sec_ch_ua_platform_header = "Sec-CH-UA-Platform: \"Windows\"",
+        .sec_ch_ua_full_version_header = "Sec-CH-UA-Full-Version: \"120.0.0.0\"",
+        .sec_ch_ua_full_version_list_header = "Sec-CH-UA-Full-Version-List: \"Chromium\";v=\"120.0.0.0\"",
+        .sec_ch_ua_arch_header = "Sec-CH-UA-Arch: \"x86\"",
+        .sec_ch_ua_bitness_header = "Sec-CH-UA-Bitness: \"64\"",
+        .sec_ch_ua_model_header = "Sec-CH-UA-Model: \"\"",
+        .sec_ch_ua_platform_version_header = "Sec-CH-UA-Platform-Version: \"10.0.0\"",
+        .proxy_bearer_header = null,
+    };
+    var headers = try Headers.initBrowserWithOverrides(&http_headers, .{ .high_entropy_client_hints_enabled = true });
+    defer headers.deinit();
+
+    try expectHeader(headers, "User-Agent", "Profile/1.0");
+    try expectHeader(headers, "Accept-Language", "fr-FR,fr;q=0.9");
+    try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"120\"");
+    try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
+    try expectHeader(headers, "Sec-CH-UA-Platform", "\"Windows\"");
+    try expectHeader(headers, "Sec-CH-UA-Full-Version", "\"120.0.0.0\"");
+    try expectHeader(headers, "Sec-CH-UA-Full-Version-List", "\"Chromium\";v=\"120.0.0.0\"");
     try expectHeader(headers, "Sec-CH-UA-Arch", "\"x86\"");
     try expectHeader(headers, "Sec-CH-UA-Bitness", "\"64\"");
     try expectHeader(headers, "Sec-CH-UA-Model", "\"\"");
-    try expectHeader(headers, "Sec-CH-UA-Platform-Version", "\"6.0.0\"");
+    try expectHeader(headers, "Sec-CH-UA-Platform-Version", "\"10.0.0\"");
 }
 
 test "Headers.initBrowserWithOverrides can suppress client hints" {

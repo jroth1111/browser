@@ -321,12 +321,12 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
     try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
     try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
-    try expectRequestHeader(headers, "Sec-CH-UA-Full-Version", "\"136.0.0.0\"");
-    try expectRequestHeader(headers, "Sec-CH-UA-Full-Version-List", "\"Chromium\";v=\"136.0.0.0\", \"Not.A/Brand\";v=\"24.0.0.0\"");
-    try expectRequestHeader(headers, "Sec-CH-UA-Arch", "\"x86\"");
-    try expectRequestHeader(headers, "Sec-CH-UA-Bitness", "\"64\"");
-    try expectRequestHeader(headers, "Sec-CH-UA-Model", "\"\"");
-    try expectRequestHeader(headers, "Sec-CH-UA-Platform-Version", "\"6.6.0\"");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Arch");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Bitness");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Model");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
 }
 
 test "cdp.Emulation: setUserAgentOverride can be called multiple times" {
@@ -395,7 +395,35 @@ test "cdp.Emulation: setUserAgentOverride is ignored under Chimera authority" {
     try expectRequestHeader(headers, "User-Agent", "Mozilla/5.0");
     try expectRequestHeader(headers, "Accept-Language", "en-AU,en;q=0.9");
     try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\"");
-    try expectRequestHeader(headers, "Sec-CH-UA-Arch", "\"arm\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
+    try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"macOS\"");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Arch");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Bitness");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Model");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
+}
+
+test "cdp.Emulation: Chimera authority navigation sends low entropy client hints only" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-UA8" });
+    var guard = try ctx.enableManagedAuthority(testing.managedAuthority());
+    defer guard.deinit();
+
+    testing.resetNavigationHeaderSnapshot();
+
+    const page = try bc.session.createPage();
+    try page.navigate("http://127.0.0.1:9585/cors/record-navigation-headers", .{});
+    try testing.waitForPage(bc);
+
+    const snapshot = testing.navigationHeaderSnapshot();
+    try testing.expect(snapshot.seen);
+    try testing.expect(snapshot.sec_ch_ua_profile);
+    try testing.expect(snapshot.sec_ch_ua_mobile_profile);
+    try testing.expect(snapshot.sec_ch_ua_platform_profile);
+    try testing.expect(!snapshot.high_entropy_client_hint_present);
 }
 
 test "cdp.Emulation: setDeviceMetricsOverride and clear" {
@@ -528,4 +556,13 @@ fn expectRequestHeader(headers: Http.Headers, name: []const u8, expected: []cons
         }
     }
     return testing.expect(false);
+}
+
+fn expectRequestHeaderAbsent(headers: Http.Headers, name: []const u8) !void {
+    var it = headers.iterator();
+    while (it.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, name)) {
+            return testing.expect(false);
+        }
+    }
 }

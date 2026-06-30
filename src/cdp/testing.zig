@@ -37,6 +37,8 @@ pub const expectEqualSlices = base.expectEqualSlices;
 pub const pageTest = base.pageTest;
 pub const newString = base.newString;
 pub const LogFilter = base.LogFilter;
+pub const resetNavigationHeaderSnapshot = base.resetNavigationHeaderSnapshot;
+pub const navigationHeaderSnapshot = base.navigationHeaderSnapshot;
 
 fn testAllocator() std.mem.Allocator {
     return @import("root").tracking_allocator;

@@ -732,7 +732,15 @@ test "cdp.Network: setUserAgentOverride is ignored under Chimera authority" {
     defer headers.deinit();
     try expectRequestHeader(headers, "User-Agent", "Mozilla/5.0");
     try expectRequestHeader(headers, "Accept-Language", "en-AU,en;q=0.9");
-    try expectRequestHeader(headers, "Sec-CH-UA-Arch", "\"arm\"");
+    try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\"");
+    try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
+    try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"macOS\"");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Full-Version-List");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Arch");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Bitness");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Model");
+    try expectRequestHeaderAbsent(headers, "Sec-CH-UA-Platform-Version");
 }
 
 fn expectRequestHeader(headers: Headers, name: []const u8, expected: []const u8) !void {
@@ -743,6 +751,15 @@ fn expectRequestHeader(headers: Headers, name: []const u8, expected: []const u8)
         }
     }
     return testing.expect(false);
+}
+
+fn expectRequestHeaderAbsent(headers: Headers, name: []const u8) !void {
+    var it = headers.iterator();
+    while (it.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, name)) {
+            return testing.expect(false);
+        }
+    }
 }
 
 test "cdp.Network: cookies" {
