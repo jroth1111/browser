@@ -264,8 +264,14 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const runtime = bridge.accessor(Chrome.getRuntime, null, .{});
-    pub const app = bridge.accessor(Chrome.getApp, null, .{});
+    // R10 #41: real Chrome's page-exposed window.chrome on an ordinary
+    // (non-extension) page does NOT expose chrome.runtime (id/connect/
+    // sendMessage/getManifest/getURL/getPlatformInfo) or chrome.app — those
+    // only exist inside an extension's own context. Synthesizing a fake
+    // 32-char chrome.runtime.id and extension messaging APIs on a normal web
+    // page is an impossible-shape tell (vanilla Chrome profiles expose no
+    // extension id at all). The legacy csi()/loadTimes() functions ARE
+    // genuinely present on real Chrome pages, so those are kept.
     pub const csi = bridge.function(Chrome.csi, .{});
     pub const loadTimes = bridge.function(Chrome.loadTimes, .{});
 };
