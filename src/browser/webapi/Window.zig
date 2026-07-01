@@ -316,6 +316,31 @@ pub fn getOrigin(self: *const Window) []const u8 {
     return self._frame.origin orelse "null";
 }
 
+// R10 #8: derive isSecureContext from the document's real origin
+// trustworthiness per the Secure Contexts spec, instead of a hardcoded false.
+// An origin is a secure context when it is "potentially trustworthy": the
+// https/wss schemes, the file scheme, or an http/ws origin on a loopback /
+// localhost host. A hardcoded false made https:// pages report a non-secure
+// context, a clear parity probe.
+pub fn getIsSecureContext(self: *const Window) bool {
+    return isPotentiallyTrustworthy(self._frame.url);
+}
+
+fn isPotentiallyTrustworthy(url: []const u8) bool {
+    if (std.mem.startsWith(u8, url, "https:") or std.mem.startsWith(u8, url, "wss:")) return true;
+    if (std.mem.startsWith(u8, url, "file:")) return true;
+    // http/ws are only trustworthy on loopback / localhost.
+    if (std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "ws://")) {
+        const host = url["http://".len..];
+        if (std.mem.startsWith(u8, host, "localhost") or std.mem.startsWith(u8, host, "127.0.0.1") or
+            std.mem.startsWith(u8, host, "[::1]") or std.mem.startsWith(u8, host, "0.0.0.0"))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
 }
@@ -439,7 +464,11 @@ pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp
 }
 
 pub fn requestAnimationFrame(self: *Window, cb: js.Function.Temp, exec: *js.Execution) !u32 {
-    return self._timers.schedule(exec, cb, 5, .{
+    // R10 #39: schedule on the display vsync cadence (~16.67ms at 60Hz) like
+    // real Chrome, instead of a fixed ~5ms. RAF is driven by the compositor's
+    // frame boundary, not a short timer. Full task-priority scheduler rework
+    // (correct idle deadlines / task priority ordering) is deferred.
+    return self._timers.schedule(exec, cb, 16, .{
         .repeat = false,
         .params = &.{},
         .mode = .animation_frame,
@@ -713,9 +742,27 @@ pub fn close(self: *Window) void {
 }
 
 pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, transfer: ?[]const *MessagePort, frame: *Frame) !void {
-    // For now, we ignore targetOrigin checking and just dispatch the message
-    // In a full implementation, we would validate the origin
-    _ = target_origin;
+    // R10 #40: enforce the targetOrigin match per the HTML spec. The
+    // targetOrigin is compared against the TARGET window's origin (i.e. the
+    // receiver, which is `self` here). A mismatch means the message is
+    // silently dropped (no exception, no delivery) — the standard security
+    // model sites rely on. "*" always matches; "/" matches the incumbent's
+    // origin. This previously dispatched unconditionally, defeating the
+    // cross-origin isolation postMessage is supposed to provide.
+    const target_window_origin = self._frame.origin orelse "null";
+    const incumbent_origin = frame.origin orelse "null";
+    const origin_spec = target_origin orelse "/"; // omitted defaults to incumbent origin
+    const allow = blk: {
+        if (std.mem.eql(u8, origin_spec, "*")) break :blk true;
+        if (std.mem.eql(u8, origin_spec, "/")) {
+            break :blk std.mem.eql(u8, target_window_origin, incumbent_origin);
+        }
+        // A concrete origin: scheme/host/port must match (case-insensitive
+        // for scheme/host). "null" origin never matches a concrete string.
+        if (std.ascii.eqlIgnoreCase(origin_spec, target_window_origin)) break :blk true;
+        break :blk false;
+    };
+    if (!allow) return; // spec: silently drop on mismatch, no exception
 
     const target_frame = self._frame;
     const source_window = target_frame.js.getIncumbent().window;
@@ -1105,8 +1152,6 @@ pub const JsApi = struct {
     pub const clearTimeout = bridge.function(Window.clearTimeout, .{});
     pub const setInterval = bridge.function(Window.setInterval, .{});
     pub const clearInterval = bridge.function(Window.clearInterval, .{});
-    pub const setImmediate = bridge.function(Window.setImmediate, .{});
-    pub const clearImmediate = bridge.function(Window.clearImmediate, .{});
     pub const requestAnimationFrame = bridge.function(Window.requestAnimationFrame, .{});
     pub const cancelAnimationFrame = bridge.function(Window.cancelAnimationFrame, .{});
     pub const requestIdleCallback = bridge.function(Window.requestIdleCallback, .{});
@@ -1134,11 +1179,7 @@ pub const JsApi = struct {
     pub const scroll = bridge.function(Window.scrollTo, .{});
     pub const scrollBy = bridge.function(Window.scrollBy, .{});
 
-    // Return false since we don't have secure-context-only APIs implemented
-    // (webcam, geolocation, clipboard, etc.)
-    // This is safer and could help avoid processing errors by hinting at
-    // sites not to try to access those features
-    pub const isSecureContext = bridge.property(false, .{ .template = false });
+    pub const isSecureContext = bridge.accessor(Window.getIsSecureContext, null, .{});
 
     // [Replaceable] (CSSOM-View): the getter reads the page's runtime viewport
     // (overridable via Emulation.setDeviceMetricsOverride); the setter overwrites

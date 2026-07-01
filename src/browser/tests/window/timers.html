@@ -46,9 +46,11 @@
 
 <script id=invalid-timer-clear>
   // Surprisingly, these don't fail but silently ignored.
+  // Note: clearImmediate is intentionally not part of the standard window
+  // surface (matches real Chrome, which has no setImmediate/clearImmediate),
+  // so it is not exercised here.
   clearTimeout(-1);
   clearInterval(-2);
-  clearImmediate(-3);
   testing.expectEqual(true, true);
 </script>
 
