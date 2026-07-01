@@ -214,9 +214,19 @@ pub const RGBA = packed struct(u32) {
     }
 
     /// Parses the given color.
-    /// Currently we only parse hex colors and named colors; other variants
-    /// require CSS evaluation.
+    /// R10 #6: parse rgb()/rgba() CSS colors (previously rendered black).
+    /// Also handles hex colors and named colors; other variants require full
+    /// CSS evaluation.
     pub fn parse(input: []const u8) !RGBA {
+        // rgb() / rgba() functional notation. CSS allows:
+        //   rgb(R G B) / rgb(R G B / A)        (modern, space-separated)
+        //   rgb(R, G, B) / rgb(R, G, B, A)    (legacy, comma-separated)
+        //   rgba(...) is the legacy alpha form; modern rgb() covers both.
+        // R/G/B may be integers (0-255) or percentages; A is a number 0-1 or %.
+        if (std.ascii.startsWithIgnoreCase(input, "rgba(") or std.ascii.startsWithIgnoreCase(input, "rgb(")) {
+            return parseRgbFunctional(input);
+        }
+
         if (!isHexColor(input)) {
             // Try named colors.
             return find(input) orelse return error.Invalid;
@@ -257,8 +267,77 @@ pub const RGBA = packed struct(u32) {
         }
     }
 
-    /// By default, browsers prefer lowercase formatting.
-    const format_upper = false;
+    /// Parses a CSS `rgb()` / `rgba()` functional-notation color string.
+    /// Handles legacy comma form (with optional 4th alpha arg) and modern
+    /// space-separated form with a `/` alpha separator. Channels may be
+    /// integers (0-255) or percentages; alpha may be a number (0-1) or %.
+    fn parseRgbFunctional(input: []const u8) !RGBA {
+        // Locate the parenthesised argument list.
+        const open = std.mem.indexOfScalar(u8, input, '(') orelse return error.Invalid;
+        if (open + 1 >= input.len) return error.Invalid;
+        const rest = input[open + 1 ..];
+        const close = std.mem.indexOfScalar(u8, rest, ')') orelse return error.Invalid;
+        const inner = std.mem.trim(u8, rest[0..close], " \t");
+
+        // Modern syntax separates alpha from color with " / ".
+        var alpha: f32 = 1.0;
+        var color_part = inner;
+        if (std.mem.indexOf(u8, inner, "/")) |slash_idx| {
+            color_part = std.mem.trim(u8, inner[0..slash_idx], " \t");
+            const alpha_str = std.mem.trim(u8, inner[slash_idx + 1 ..], " \t");
+            alpha = try parseAlphaComponent(alpha_str);
+        }
+
+        // Split the color channels. Comma => legacy form; otherwise space-separated.
+        var r: u8 = 0;
+        var g: u8 = 0;
+        var b: u8 = 0;
+        if (std.mem.indexOfScalar(u8, color_part, ',')) |_| {
+            // Legacy comma-separated: "r, g, b" or "r, g, b, a".
+            var it = std.mem.splitScalar(u8, color_part, ',');
+            r = try parseColorComponent(it.next() orelse return error.Invalid);
+            g = try parseColorComponent(it.next() orelse return error.Invalid);
+            b = try parseColorComponent(it.next() orelse return error.Invalid);
+            // A legacy 4th comma argument is the alpha.
+            if (it.next()) |a_str| {
+                alpha = try parseAlphaComponent(std.mem.trim(u8, a_str, " \t"));
+            }
+        } else {
+            // Modern space-separated: "r g b".
+            var it = std.mem.tokenizeAny(u8, color_part, " \t");
+            r = try parseColorComponent(it.next() orelse return error.Invalid);
+            g = try parseColorComponent(it.next() orelse return error.Invalid);
+            b = try parseColorComponent(it.next() orelse return error.Invalid);
+        }
+
+        const clamped = std.math.clamp(alpha, 0, 1);
+        return .{ .r = r, .g = g, .b = b, .a = @intFromFloat(clamped * 255) };
+    }
+
+    /// Parses a single R/G/B channel: an integer 0-255 or a percentage 0-100%.
+    fn parseColorComponent(str: []const u8) !u8 {
+        const s = std.mem.trim(u8, str, " \t");
+        if (s.len == 0) return error.Invalid;
+        if (s[s.len - 1] == '%') {
+            const pct = std.fmt.parseFloat(f32, s[0 .. s.len - 1]) catch return error.Invalid;
+            const clamped = std.math.clamp(pct, 0, 100);
+            return @intFromFloat(clamped * 255 / 100);
+        }
+        const n = std.fmt.parseInt(i32, s, 10) catch return error.Invalid;
+        return @intCast(std.math.clamp(n, 0, 255));
+    }
+
+    /// Parses an alpha component: a number 0.0-1.0 or a percentage 0-100%.
+    fn parseAlphaComponent(str: []const u8) !f32 {
+        const s = std.mem.trim(u8, str, " \t");
+        if (s.len == 0) return error.Invalid;
+        if (s[s.len - 1] == '%') {
+            const pct = std.fmt.parseFloat(f32, s[0 .. s.len - 1]) catch return error.Invalid;
+            return std.math.clamp(pct, 0, 100) / 100;
+        }
+        const n = std.fmt.parseFloat(f32, s) catch return error.Invalid;
+        return std.math.clamp(n, 0, 1);
+    }
 
     /// Formats the `Color` according to web expectations.
     /// If color is opaque, HEX is preferred; RGBA otherwise.
@@ -267,6 +346,7 @@ pub const RGBA = packed struct(u32) {
             // Convert RGB to HEX.
             // https://gristle.tripod.com/hexconv.html
             // Hexadecimal characters up to 15.
+            const format_upper = false;
             const char: []const u8 = "0123456789" ++ if (format_upper) "ABCDEF" else "abcdef";
             // This variant always prefers 6 digit format, +1 is for hash char.
             const buffer = [7]u8{
