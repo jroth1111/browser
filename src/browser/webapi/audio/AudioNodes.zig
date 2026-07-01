@@ -460,22 +460,22 @@ pub const BiquadFilterNode = struct {
 };
 
 pub const WaveShaperNode = struct {
-    curve: ?js.Value.Global = null,
+    curve: ?js.Value.Temp = null,
     connected_to_destination: bool = false,
 
-    pub fn getCurve(self: *const WaveShaperNode) ?js.Value.Global {
+    pub fn getCurve(self: *const WaveShaperNode) ?js.Value.Temp {
         return self.curve;
     }
 
-    pub fn setCurve(self: *WaveShaperNode, curve: ?js.Value.Global, exec: *js.Execution) !void {
+    pub fn setCurve(self: *WaveShaperNode, curve: ?js.Value.Temp, exec: *js.Execution) !void {
         var persisted = curve;
         if (persisted) |*value| {
             if (!value.local(exec.js.local.?).isFloat32Array()) {
-                value.deinit();
+                value.release();
                 return error.TypeError;
             }
         }
-        if (self.curve) |*old| old.deinit();
+        if (self.curve) |*old| old.release();
         self.curve = persisted;
     }
 

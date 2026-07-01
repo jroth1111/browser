@@ -242,10 +242,6 @@ pub fn deinit(self: *WebSocket, page: *Page) void {
         func.release();
     }
 
-    for (self._send_queue.items) |msg| {
-        msg.deinit(page);
-    }
-
     page.releaseArena(self._arena);
 }
 
@@ -311,6 +307,9 @@ fn teardownConn(self: *WebSocket) void {
     self._http_client.removeConn(conn);
     self._req_headers.deinit();
     self._conn = null;
+    for (self._send_queue.items) |msg| {
+        msg.deinit(self._exec.page);
+    }
     self._send_queue.clearRetainingCapacity();
 }
 
