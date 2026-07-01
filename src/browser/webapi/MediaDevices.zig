@@ -60,6 +60,14 @@ fn notAllowed(exec: *const Execution) js.Promise {
 
 fn devices(self: *MediaDevices, exec: *const Execution) ![]*MediaDeviceInfo {
     if (self._devices == null) {
+        // R10 #34 (bounded): real Chrome returns deviceId "" and label "" for
+        // every device until the page has been granted microphone/camera
+        // permission. Both defaults are now correct (deviceId was the literal
+        // "default" — see #N3). Real device enumeration, constraint handling,
+        // capture streams, and permission-transitioned labels are deferred
+        // (// R10-DEFERRED #34): enumerateDevices still reports the standard
+        // 3 kind slots with empty ids/labels, matching Chrome's pre-grant
+        // shape exactly.
         const stored = try exec._factory.create([3]*MediaDeviceInfo{
             try exec._factory.create(MediaDeviceInfo{ ._kind = "audioinput" }),
             try exec._factory.create(MediaDeviceInfo{ ._kind = "videoinput" }),
@@ -86,7 +94,7 @@ pub const JsApi = struct {
 };
 
 const MediaDeviceInfo = struct {
-    _device_id: []const u8 = "default",
+    _device_id: []const u8 = "",
     _kind: []const u8,
     _label: []const u8 = "",
     _group_id: []const u8 = "",
