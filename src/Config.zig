@@ -338,6 +338,21 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
             return error.CurlImpersonateUnavailable;
         }
     }
+
+    // R10 #1: curl-impersonate (Chrome TLS/JA3-JA4 + HTTP/2 fingerprint
+    // impersonation) must be active for ALL browser-mode network traffic, not
+    // only when a managed authority file happens to be supplied. Previously
+    // this fail-closed gate only ran inside the `chimeraAuthorityFile()` branch
+    // above, so launching without `--chimera-authority-file` would silently
+    // fall back to a stock-libcurl/BoringSSL ClientHello — a single,
+    // unconditionally-detectable TLS tell on every connection regardless of
+    // whatever header/UA persona was otherwise configured. Fail loud here so no
+    // invocation path can silently negotiate a non-Chrome TLS stack. This is
+    // scoped to modes that actually issue network traffic (`modeNeedsHttp`);
+    // `help`/`version` are exempt.
+    if (modeNeedsHttp(mode) and !libcurl.has_curl_impersonate) {
+        return error.CurlImpersonateUnavailable;
+    }
     if (modeNeedsHttp(mode)) {
         config.http_headers = try HttpHeaders.init(allocator, &config);
     }
