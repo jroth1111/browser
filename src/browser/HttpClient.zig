@@ -1760,6 +1760,7 @@ pub const Request = struct {
         xhr,
         script,
         fetch,
+        image,
         stylesheet,
         preflight,
 
@@ -1773,6 +1774,7 @@ pub const Request = struct {
                 .xhr => "XHR",
                 .script => "Script",
                 .fetch => "Fetch",
+                .image => "Image",
                 .stylesheet => "Stylesheet",
                 .preflight => "Preflight",
             };

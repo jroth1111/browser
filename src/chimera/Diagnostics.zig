@@ -36,6 +36,7 @@ pub const Snapshot = struct {
     webgl_caps_profile_active: bool,
     geolocation_profile_active: bool,
     geolocation_position_profile_active: bool,
+    timezone_profile_active: bool,
     init_scripts_registered: bool = false,
     timezone_path: []const u8 = "runtime_probe",
     webrtc_supported: bool = false,
@@ -70,9 +71,17 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
             storage_persistence_profile_active and
             cache_storage_semantics_active and
             file_system_semantics_active;
-        const canvas_2d_profile_active = profile.canvas.enabled;
-        const canvas_blob_profile_active = profile.canvas.enabled;
-        const offscreen_canvas_profile_active = profile.canvas.enabled;
+        // These report whether this build correctly implements the canvas
+        // surface (native owns it either way: noisy when enabled, bit-exact
+        // when disabled) - NOT whether the profile has noise turned on. The
+        // profile's enabled flag is a separate signal, already passed to
+        // degradedCapabilities below as requires_canvas; conflating the two
+        // here previously caused a disabled profile to read as "not natively
+        // owned," which reactivated inject.js's unconditional JS noise shim
+        // on a surface native was already handling correctly.
+        const canvas_2d_profile_active = true;
+        const canvas_blob_profile_active = true;
+        const offscreen_canvas_profile_active = true;
         const canvas_profile_active = canvas_2d_profile_active and canvas_blob_profile_active and offscreen_canvas_profile_active;
         const audio_buffer_profile_active = profile.audio.enabled;
         const audio_graph_profile_active = profile.audio.enabled;
@@ -81,6 +90,7 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
         const webgl_caps_profile_active = profile.webgl.enabled;
         const webgl_profile_active = webgl_identity_profile_active and webgl_caps_profile_active;
         const geolocation_position_profile_active = profile.geolocation != null;
+        const timezone_profile_active = profile.timezone != null;
         const webrtc_supported = profile.webrtc.enabled;
         const webrtc_candidate_profile_active = profile.webrtc.enabled and profile.webrtc.exit_ip != null;
         const webrtc_exit_ip_active = webrtc_candidate_profile_active;
@@ -121,6 +131,7 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
             .webgl_caps_profile_active = webgl_caps_profile_active,
             .geolocation_profile_active = geolocation_position_profile_active,
             .geolocation_position_profile_active = geolocation_position_profile_active,
+            .timezone_profile_active = timezone_profile_active,
             .webrtc_supported = webrtc_supported,
             .webrtc_candidate_profile_active = webrtc_candidate_profile_active,
             .webrtc_exit_ip_active = webrtc_exit_ip_active,
@@ -168,6 +179,7 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
         .webgl_caps_profile_active = false,
         .geolocation_profile_active = false,
         .geolocation_position_profile_active = false,
+        .timezone_profile_active = false,
     };
 }
 
@@ -344,6 +356,7 @@ pub fn expectProfileEvidenceTiersForTest() !void {
     try testing.expect(snapshot.audio_graph_profile_active);
     try testing.expect(!snapshot.geolocation_profile_active);
     try testing.expect(!snapshot.geolocation_position_profile_active);
+    try testing.expect(!snapshot.timezone_profile_active);
     try testing.expectEqual(@as(usize, 0), snapshot.degraded_capabilities.len);
 
     authority.profile.plugins.pdf_enabled = false;
@@ -375,6 +388,24 @@ pub fn expectProfileEvidenceTiersForTest() !void {
     try testing.expect(webrtc_candidate_snapshot.webrtc_exit_ip_active);
     try testing.expectEqualStrings("203.0.113.10", webrtc_candidate_snapshot.webrtc_exit_ip.?);
     try testing.expectEqual(@as(usize, 0), webrtc_candidate_snapshot.degraded_capabilities.len);
+
+    authority.profile.timezone = "Australia/Melbourne";
+    const timezone_snapshot = fromConfigWithCurlAvailability(&config, false);
+
+    try testing.expect(timezone_snapshot.timezone_profile_active);
+
+    // A disabled canvas profile is still natively owned: native correctly
+    // implements "no noise" in this case, so the ownership gates must stay
+    // true (this must never fall back to inject.js's JS shim, and must
+    // never be reported as a degraded capability).
+    authority.profile.canvas.enabled = false;
+    const canvas_disabled_snapshot = fromConfigWithCurlAvailability(&config, false);
+
+    try testing.expect(canvas_disabled_snapshot.canvas_profile_active);
+    try testing.expect(canvas_disabled_snapshot.canvas_2d_profile_active);
+    try testing.expect(canvas_disabled_snapshot.canvas_blob_profile_active);
+    try testing.expect(canvas_disabled_snapshot.offscreen_canvas_profile_active);
+    try testing.expectEqual(@as(usize, 0), canvas_disabled_snapshot.degraded_capabilities.len);
 }
 
 test "Chimera Diagnostics reports profile evidence tiers" {

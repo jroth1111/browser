@@ -34,7 +34,12 @@ test "cdp.Chimera: getProfileDiagnostics reports unmanaged defaults" {
         .proxy_configured = false,
         .requires_curl_impersonate = false,
         .curl_impersonate_available = libcurl.has_curl_impersonate,
-        .impersonation_active = false,
+        // Chrome TLS/JA3-JA4 impersonation is opt-out, not opt-in: with no
+        // managed profile at all, this build still defaults to chrome136
+        // whenever curl-impersonate is linked in (see
+        // Config.default_curl_impersonate_target).
+        .impersonation_target = if (libcurl.has_curl_impersonate) "chrome136" else null,
+        .impersonation_active = libcurl.has_curl_impersonate,
         .header_profile_active = false,
         .navigator_profile_active = false,
         .uadata_profile_active = false,
@@ -61,6 +66,7 @@ test "cdp.Chimera: getProfileDiagnostics reports unmanaged defaults" {
         .webgl_caps_profile_active = false,
         .geolocation_profile_active = false,
         .geolocation_position_profile_active = false,
+        .timezone_profile_active = false,
         .init_scripts_registered = false,
         .timezone_path = "runtime_probe",
         .webrtc_supported = false,

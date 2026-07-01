@@ -296,6 +296,24 @@ fn authorityCurlImpersonateTarget(authority: *const ChimeraAuthority) ?[]const u
     return authority.profile.transport.impersonate_target;
 }
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+
+/// Makes the Zig engine the primary, self-contained authority for the
+/// process timezone rather than depending on a caller-set TZ env var: V8/ICU
+/// resolve Intl/Date against TZ lazily, so this only needs to land before
+/// Platform.init(), which main.zig guarantees by calling Config.init() (via
+/// parseArgs) first.
+fn applyChimeraTimezone(allocator: Allocator, authority: *const ChimeraAuthority) !void {
+    const tz = authority.profile.timezone orelse return;
+    const tz_z = try allocator.dupeZ(u8, tz);
+    defer allocator.free(tz_z);
+    // setenv(3) copies name/value into its own storage, so tz_z does not
+    // need to outlive this call.
+    if (setenv("TZ", tz_z, 1) != 0) {
+        return error.SetenvFailed;
+    }
+}
+
 pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
     var config = Config{
         .mode = mode,
@@ -310,6 +328,7 @@ pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
         config.chimera_authority_proxy = try allocator.dupeZ(u8, config.chimera_authority.?.network.proxy_url);
         errdefer if (config.chimera_authority_proxy) |proxy| allocator.free(proxy);
         const authority = &config.chimera_authority.?;
+        try applyChimeraTimezone(allocator, authority);
         const requires_curl_impersonate = authorityRequiresCurlImpersonate(authority);
         if (authorityCurlImpersonateTarget(authority)) |target| {
             config.chimera_impersonate_target = try allocator.dupeZ(u8, target);
@@ -405,8 +424,27 @@ pub fn chimeraAuthority(self: *const Config) ?*const ChimeraAuthority {
     return null;
 }
 
+/// The Chrome TLS/JA3-JA4 + HTTP2 impersonation target applied to every
+/// connection whenever curl-impersonate is linked in and no managed profile
+/// (`--chimera-authority-file`) already picked a different target.
+///
+/// Impersonation is opt-out, not opt-in: absent this default, a build that
+/// links curl-impersonate would still negotiate a stock Zig-libcurl/BoringSSL
+/// ClientHello unless a caller happened to pass an authority file, which is a
+/// live, unconditionally-detectable TLS/JA3 leak on every connection that
+/// isn't explicitly configured. The vendored library only ships a single
+/// target (see `.curl-impersonate/share/chimera-curl-impersonate.json`), so
+/// there is no ambiguity about what "default" should mean.
+pub const default_curl_impersonate_target: [:0]const u8 = "chrome136";
+
 pub fn curlImpersonateTarget(self: *const Config) ?[:0]const u8 {
-    return self.chimera_impersonate_target;
+    if (self.chimera_impersonate_target) |target| {
+        return target;
+    }
+    if (libcurl.has_curl_impersonate) {
+        return default_curl_impersonate_target;
+    }
+    return null;
 }
 
 pub fn curlImpersonateAvailable(_: *const Config) bool {
@@ -687,8 +725,28 @@ pub const HttpHeaders = struct {
     // normal client.
     pub const accept_language: [:0]const u8 = "Accept-Language: en-US,en;q=0.9";
 
-    // Document-navigation Accept value Chrome sends.
-    pub const navigation_accept: [:0]const u8 = "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+    // Document-navigation Accept value Chrome sends. Verified byte-for-byte
+    // against the vendored curl-impersonate chrome136 reference wrapper
+    // (.curl-impersonate/bin/curl_chrome136) rather than reconstructed from
+    // memory: a real Chrome navigation also advertises image/avif, image/webp,
+    // image/apng, and application/signed-exchange, none of which the previous
+    // shorter literal here included.
+    pub const navigation_accept: [:0]const u8 = "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+
+    // Chrome sends this on every top-level/sub-frame navigation request and
+    // never on subresource fetch/XHR/CORS requests. Static value, verified
+    // against the vendored curl-impersonate chrome136 reference wrapper
+    // (.curl-impersonate/bin/curl_chrome136).
+    pub const navigation_upgrade_insecure_requests: [:0]const u8 = "Upgrade-Insecure-Requests: 1";
+
+    // Chrome's RFC 9218 Extensible-Priority value for the main-frame/iframe
+    // document request itself (urgency 0, incremental). Verified against the
+    // same curl_chrome136 reference. Deliberately not applied to subresource
+    // requests: Chrome varies Priority by resource type/urgency there and no
+    // per-resource-type reference has been verified for this fork yet, so
+    // extending this beyond navigation stays an explicit, separately-tracked
+    // gap rather than a guessed value.
+    pub const navigation_priority: [:0]const u8 = "Priority: u=0, i";
 
     user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
     user_agent_header: [:0]const u8,
@@ -947,6 +1005,30 @@ test "managed profile file option keeps neutral CLI alias" {
     try std.testing.expect(found);
 }
 
+test "curlImpersonateTarget defaults to chrome136 when unconfigured and curl-impersonate is linked" {
+    var config = Config{
+        .mode = undefined,
+        .exec_name = undefined,
+        .http_headers = undefined,
+        .chimera_authority = null,
+        .chimera_authority_proxy = null,
+        .chimera_impersonate_target = null,
+    };
+
+    if (libcurl.has_curl_impersonate) {
+        try std.testing.expectEqualStrings(default_curl_impersonate_target, config.curlImpersonateTarget().?);
+    } else {
+        // Stock-libcurl builds have nothing to impersonate with; this must
+        // stay a no-op (unchanged, no regression) rather than surface a
+        // target curl doesn't know how to honor.
+        try std.testing.expectEqual(@as(?[:0]const u8, null), config.curlImpersonateTarget());
+    }
+
+    // An explicit authority-selected target always wins over the default.
+    config.chimera_impersonate_target = "some-other-target";
+    try std.testing.expectEqualStrings("some-other-target", config.curlImpersonateTarget().?);
+}
+
 test "managed authority exposes curl target only when impersonation is required" {
     var optional_authority = testChimeraAuthority(false);
     try std.testing.expect(!authorityRequiresCurlImpersonate(&optional_authority));
@@ -955,6 +1037,26 @@ test "managed authority exposes curl target only when impersonation is required"
     var required_authority = testChimeraAuthority(true);
     try std.testing.expect(authorityRequiresCurlImpersonate(&required_authority));
     try std.testing.expectEqualStrings("chrome136", authorityCurlImpersonateTarget(&required_authority).?);
+}
+
+test "applyChimeraTimezone sets TZ natively from the managed profile" {
+    const allocator = std.testing.allocator;
+    var authority = testChimeraAuthority(false);
+    authority.profile.timezone = "Australia/Melbourne";
+
+    try std.testing.expectEqual(@as(c_int, 0), setenv("TZ", "UTC", 1));
+    try applyChimeraTimezone(allocator, &authority);
+    try std.testing.expectEqualStrings("Australia/Melbourne", std.posix.getenv("TZ").?);
+}
+
+test "applyChimeraTimezone is a no-op without a profile timezone" {
+    const allocator = std.testing.allocator;
+    const authority = testChimeraAuthority(false);
+    try std.testing.expect(authority.profile.timezone == null);
+
+    try std.testing.expectEqual(@as(c_int, 0), setenv("TZ", "Pacific/Auckland", 1));
+    try applyChimeraTimezone(allocator, &authority);
+    try std.testing.expectEqualStrings("Pacific/Auckland", std.posix.getenv("TZ").?);
 }
 
 fn testChimeraAuthority(requires_curl_impersonate: bool) ChimeraAuthority {

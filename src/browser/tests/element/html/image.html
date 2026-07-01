@@ -42,9 +42,9 @@
     testing.expectEqual(testing.ORIGIN + '/absolute/path.png', img.src);
     testing.expectEqual('/absolute/path.png', img.getAttribute('src'));
 
-    img.src = 'https://example.com/image.png';
-    testing.expectEqual('https://example.com/image.png', img.src);
-    testing.expectEqual('https://example.com/image.png', img.getAttribute('src'));
+    img.src = testing.CORS_ORIGIN + '/resource/record-image-headers.png';
+    testing.expectEqual(testing.CORS_ORIGIN + '/resource/record-image-headers.png', img.src);
+    testing.expectEqual(testing.CORS_ORIGIN + '/resource/record-image-headers.png', img.getAttribute('src'));
 
     img.alt = 'Test image';
     testing.expectEqual('Test image', img.alt);
@@ -106,13 +106,86 @@
     const img = document.createElement('img');
     testing.expectEqual(true, img.complete);
 
-    // Image with src is also complete (headless browser, no actual fetch)
+    // Image with src is also complete after the native synchronous fetch.
     img.src = 'test.png';
     testing.expectEqual(true, img.complete);
+    testing.expectEqual(2, img.naturalWidth);
+    testing.expectEqual(3, img.naturalHeight);
 
     // Image constructor also complete
     const img2 = new Image();
     testing.expectEqual(true, img2.complete);
+}
+</script>
+
+<script id="data_uri_dimensions">
+{
+  // data: URI images decode synchronously; naturalWidth/naturalHeight must
+  // reflect the actual embedded image bytes, matching the http(s) fetch path.
+  const img = document.createElement('img');
+  img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQYV2NgAAIAAAUAAarVyFEAAAAASUVORK5CYII=';
+  testing.expectEqual(true, img.complete);
+  testing.expectEqual(1, img.naturalWidth);
+  testing.expectEqual(1, img.naturalHeight);
+}
+</script>
+
+<script id="drawImage_from_img_decodes_real_pixels">
+{
+  // Canvas fingerprinting probes (e.g. PixelScan) draw a known image and hash
+  // the resulting pixels; drawImage must sample the img's actual decoded
+  // bytes, not throw or read uninitialized/blank memory. This fixture is a
+  // 2x2 RGBA PNG with row 0 filter=None and row 1 filter=Up, independently
+  // constructed+verified via python3's zlib/struct (not this engine).
+  const img = document.createElement('img');
+  img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAGUlEQVR42mP4z8DwHwgbmLhF5BgYGP8fAAA0UgV9Hfv1JQAAAABJRU5ErkJggg==';
+  testing.expectEqual(true, img.complete);
+  testing.expectEqual(2, img.naturalWidth);
+  testing.expectEqual(2, img.naturalHeight);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 2;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+
+  const p00 = ctx.getImageData(0, 0, 1, 1).data;
+  testing.expectEqual(255, p00[0]);
+  testing.expectEqual(0, p00[1]);
+  testing.expectEqual(0, p00[2]);
+  testing.expectEqual(255, p00[3]);
+
+  const p01 = ctx.getImageData(1, 0, 1, 1).data;
+  testing.expectEqual(0, p01[0]);
+  testing.expectEqual(255, p01[1]);
+  testing.expectEqual(0, p01[2]);
+  testing.expectEqual(128, p01[3]);
+
+  const p10 = ctx.getImageData(0, 1, 1, 1).data;
+  testing.expectEqual(10, p10[0]);
+  testing.expectEqual(20, p10[1]);
+  testing.expectEqual(30, p10[2]);
+  testing.expectEqual(255, p10[3]);
+
+  const p11 = ctx.getImageData(1, 1, 1, 1).data;
+  testing.expectEqual(0, p11[0]);
+  testing.expectEqual(0, p11[1]);
+  testing.expectEqual(255, p11[2]);
+  testing.expectEqual(64, p11[3]);
+}
+</script>
+
+<script id="drawImage_zero_dimension_img_throws">
+{
+  // An img with no natural dimensions (no src set) must still throw,
+  // matching the existing zero-dimension Canvas/OffscreenCanvas contract,
+  // rather than silently drawing garbage/uninitialized memory.
+  const img = document.createElement('img');
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 2;
+  const ctx = canvas.getContext('2d');
+  testing.expectError('TypeError', () => ctx.drawImage(img, 0, 0));
 }
 </script>
 
@@ -126,7 +199,7 @@
   img.addEventListener("load", (e) => {
     state.resolve(e);
   });
-  img.src = "https://cdn.lightpanda.io/website/assets/images/docs/hn.png";
+  img.src = testing.CORS_ORIGIN + "/resource/record-image-headers.png";
 
   await state.done((e) => {
     testing.expectEqual(false, e.bubbles);
@@ -135,6 +208,9 @@
     testing.expectEqual(false, e.composed);
     testing.expectEqual(true, e.isTrusted);
     testing.expectEqual(img, e.target);
+    testing.expectEqual(true, img.complete);
+    testing.expectEqual(2, img.naturalWidth);
+    testing.expectEqual(3, img.naturalHeight);
   });
 </script>
 
@@ -156,7 +232,7 @@
   let result = false;
   img.onload = () => result = true;
   document.body.appendChild(img);
-  img.src = "https://cdn.lightpanda.io/website/assets/images/docs/hn.png";
+  img.src = testing.CORS_ORIGIN + "/resource/record-image-headers.png";
 
   testing.onload(() => testing.expectEqual(true, result));
 }

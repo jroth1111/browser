@@ -768,3 +768,45 @@
   });
 }
 </script>
+
+<script id=fetch_metadata_on_upgrade type=module>
+{
+  // The upgrade request must carry the Fetch Metadata Sec-Fetch-* triad,
+  // same as any other browser-initiated request (WHATWG Fetch Metadata
+  // Request Header spec). Per the WebSocket spec's "Establish a WebSocket
+  // connection" algorithm, the underlying fetch request has mode
+  // "websocket" and the empty-string destination, which the Fetch Metadata
+  // spec serializes as "empty" — not "websocket". The document (port 9582)
+  // and the WS endpoint (port 9584) are different origins on the same host,
+  // so this is a same-site, cross-origin request: Sec-Fetch-Site must read
+  // "same-site", not "same-origin" (pinned against Site.zig's own
+  // sameSiteOriginToUrl unit test, which asserts 127.0.0.1 on two different
+  // ports is same-site).
+  const state = await testing.async();
+  let received = [];
+
+  let ws = new WebSocket('ws://127.0.0.1:9584/');
+
+  ws.addEventListener('open', () => {
+    ws.send('get-sec-fetch-mode');
+  });
+
+  let step = 0;
+  ws.addEventListener('message', (e) => {
+    received.push(e.data);
+    step++;
+    if (step === 1) ws.send('get-sec-fetch-dest');
+    else if (step === 2) ws.send('get-sec-fetch-site');
+    else ws.close();
+  });
+  ws.addEventListener('close', () => { state.resolve(); });
+
+  await state.done(() => {
+    testing.expectEqual([
+      'sec-fetch-mode:websocket',
+      'sec-fetch-dest:empty',
+      'sec-fetch-site:same-site',
+    ], received);
+  });
+}
+</script>

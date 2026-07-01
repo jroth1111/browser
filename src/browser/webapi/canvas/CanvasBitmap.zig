@@ -415,8 +415,21 @@ pub const ImagePatch = struct {
 pub const SourceBitmap = struct {
     width: u32,
     height: u32,
-    paint_stack: ?*const PaintStack,
+    paint_stack: ?*const PaintStack = null,
+    static_pixels: ?[]const u8 = null,
 };
+
+fn staticPixelAt(pixels: []const u8, width: u32, x: i64, y: i64) color.RGBA {
+    const rel_x: u64 = @intCast(x);
+    const rel_y: u64 = @intCast(y);
+    const pos: usize = @intCast(((rel_y * width) + rel_x) * 4);
+    return .{
+        .r = pixels[pos + 0],
+        .g = pixels[pos + 1],
+        .b = pixels[pos + 2],
+        .a = pixels[pos + 3],
+    };
+}
 
 pub const PaintStack = struct {
     ops: [max_paint_ops]PaintOp = undefined,
@@ -553,6 +566,8 @@ pub const PaintStack = struct {
                     color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }
                 else if (source.paint_stack) |paint_stack|
                     paintStackPixelAt(paint_stack, src_x, src_y, 0)
+                else if (source.static_pixels) |pixels|
+                    staticPixelAt(pixels, source.width, src_x, src_y)
                 else
                     color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 };
                 data[pos + 0] = rgba.r;

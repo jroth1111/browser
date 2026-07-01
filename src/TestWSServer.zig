@@ -125,6 +125,17 @@ fn handleClient(client: posix.socket_t) void {
         @memcpy(origin_buf[0..origin_len], value[0..origin_len]);
     }
 
+    // Same again for the Fetch Metadata headers, exposed via
+    // `get-sec-fetch-mode`/`get-sec-fetch-dest`/`get-sec-fetch-site`. These
+    // pin the upgrade request's Sec-Fetch-* triad so a regression that drops
+    // or mis-values them on the WebSocket handshake path fails loudly.
+    var sec_fetch_mode_buf: [64]u8 = undefined;
+    const sec_fetch_mode_len = captureHeaderValue(request, "\r\nSec-Fetch-Mode: ", &sec_fetch_mode_buf);
+    var sec_fetch_dest_buf: [64]u8 = undefined;
+    const sec_fetch_dest_len = captureHeaderValue(request, "\r\nSec-Fetch-Dest: ", &sec_fetch_dest_buf);
+    var sec_fetch_site_buf: [64]u8 = undefined;
+    const sec_fetch_site_len = captureHeaderValue(request, "\r\nSec-Fetch-Site: ", &sec_fetch_site_buf);
+
     // Compute accept key
     var hasher = std.crypto.hash.Sha1.init(.{});
     hasher.update(key);
@@ -158,12 +169,43 @@ fn handleClient(client: posix.socket_t) void {
 
         // Handle commands or echo
         if (frame.opcode == 1) { // Text
-            handleTextMessage(client, frame.payload, cookie_buf[0..cookie_len], origin_buf[0..origin_len]) catch break;
+            handleTextMessage(client, frame.payload, .{
+                .cookie = cookie_buf[0..cookie_len],
+                .origin = origin_buf[0..origin_len],
+                .sec_fetch_mode = sec_fetch_mode_buf[0..sec_fetch_mode_len],
+                .sec_fetch_dest = sec_fetch_dest_buf[0..sec_fetch_dest_len],
+                .sec_fetch_site = sec_fetch_site_buf[0..sec_fetch_site_len],
+            }) catch break;
         } else if (frame.opcode == 2) { // Binary
             handleBinaryMessage(client, frame.payload) catch break;
         }
     }
 }
+
+// Finds `header_prefix` (e.g. "\r\nSec-Fetch-Mode: ") in `request` and copies
+// the value up to the next '\r' into `out`, truncating to `out.len` if
+// needed. Returns the copied length, or 0 if the header wasn't present.
+// The prefix is expected to include the leading "\r\n" so a header name that
+// is itself a suffix of another (there are none among the Fetch Metadata
+// headers today, but the Origin/Sec-WebSocket-Origin pair upstream shows the
+// hazard) can never alias mid-request.
+fn captureHeaderValue(request: []const u8, header_prefix: []const u8, out: []u8) usize {
+    const start = std.mem.indexOf(u8, request, header_prefix) orelse return 0;
+    const value_start = start + header_prefix.len;
+    const value_end = std.mem.indexOfScalarPos(u8, request, value_start, '\r') orelse value_start;
+    const value = request[value_start..value_end];
+    const len = @min(value.len, out.len);
+    @memcpy(out[0..len], value[0..len]);
+    return len;
+}
+
+const CapturedHeaders = struct {
+    cookie: []const u8,
+    origin: []const u8,
+    sec_fetch_mode: []const u8,
+    sec_fetch_dest: []const u8,
+    sec_fetch_site: []const u8,
+};
 
 const Frame = struct {
     opcode: u8,
@@ -263,7 +305,7 @@ const RecvBuffer = struct {
     }
 };
 
-fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header: []const u8, origin_header: []const u8) !void {
+fn handleTextMessage(client: posix.socket_t, payload: []const u8, captured: CapturedHeaders) !void {
     // Command: force-close - close socket immediately without close frame
     if (std.mem.eql(u8, payload, "force-close")) {
         return error.ForceClose;
@@ -273,7 +315,7 @@ fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header:
     // request carried (empty string if none). Used by the cookie-on-
     // upgrade regression test.
     if (std.mem.eql(u8, payload, "get-cookie")) {
-        try sendFrame(client, 1, "cookie:", cookie_header);
+        try sendFrame(client, 1, "cookie:", captured.cookie);
         return;
     }
 
@@ -281,7 +323,23 @@ fn handleTextMessage(client: posix.socket_t, payload: []const u8, cookie_header:
     // request carried (empty string if none). Used by the origin-on-
     // upgrade regression test.
     if (std.mem.eql(u8, payload, "get-origin")) {
-        try sendFrame(client, 1, "origin:", origin_header);
+        try sendFrame(client, 1, "origin:", captured.origin);
+        return;
+    }
+
+    // Command: get-sec-fetch-mode/-dest/-site - send back the Fetch
+    // Metadata header values the upgrade request carried (empty string if
+    // missing). Used by the WebSocket Fetch-Metadata regression tests.
+    if (std.mem.eql(u8, payload, "get-sec-fetch-mode")) {
+        try sendFrame(client, 1, "sec-fetch-mode:", captured.sec_fetch_mode);
+        return;
+    }
+    if (std.mem.eql(u8, payload, "get-sec-fetch-dest")) {
+        try sendFrame(client, 1, "sec-fetch-dest:", captured.sec_fetch_dest);
+        return;
+    }
+    if (std.mem.eql(u8, payload, "get-sec-fetch-site")) {
+        try sendFrame(client, 1, "sec-fetch-site:", captured.sec_fetch_site);
         return;
     }
 

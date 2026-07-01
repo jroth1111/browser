@@ -25,6 +25,7 @@ const color = @import("../../color.zig");
 const CanvasBitmap = @import("CanvasBitmap.zig");
 const Canvas = @import("../element/html/Canvas.zig");
 const CanvasPath = @import("CanvasPath.zig");
+const Image = @import("../element/html/Image.zig");
 const ImageData = @import("../ImageData.zig");
 const OffscreenCanvas = @import("OffscreenCanvas.zig");
 const Seeds = @import("../../../chimera/Seeds.zig");
@@ -397,6 +398,9 @@ fn resolveSourceBitmap(source_value: js.Value) ?CanvasBitmap.SourceBitmap {
     } else |_| {}
     if (source_value.toZig(*OffscreenCanvas)) |canvas| {
         return canvas.canvasSourceBitmap();
+    } else |_| {}
+    if (source_value.toZig(*Image)) |img| {
+        return img.imageSourceBitmap();
     } else |_| {}
     return null;
 }

@@ -233,6 +233,15 @@ pub fn populateNavigationFetchMetadataHeaders(
         dest,
         try navigationFetchMetadataSite(allocator, initiator_url, request_url),
     );
+
+    // Chrome only ever sends Sec-Fetch-User on requests it treats as
+    // user-activated top-level/sub-frame navigations, never on subresource
+    // fetch/XHR/CORS/preflight requests. That is why this is set here, in
+    // the navigation-only wrapper, rather than in the shared
+    // populateFetchMetadataHeaderValues helper above (which is also used by
+    // the non-navigation paths). Every caller of this function represents a
+    // real navigation, so the value is unconditionally "?1".
+    try http_headers.set("Sec-Fetch-User: ?1");
 }
 
 pub fn populatePreflightHttpHeaders(

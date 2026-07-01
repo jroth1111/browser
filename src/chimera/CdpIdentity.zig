@@ -6,8 +6,8 @@ pub const PROTOCOL_VERSION = "1.3";
 pub const REVISION = "@9e6ded5ac1ff5e38d930ae52bd9aec09bd1a68e4";
 pub const JS_VERSION = "12.4.254.8";
 
-pub const DEFAULT_CDP_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-pub const DEFAULT_CDP_PRODUCT = "Chrome/124.0.6367.29";
+pub const DEFAULT_CDP_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+pub const DEFAULT_CDP_PRODUCT = "Chrome/136.0.7103.59";
 
 pub const DEFAULT_HTTP_BROWSER = "Lightpanda/1.0";
 pub const DEFAULT_HTTP_USER_AGENT = "Lightpanda/1.0";

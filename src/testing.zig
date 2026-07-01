@@ -573,6 +573,12 @@ pub const SubresourceHeaderSnapshot = struct {
     style_sec_fetch_site_same_site: bool = false,
     style_origin_present: bool = false,
     style_referer_origin_only: bool = false,
+    image_seen: bool = false,
+    image_sec_fetch_mode_no_cors: bool = false,
+    image_sec_fetch_dest_image: bool = false,
+    image_sec_fetch_site_same_site: bool = false,
+    image_origin_present: bool = false,
+    image_referer_origin_only: bool = false,
     worker_seen: bool = false,
     worker_sec_fetch_mode_same_origin: bool = false,
     worker_sec_fetch_dest_worker: bool = false,
@@ -617,6 +623,7 @@ pub fn subresourceHeaderSnapshot() SubresourceHeaderSnapshot {
 const SubresourceHeaderKind = enum {
     script,
     style,
+    image,
     worker,
 };
 
@@ -627,6 +634,7 @@ fn recordSubresourceHeaders(req: *std.http.Server.Request, kind: SubresourceHead
     switch (kind) {
         .script => cors_subresource_header_snapshot.script_seen = true,
         .style => cors_subresource_header_snapshot.style_seen = true,
+        .image => cors_subresource_header_snapshot.image_seen = true,
         .worker => cors_subresource_header_snapshot.worker_seen = true,
     }
 
@@ -657,6 +665,19 @@ fn recordSubresourceHeaders(req: *std.http.Server.Request, kind: SubresourceHead
                     cors_subresource_header_snapshot.style_origin_present = true;
                 } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
                     cors_subresource_header_snapshot.style_referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
+                }
+            },
+            .image => {
+                if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Mode")) {
+                    cors_subresource_header_snapshot.image_sec_fetch_mode_no_cors = std.mem.eql(u8, h.value, "no-cors");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Dest")) {
+                    cors_subresource_header_snapshot.image_sec_fetch_dest_image = std.mem.eql(u8, h.value, "image");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Sec-Fetch-Site")) {
+                    cors_subresource_header_snapshot.image_sec_fetch_site_same_site = std.mem.eql(u8, h.value, "same-site");
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Origin")) {
+                    cors_subresource_header_snapshot.image_origin_present = true;
+                } else if (std.ascii.eqlIgnoreCase(h.name, "Referer")) {
+                    cors_subresource_header_snapshot.image_referer_origin_only = std.mem.eql(u8, h.value, "http://127.0.0.1:9582/");
                 }
             },
             .worker => {
@@ -1282,6 +1303,36 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("body { --subresource-style-loaded: 1; }", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "text/css" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/resource/record-image-headers.png")) {
+        recordSubresourceHeaders(req, .image);
+        const png_bytes = [_]u8{
+            0x89, 'P',  'N',  'G',  '\r', '\n', 0x1a, '\n',
+            0x00, 0x00, 0x00, 0x0d, 'I',  'H',  'D',  'R',
+            0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03,
+        };
+        return req.respond(&png_bytes, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "image/png" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/absolute/path.png") or
+        std.mem.eql(u8, path, "/src/browser/tests/element/html/test.png") or
+        std.mem.eql(u8, path, "/src/browser/tests/element/html/over%209000!"))
+    {
+        const png_bytes = [_]u8{
+            0x89, 'P',  'N',  'G',  '\r', '\n', 0x1a, '\n',
+            0x00, 0x00, 0x00, 0x0d, 'I',  'H',  'D',  'R',
+            0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03,
+        };
+        return req.respond(&png_bytes, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "image/png" },
             },
         });
     }

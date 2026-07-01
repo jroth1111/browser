@@ -35,6 +35,7 @@ const h5e = @import("parser/html5ever.zig");
 const CustomElementReactions = @import("CustomElementReactions.zig");
 
 const URL = @import("URL.zig");
+const data_url = @import("data_url.zig");
 const Blob = @import("webapi/Blob.zig");
 const FileList = @import("webapi/FileList.zig");
 const Node = @import("webapi/Node.zig");
@@ -775,6 +776,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
     };
 
     var headers = try http_client.newHeadersForUrl(self.url);
+    try headers.add(lp.Config.HttpHeaders.navigation_upgrade_insecure_requests);
     try headers.add(lp.Config.HttpHeaders.navigation_accept);
     if (opts.header) |hdr| {
         try headers.add(hdr);
@@ -789,6 +791,7 @@ pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !vo
         self.url,
         if (self.parent == null) "document" else "iframe",
     );
+    try headers.add(lp.Config.HttpHeaders.navigation_priority);
 
     // A root navigation issued against a pending Page (i.e. one allocated by
     // Session.initiateRootNavigation) flags both the notification and the
@@ -2212,6 +2215,75 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     try self.fireElementEvent(element, comptime .wrap("load"));
 }
 
+pub fn loadImage(self: *Frame, image: *Element.Html.Image, src: []const u8) !void {
+    if (self.isGoingAway() or src.len == 0) {
+        return;
+    }
+
+    const session = self._session;
+    const arena = try session.getArena(.medium, "Frame.loadImage");
+    defer session.releaseArena(arena);
+
+    const resolved = URL.resolve(arena, self.base(), src, .{ .encoding = self.charset }) catch |err| {
+        log.warn(.http, "image resolve", .{ .err = err, .src = src });
+        image.imageRequestFailed();
+        return self.queueElementEvent(image._proto, .@"error");
+    };
+    if (!try image.beginImageRequest(self, resolved)) {
+        return;
+    }
+
+    if (!std.ascii.startsWithIgnoreCase(resolved, "http:") and !std.ascii.startsWithIgnoreCase(resolved, "https:")) {
+        if (std.ascii.startsWithIgnoreCase(resolved, "data:")) {
+            if (data_url.parse(arena, resolved)) |parsed| {
+                image.imageRequestSucceeded(self, parsed.body);
+            } else |err| {
+                log.warn(.http, "image data url", .{ .err = err, .url = resolved });
+                image.imageRequestSucceeded(self, &.{});
+            }
+        } else {
+            image.imageRequestSucceeded(self, &.{});
+        }
+        return self.queueLoad(image._proto);
+    }
+
+    const http_client = &session.browser.http_client;
+    var headers = try http_client.newHeadersForUrl(resolved);
+    try headers.add("Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8");
+    try self.headersForSubresourceRequest(&headers, arena, resolved, "no-cors", "image");
+
+    const sm = &self._script_manager.base;
+    const was_evaluating = sm.is_evaluating;
+    sm.is_evaluating = true;
+    defer sm.endEvaluationWindow(was_evaluating);
+
+    var response = http_client.syncRequest(arena, .{
+        .url = resolved,
+        .method = .GET,
+        .frame_id = self._frame_id,
+        .loader_id = self._loader_id,
+        .headers = headers,
+        .cookie_jar = &session.cookie_jar,
+        .cookie_origin = self.url,
+        .resource_type = .image,
+        .notification = session.notification,
+    }) catch |err| {
+        log.warn(.http, "image fetch", .{ .err = err, .url = resolved });
+        image.imageRequestFailed();
+        return self.queueElementEvent(image._proto, .@"error");
+    };
+    defer response.deinit(arena);
+
+    if (response.status < 200 or response.status >= 300) {
+        log.info(.http, "image status", .{ .status = response.status, .url = resolved });
+        image.imageRequestFailed();
+        return self.queueElementEvent(image._proto, .@"error");
+    }
+
+    image.imageRequestSucceeded(self, response.body.items);
+    try self.queueLoad(image._proto);
+}
+
 fn fireElementEvent(self: *Frame, el: *Element, name: String) !void {
     const event = try Event.initTrusted(name, .{}, self._page);
     try self._event_manager.dispatch(el.asEventTarget(), event);
@@ -2872,6 +2944,12 @@ fn nodeIsReady(self: *Frame, comptime from_parser: bool, node: *Node) !void {
             log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "link", .type = frame._type });
             return error.LinkLoadError;
         };
+    } else if (node.is(Element.Html.Image)) |image| {
+        const frame = if (comptime from_parser) self else node.ownerFrame(self);
+        image.imageAddedCallback(frame) catch |err| {
+            log.err(.frame, "frame.nodeIsReady", .{ .err = err, .element = "image", .type = frame._type });
+            return err;
+        };
     } else if (node.is(Element.Html.Style)) |style| {
         const frame = if (comptime from_parser) self else node.ownerFrame(self);
         style.styleAddedCallback(frame) catch |err| {
@@ -3477,6 +3555,13 @@ test "Frame: subresource fetch metadata headers" {
     try testing.expect(snapshot.style_sec_fetch_site_same_site);
     try testing.expect(!snapshot.style_origin_present);
     try testing.expect(snapshot.style_referer_origin_only);
+
+    try testing.expect(snapshot.image_seen);
+    try testing.expect(snapshot.image_sec_fetch_mode_no_cors);
+    try testing.expect(snapshot.image_sec_fetch_dest_image);
+    try testing.expect(snapshot.image_sec_fetch_site_same_site);
+    try testing.expect(!snapshot.image_origin_present);
+    try testing.expect(snapshot.image_referer_origin_only);
 
     try testing.expect(snapshot.worker_seen);
     try testing.expect(snapshot.worker_sec_fetch_mode_same_origin);

@@ -26,3 +26,31 @@
     });
   }
 </script>
+
+<script id=websocket_fetch_metadata_in_worker type=module>
+  {
+    // Worker-realm counterpart to net/websocket.html's
+    // fetch_metadata_on_upgrade test: the Sec-Fetch-* triad must be
+    // identical whether the WebSocket is opened from the main frame or
+    // from a dedicated worker, since both realms route through the same
+    // WebSocket.zig init() path.
+    const state = await testing.async();
+    const worker = new Worker('./websocket-worker.js');
+    worker.onmessage = (e) => {
+      if (e.data && e.data.ready) {
+        worker.postMessage({ kind: 'fetch-metadata' });
+        return;
+      }
+      state.resolve(e.data);
+    };
+
+    await state.done((data) => {
+      testing.expectTrue(data.ok, 'worker websocket error: ' + data.err);
+      testing.expectEqual([
+        'sec-fetch-mode:websocket',
+        'sec-fetch-dest:empty',
+        'sec-fetch-site:same-site',
+      ], data.received);
+    });
+  }
+</script>

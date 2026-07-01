@@ -24,6 +24,7 @@ const http = @import("../../../network/http.zig");
 const js = @import("../../js/js.zig");
 const Blob = @import("../Blob.zig");
 const URL = @import("../../URL.zig");
+const Cors = @import("Cors.zig");
 
 const Page = @import("../../Page.zig");
 const HttpClient = @import("../../HttpClient.zig");
@@ -131,7 +132,7 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
     try conn.setWriteCallback(receivedDataCallback);
     try conn.setHeaderCallback(receivedHeaderCallback);
 
-    var headers = try http_client.newHeaders();
+    var headers = try http_client.newHeadersForUrl(resolved_url);
     errdefer headers.deinit();
 
     if (protocols.len > 0) {
@@ -148,6 +149,40 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
         const origin = (try URL.getOrigin(arena, exec.url.*)) orelse "null";
         const header = try std.fmt.allocPrintSentinel(arena, "Origin: {s}", .{origin}, 0);
         try headers.add(header);
+    }
+
+    {
+        // Fetch Metadata headers (Sec-Fetch-Mode/Dest/Site). The WebSocket
+        // "Establish a WebSocket connection" algorithm
+        // (websockets.spec.whatwg.org §2.2 step 2) builds its underlying
+        // fetch request with mode "websocket" — confirmed directly against
+        // the live WHATWG WebSocket/Fetch spec text, since curl-impersonate
+        // (the vendored TLS/header reference for this fork) has no
+        // WebSocket coverage to check against. That request's destination
+        // is the empty string (a WebSocket handshake isn't a resource-typed
+        // context like "document" or "image"), and the Fetch Metadata spec
+        // serializes an empty destination as the literal token "empty" —
+        // not "websocket" — the same "empty" value every other
+        // non-navigation, non-resource-typed request in this codebase
+        // already sends (see Fetch.zig, XMLHttpRequest.zig). Do not change
+        // this to "websocket"; that would reintroduce a wire mismatch
+        // against real Chrome instead of closing one.
+        //
+        // Sec-Fetch-Site's requesting origin follows the same
+        // cached-field-first fallback Frame.headersForSubresourceRequest and
+        // WorkerGlobalScope.headersForSubresourceRequest use (the global's
+        // own origin field, then the current URL's origin, then the opaque
+        // "null" origin) rather than reusing the Origin-header computation
+        // above, so an opaque-origin realm (sandboxed iframe, about:blank
+        // popup) classifies its own WebSocket as cross-site instead of
+        // resurrecting a same-origin verdict from the raw URL.
+        // include_origin is false here: the Origin header is already added
+        // above per RFC 6455, which applies unconditionally regardless of
+        // same-origin/cross-origin — unlike ordinary fetch()/XHR, whose
+        // Origin inclusion is conditional, so this deliberately does not
+        // route through that shared conditional path.
+        const requesting_origin = exec.origin() orelse (try URL.getOrigin(arena, exec.url.*)) orelse "null";
+        try Cors.populateFetchMetadataHeaders(&headers, arena, requesting_origin, resolved_url, "websocket", "empty", false);
     }
 
     {

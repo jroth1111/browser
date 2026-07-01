@@ -22,6 +22,7 @@ canvas: SeededSurface,
 audio: SeededSurface,
 webgl: WebGL,
 webrtc: WebRTC,
+timezone: ?[]const u8 = null,
 geolocation: ?Geolocation = null,
 storage: Storage,
 transport: Transport,
@@ -238,6 +239,7 @@ pub fn fromJsonValue(allocator: Allocator, value: std.json.Value) !Profile {
             .enabled = try requiredBool(webrtc_obj, "enabled"),
             .exit_ip = try optionalString(webrtc_obj, "exit_ip"),
         },
+        .timezone = try optionalString(obj, "timezone"),
         .geolocation = geolocation,
         .storage = storage,
         .transport = transport,
@@ -544,6 +546,7 @@ const test_profile_json =
     \\    "enabled":true,
     \\    "exit_ip":"203.0.113.10"
     \\  },
+    \\  "timezone":"Australia/Melbourne",
     \\  "geolocation":{
     \\    "latitude":-37.81401,
     \\    "longitude":144.96317,
@@ -587,6 +590,7 @@ test "Chimera Profile parses managed browser identity" {
     try testing.expectEqualStrings("ANGLE (Apple, ANGLE Metal Renderer: Apple M-series, Unspecified Version)", profile.webgl.renderer.?);
     try testing.expect(profile.webrtc.enabled);
     try testing.expectEqualStrings("203.0.113.10", profile.webrtc.exit_ip.?);
+    try testing.expectEqualStrings("Australia/Melbourne", profile.timezone.?);
     try testing.expect(profile.geolocation != null);
     try testing.expectEqual(@as(f64, -37.81401), profile.geolocation.?.latitude);
     try testing.expectEqual(@as(f64, 144.96317), profile.geolocation.?.longitude);
@@ -596,6 +600,18 @@ test "Chimera Profile parses managed browser identity" {
     try testing.expectEqualStrings("chrome136", profile.transport.impersonate_target.?);
     try testing.expect(profile.transport.requires_curl_impersonate);
     try testing.expect(profile.capabilities.requires_proxy);
+}
+
+test "Chimera Profile treats timezone as optional" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const mutated = try std.mem.replaceOwned(u8, arena.allocator(), test_profile_json, "\"timezone\":\"Australia/Melbourne\",\n", "");
+    const value = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), mutated, .{});
+    const profile = try Profile.fromJsonValue(arena.allocator(), value);
+
+    try testing.expect(profile.timezone == null);
 }
 
 test "Chimera Profile rejects user agent header drift" {
