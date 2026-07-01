@@ -36,7 +36,7 @@ const Execution = js.Execution;
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `HTMLCanvasElement#getContext`.
 /// https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D
-const CanvasRenderingContext2D = @This();
+pub const CanvasRenderingContext2D = @This();
 /// Reference to the parent canvas element.
 /// https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/canvas
 _canvas: *Canvas,

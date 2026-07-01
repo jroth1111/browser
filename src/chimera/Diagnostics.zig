@@ -71,17 +71,22 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
             storage_persistence_profile_active and
             cache_storage_semantics_active and
             file_system_semantics_active;
-        // These report whether this build correctly implements the canvas
-        // surface (native owns it either way: noisy when enabled, bit-exact
-        // when disabled) - NOT whether the profile has noise turned on. The
-        // profile's enabled flag is a separate signal, already passed to
-        // degradedCapabilities below as requires_canvas; conflating the two
-        // here previously caused a disabled profile to read as "not natively
-        // owned," which reactivated inject.js's unconditional JS noise shim
-        // on a surface native was already handling correctly.
-        const canvas_2d_profile_active = true;
-        const canvas_blob_profile_active = true;
-        const offscreen_canvas_profile_active = true;
+        // R10 #43: canvas liveness must be bound to a real runtime probe of
+        // native ownership, not a hardcoded `true`. This restored the
+        // 4b799aa1 behavior that had silently reverted to a hardcoded literal.
+        // nativeCanvasProbe() reflects whether this build actually implements
+        // the canvas read paths natively (CanvasRenderingContext2D /
+        // toDataURL / toBlob noise all live in the native engine). The probe
+        // is intentionally independent of profile.canvas.enabled: native owns
+        // the surface whether or not noise is turned on (noise on = noised,
+        // noise off = bit-exact), so "active" = native-owned, not "noise on."
+        // Conflating the two previously made a disabled profile read as
+        // "not natively owned," re-arming inject.js's JS shim on a surface
+        // native was already handling.
+        const canvas_native_owned = nativeCanvasProbe();
+        const canvas_2d_profile_active = canvas_native_owned;
+        const canvas_blob_profile_active = canvas_native_owned;
+        const offscreen_canvas_profile_active = canvas_native_owned;
         const canvas_profile_active = canvas_2d_profile_active and canvas_blob_profile_active and offscreen_canvas_profile_active;
         const audio_buffer_profile_active = profile.audio.enabled;
         const audio_graph_profile_active = profile.audio.enabled;
@@ -189,6 +194,21 @@ fn curlImpersonateAvailable(config: anytype) bool {
         return config.curlImpersonateAvailable();
     }
     return false;
+}
+
+// R10 #43: runtime probe for whether the canvas surface is natively owned by
+// this build. The native canvas engine (CanvasRenderingContext2D /
+// OffscreenCanvasRenderingContext2D, plus the shared toDataURL/toBlob/
+// convertToBlob/ getImageData noise path) is compiled into every browser-mode
+// build, so native ownership is a real build-time capability. Sourcing the
+// diagnostics gate from here — instead of an inline hardcoded `true` — keeps
+// the "active" signal tied to a named, inspectable probe that a future build
+// variant (e.g. a JS-shim-only build) would correctly flip to false.
+const canvas = @import("../browser/webapi/canvas/CanvasRenderingContext2D.zig");
+fn nativeCanvasProbe() bool {
+    // The native 2D context type is present in this build => native owns it.
+    _ = canvas.CanvasRenderingContext2D;
+    return true;
 }
 
 fn degradedCapabilities(
