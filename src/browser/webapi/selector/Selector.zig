@@ -52,7 +52,9 @@ pub fn parseLeaky(arena: Allocator, input: []const u8) !Parsed {
 }
 
 pub fn querySelector(root: *Node, input: []const u8, frame: *Frame) !?*Node.Element {
-    const parsed = try parseLeaky(frame.call_arena, input);
+    // local_arena: the parsed selector is scratch consumed during the walk;
+    // only a node pointer is returned. No JS is invoked while matching.
+    const parsed = try parseLeaky(frame.local_arena, input);
     return parsed.query(root, frame);
 }
 
@@ -84,7 +86,8 @@ pub fn matches(el: *Node.Element, input: []const u8, frame: *Frame) !bool {
         return error.SyntaxError;
     }
 
-    const arena = frame.call_arena;
+    // local_arena: parsed selector is scratch, returns a bool, no JS invoked.
+    const arena = frame.local_arena;
     const selectors = try Parser.parseList(arena, input);
 
     for (selectors) |selector| {
@@ -102,7 +105,8 @@ pub fn matchesWithScope(el: *Node.Element, input: []const u8, scope: *Node.Eleme
         return error.SyntaxError;
     }
 
-    const arena = frame.call_arena;
+    // local_arena: parsed selector is scratch, returns a bool, no JS invoked.
+    const arena = frame.local_arena;
     const selectors = try Parser.parseList(arena, input);
 
     for (selectors) |selector| {
