@@ -417,7 +417,15 @@ test "cdp.Emulation: Chimera authority navigation sends low entropy client hints
     try testing.expect(!snapshot.high_entropy_client_hint_present);
 }
 
-test "cdp.Emulation: Accept-CH enables high entropy client hints for same origin" {
+test "cdp.Emulation: Accept-CH high entropy client hints require a secure origin" {
+    // R10 #29: Client-Hints persistence (the Accept-CH opt-in) is gated to
+    // secure (https:) origins only, matching real Chrome's spec behavior —
+    // persisting hints over plaintext HTTP would let a network attacker
+    // inject an opt-in and harvest high-entropy fingerprinting signal. The
+    // in-process test HTTP server (TestHTTPServer) is plaintext-only with no
+    // TLS support, so this test exercises the negative path over http: and
+    // asserts the secure-context gate blocks the opt-in, rather than the
+    // (unavailable) positive https: path.
     var ctx = try testing.context();
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-UA9" });
@@ -441,9 +449,7 @@ test "cdp.Emulation: Accept-CH enables high entropy client hints for same origin
     try testing.expect(snapshot.sec_ch_ua_profile);
     try testing.expect(snapshot.sec_ch_ua_mobile_profile);
     try testing.expect(snapshot.sec_ch_ua_platform_profile);
-    try testing.expect(snapshot.high_entropy_client_hint_present);
-    try testing.expect(snapshot.high_entropy_full_version_list_profile);
-    try testing.expect(snapshot.high_entropy_platform_version_profile);
+    try testing.expect(!snapshot.high_entropy_client_hint_present);
     try testing.expect(!snapshot.unexpected_high_entropy_client_hint_present);
 }
 

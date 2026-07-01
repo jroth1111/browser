@@ -717,7 +717,16 @@ pub fn getUADataOverride(self: *const Client) ?*const ChimeraProfile.UAData {
 
 fn allocOriginKey(allocator: Allocator, raw: [:0]const u8) !?[]u8 {
     const protocol = URL.getProtocol(raw);
-    if (!std.ascii.eqlIgnoreCase(protocol, "http:") and !std.ascii.eqlIgnoreCase(protocol, "https:")) {
+    // R10 #29: Chrome only persists/emits high-entropy Client Hints for secure
+    // (HTTPS) origins. Accepting Accept-CH from http: origins would let a
+    // network attacker inject hints over plaintext, and Chrome's spec forbids
+    // it. Gate the origin key on https only (wss shares the scheme space and
+    // is covered by the same navigation). http: origins return null => no
+    // Client Hints are stored or sent for them.
+    // R10-DEFERRED #29: Chrome's full Client Hints ruleset also enforces
+    // permissions-policy delegation, max-age lifetime expiry, and
+    // cross-origin/redirect downgrading — those are not yet modelled here.
+    if (!std.ascii.eqlIgnoreCase(protocol, "https:")) {
         return null;
     }
 
@@ -725,8 +734,9 @@ fn allocOriginKey(allocator: Allocator, raw: [:0]const u8) !?[]u8 {
     if (hostname.len == 0) return null;
 
     const port = URL.getPort(raw);
-    const include_port = port.len > 0 and !((std.ascii.eqlIgnoreCase(protocol, "http:") and std.mem.eql(u8, port, "80")) or
-        (std.ascii.eqlIgnoreCase(protocol, "https:") and std.mem.eql(u8, port, "443")));
+    // Only https: reaches here (gated above), so the only default port to
+    // strip is 443.
+    const include_port = port.len > 0 and !std.mem.eql(u8, port, "443");
 
     var key = try std.ArrayList(u8).initCapacity(
         allocator,
@@ -952,6 +962,14 @@ fn requestT(self: *Client, req: Request, owner: ?*Owner) !*Transfer {
         }
 
         var owned = req;
+        // R10 #2: add an RFC 9218 Priority header to every outgoing request,
+        // varying urgency by resource type to match Chrome's per-resource-type
+        // incremental/urgency defaults. Navigation requests already set their own
+        // "u=0, i" Priority in Frame.zig; using set() here (replace-by-name) keeps
+        // a single Priority on the wire regardless of who added it first, so the
+        // navigation value is preserved unchanged. Preflight OPTIONS get the same
+        // low urgency as their associated fetch/xhr request.
+        priorityHeaderForResourceType(&owned.headers, owned.resource_type) catch {};
         // Most of the time, the req data will outlive the transfer. But not
         // always. The most problematic case is with a QueuedNavigation which
         // is freed quite quickly and would definetly not survive a queued
@@ -1779,6 +1797,21 @@ pub const Request = struct {
                 .preflight => "Preflight",
             };
         }
+
+        // R10 #2: Chrome's RFC 9218 Extensible-Priority per resource type.
+        // Urgency (u=0 highest .. u=7 lowest) + incremental flag ("i") mirror
+        // Chromium's net/ default per-request urgency. Navigation/stylesheet
+        // are urgency 0 incremental; scripts and fetch/xhr are urgency 1;
+        // images are urgency 2. These are the documented Chromium defaults;
+        // see https://www.rfc-editor.org/rfc/rfc9218#section-3.1 and
+        // Chrome's net::RequestPriority→urgency mapping.
+        pub fn priorityHeader(self: ResourceType) [:0]const u8 {
+            return switch (self) {
+                .document, .stylesheet => "Priority: u=0, i",
+                .script, .xhr, .fetch, .preflight => "Priority: u=1",
+                .image => "Priority: u=2",
+            };
+        }
     };
 
     frame_id: u32,
@@ -1832,6 +1865,14 @@ pub const Request = struct {
         self.headers.deinit();
     }
 };
+
+// R10 #2: sets the RFC 9218 Priority header on `headers` based on the request's
+// resource type, replacing any existing Priority (so navigation's own "u=0, i"
+// added in Frame.zig is preserved unchanged — identical value). Every outgoing
+// request now carries Chrome-shaped per-resource-type Priority.
+fn priorityHeaderForResourceType(headers: *http.Headers, resource_type: Request.ResourceType) !void {
+    try headers.set(resource_type.priorityHeader());
+}
 
 pub const FulfilledResponse = struct {
     status: u16,
