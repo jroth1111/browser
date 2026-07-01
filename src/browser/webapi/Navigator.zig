@@ -142,15 +142,6 @@ pub fn getWebdriver(_: *const Navigator, exec: *const Execution) bool {
     return false;
 }
 
-// Default to false: per https://w3c.github.io/gpc/#javascript-property the
-// signal reflects an explicit user preference, and none is configured here.
-// Firefox defaults to false; Chrome doesn't expose the property. Returning
-// true made GPC-compliant consent managers treat every page load as "reject
-// tracking" and skip their consent UI entirely.
-pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
-    return false;
-}
-
 pub fn getPlatform(_: *const Navigator, exec: *const Execution) []const u8 {
     if (exec.session.browser.http_client.getNavigatorPlatformOverride()) |platform| {
         return platform;
@@ -328,10 +319,8 @@ pub const JsApi = struct {
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
     pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
     pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
-    pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
-
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
-    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{ .exposed = .window, .noop = true });
+    pub const sendBeacon = bridge.function(Navigator.sendBeacon, .{ .exposed = .window });
     pub const permissions = bridge.accessor(Navigator.getPermissions, null, .{});
     pub const storage = bridge.accessor(Navigator.getStorage, null, .{});
     pub const userAgentData = bridge.accessor(Navigator.getUserAgentData, null, .{});

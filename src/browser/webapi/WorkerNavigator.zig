@@ -90,10 +90,6 @@ pub fn getWebdriver(self: *const WorkerNavigator, exec: *const Execution) bool {
     return self._navigator.getWebdriver(exec);
 }
 
-pub fn getGlobalPrivacyControl(self: *const WorkerNavigator) bool {
-    return self._navigator.getGlobalPrivacyControl();
-}
-
 pub fn getPlatform(self: *const WorkerNavigator, exec: *const Execution) []const u8 {
     return self._navigator.getPlatform(exec);
 }
@@ -139,7 +135,6 @@ pub const JsApi = struct {
     pub const product = bridge.accessor(WorkerNavigator.getProduct, null, .{});
     pub const webdriver = bridge.accessor(WorkerNavigator.getWebdriver, null, .{});
     pub const doNotTrack = bridge.accessor(WorkerNavigator.getDoNotTrack, null, .{});
-    pub const globalPrivacyControl = bridge.accessor(WorkerNavigator.getGlobalPrivacyControl, null, .{});
 
     pub const javaEnabled = bridge.function(WorkerNavigator.javaEnabled, .{});
     pub const permissions = bridge.accessor(WorkerNavigator.getPermissions, null, .{});

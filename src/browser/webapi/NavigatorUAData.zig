@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const builtin = @import("builtin");
+const std = @import("std");
 
 const Config = @import("../../Config.zig");
 const js = @import("../js/js.zig");
@@ -58,26 +59,43 @@ pub fn toJSON(_: *const NavigatorUAData, exec: *const Execution) struct {
 }
 
 pub fn getHighEntropyValues(_: *const NavigatorUAData, hints: []const []const u8, exec: *const Execution) !js.Promise {
-    // This should always return `brands` + `mobile` + `platform` and then whatever
-    // "hints" field is requested (assuming the browser has permission), but it's
-    // also valid to just return everything.
-
-    _ = hints;
-
+    // Per the UA-CH spec, the resolved object ALWAYS contains the base
+    // low-entropy fields (brands, mobile, platform) plus each high-entropy
+    // field that the caller requested AND that is a valid hint name. We honor
+    // the caller's requested-hints list rather than returning everything,
+    // matching real Chrome: only requested high-entropy values are revealed.
     const ua = profileUAData(exec);
-    return exec.js.local.?.resolvePromise(.{
-        .brands = brandList(exec),
-        .mobile = if (ua) |data| data.mobile else false,
-        .platform = uaPlatform(exec),
-        .architecture = if (ua) |data| data.architecture else uaArchitecture(),
-        .bitness = if (ua) |data| data.bitness else uaBitness(),
-        .model = if (ua) |data| data.model else "",
-        .platformVersion = if (ua) |data| data.platform_version else "",
-        .uaFullVersion = if (ua) |data| data.ua_full_version else "1.0.0.0",
-        .fullVersionList = if (ua) |data| data.full_version_list else brandList(exec),
-        .wow64 = if (ua) |data| data.wow64 else false,
-        .formFactor = if (ua) |data| data.form_factor else default_form_factor[0..],
-    });
+    const local = exec.js.local.?;
+
+    const obj = local.newObject();
+    _ = try obj.set("brands", brandList(exec), .{});
+    _ = try obj.set("mobile", if (ua) |data| data.mobile else false, .{});
+    _ = try obj.set("platform", uaPlatform(exec), .{});
+
+    for (hints) |hint| {
+        // R10 #22: Chrome only emits the high-entropy field if explicitly named
+        // in the request hint list; it does not unconditionally dump all fields.
+        if (std.mem.eql(u8, hint, "architecture")) {
+            _ = try obj.set("architecture", if (ua) |data| data.architecture else uaArchitecture(), .{});
+        } else if (std.mem.eql(u8, hint, "bitness")) {
+            _ = try obj.set("bitness", if (ua) |data| data.bitness else uaBitness(), .{});
+        } else if (std.mem.eql(u8, hint, "model")) {
+            _ = try obj.set("model", if (ua) |data| data.model else "", .{});
+        } else if (std.mem.eql(u8, hint, "platformVersion")) {
+            _ = try obj.set("platformVersion", if (ua) |data| data.platform_version else "", .{});
+        } else if (std.mem.eql(u8, hint, "uaFullVersion")) {
+            _ = try obj.set("uaFullVersion", if (ua) |data| data.ua_full_version else "1.0.0.0", .{});
+        } else if (std.mem.eql(u8, hint, "fullVersionList")) {
+            _ = try obj.set("fullVersionList", if (ua) |data| data.full_version_list else brandList(exec), .{});
+        } else if (std.mem.eql(u8, hint, "wow64")) {
+            _ = try obj.set("wow64", if (ua) |data| data.wow64 else false, .{});
+        } else if (std.mem.eql(u8, hint, "formFactor") or std.mem.eql(u8, hint, "formFactors")) {
+            _ = try obj.set("formFactor", if (ua) |data| data.form_factor else default_form_factor[0..], .{});
+        }
+        // Unknown hint names are silently ignored by real Chrome (no error).
+    }
+
+    return local.resolvePromise(obj.toValue());
 }
 
 fn brandList(exec: *const Execution) []const Brand {

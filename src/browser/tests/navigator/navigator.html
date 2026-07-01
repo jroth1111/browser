@@ -31,18 +31,21 @@
 
   testing.expectEqual(null, navigator.doNotTrack);
 
-  // GPC must default to false — per https://w3c.github.io/gpc/#javascript-property
-  // the signal reflects an explicit user preference (Firefox defaults to false;
-  // Chrome doesn't expose the property at all). A true default makes
-  // GPC-compliant consent managers reject-all and skip their consent UI.
-  testing.expectEqual(false, navigator.globalPrivacyControl);
+  // GPC must not be exposed at all unless the user has explicitly turned it
+  // on — per https://w3c.github.io/gpc/#javascript-property real Chrome does
+  // not define navigator.globalPrivacyControl when GPC isn't enabled, so
+  // accessing it yields undefined (not a false-valued property). A defined
+  // false default is itself a bot tell versus real Chrome's absent property.
+  testing.expectEqual(undefined, navigator.globalPrivacyControl);
 
   // Every Navigator attribute must be a native accessor on the prototype
+  // (globalPrivacyControl is intentionally excluded: it does not exist on
+  // Navigator.prototype at all when GPC is off, matching real Chrome).
   for (const name of [
     'userAgent', 'appName', 'appCodeName', 'appVersion', 'platform',
     'language', 'languages', 'onLine', 'cookieEnabled', 'hardwareConcurrency',
     'deviceMemory', 'maxTouchPoints', 'vendor', 'product', 'webdriver',
-    'plugins', 'mimeTypes', 'pdfViewerEnabled', 'doNotTrack', 'globalPrivacyControl',
+    'plugins', 'mimeTypes', 'pdfViewerEnabled', 'doNotTrack',
     'webkitTemporaryStorage', 'webkitPersistentStorage', 'mediaDevices',
   ]) {
     const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, name);
@@ -85,7 +88,7 @@
     for (const device of devices) {
       testing.expectEqual('[object MediaDeviceInfo]', Object.prototype.toString.call(device));
       testing.expectEqual(true, device instanceof MediaDeviceInfo);
-      testing.expectEqual('default', device.deviceId);
+      testing.expectEqual('', device.deviceId);
       testing.expectEqual('', device.label);
       testing.expectEqual('', device.groupId);
       testing.expectEqual({
@@ -249,7 +252,7 @@
 <script id=userAgentData_highEntropy type=module>
   {
     const state = await testing.async();
-    const p = navigator.userAgentData.getHighEntropyValues(['architecture', 'platformVersion', 'fullVersionList']);
+    const p = navigator.userAgentData.getHighEntropyValues(['architecture', 'platformVersion', 'fullVersionList', 'uaFullVersion', 'wow64', 'formFactors']);
     testing.expectTrue(p instanceof Promise);
     const v = await p;
     state.resolve();
