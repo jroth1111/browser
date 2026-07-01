@@ -48,6 +48,15 @@ const QueryDescriptor = struct {
 // Report the state set via CDP Browser.grantPermissions / setPermission, or a
 // coherent managed default when unset.
 pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution) !js.Promise {
+    // R10 #33: real Chrome validates the descriptor's permission name against
+    // the PermissionName enum and REJECTS the promise with a TypeError for an
+    // unknown name, rather than silently resolving to "prompt". Validate first.
+    if (!isValidPermissionName(qd.name)) {
+        return exec.js.local.?.rejectPromise(.{
+            .type_error = "Failed to execute 'query' on 'Permissions': Failed to read the 'name' property from 'PermissionDescriptor': The provided value is not a valid enum value of type PermissionName.",
+        });
+    }
+
     const arena = try exec.getArena(.tiny, "PermissionStatus");
     errdefer exec.releaseArena(arena);
 
@@ -59,6 +68,47 @@ pub fn query(_: *const Permissions, qd: QueryDescriptor, exec: *const Execution)
         ._name = try arena.dupe(u8, qd.name),
     };
     return exec.js.local.?.resolvePromise(status);
+}
+
+// The full set of PermissionName enum values real Chrome recognises. Anything
+// outside this set causes Chrome to reject navigator.permissions.query() with
+// a TypeError (not a "prompt" resolution).
+const valid_permission_names = [_][]const u8{
+    "geolocation",
+    "notifications",
+    "push",
+    "midi",
+    "camera",
+    "microphone",
+    "background-fetch",
+    "background-sync",
+    "persistent-storage",
+    "ambient-light-sensor",
+    "accelerometer",
+    "gyroscope",
+    "magnetometer",
+    "screen-wake-lock",
+    "nfc",
+    "display-capture",
+    "accessibility-events",
+    "clipboard-read",
+    "clipboard-write",
+    "payment-handler",
+    "idle-detection",
+    "periodic-background-sync",
+    "system-wake-lock",
+    "storage-access",
+    "window-management",
+    "local-fonts",
+    "top-level-storage-access",
+    "speaker-selection",
+};
+
+fn isValidPermissionName(name: []const u8) bool {
+    for (valid_permission_names) |valid| {
+        if (std.mem.eql(u8, name, valid)) return true;
+    }
+    return false;
 }
 
 fn defaultState(name: []const u8, exec: *const Execution) State {
