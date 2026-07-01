@@ -1010,7 +1010,7 @@ pub fn getShaderInfoLog(_: *const WebGLRenderingContext, shader: ?*WebGLShader) 
     if (target.compiled) return "";
     if (target.source_len == 0) return "Shader source is empty";
     if (!target.source_has_main) return "Shader source has no main function";
-    return "Shader source is not supported by Lightpanda WebGL";
+    return "Shader source is not supported";
 }
 
 pub fn getProgramInfoLog(_: *const WebGLRenderingContext, program: ?*WebGLProgram) []const u8 {
