@@ -2168,6 +2168,21 @@ pub fn loadExternalStylesheet(self: *Frame, link: *Element.Html.Link, href: []co
     };
     defer response.deinit(arena);
 
+    // syncRequest() sets Client.blocking_requests for this frame for the
+    // duration of the fetch, which makes DeferringLayer buffer (rather than
+    // forward) any OTHER in-flight transfer on this frame whose callback
+    // happens to fire during that window. DeferringLayer.DeferredContext is
+    // sticky - once a context starts buffering, its done/error callback
+    // keeps buffering unconditionally, even after blocking_requests clears
+    // (see DeferredContext.doneCallback) - so those buffered contexts stay
+    // stuck forever unless something calls flushFrame() for this frame.
+    // ScriptManager and WorkerGlobalScope.importScript both flush after
+    // their own syncRequest(); this path didn't, which is exactly the gap
+    // that leaves other subresource requests (XHR/fetch, e.g. pixelscan's
+    // widget polls) permanently un-flushed whenever a stylesheet happens to
+    // load synchronously while they're in flight.
+    defer http_client.deferring_layer.flushFrame(self._frame_id);
+
     if (response.status < 200 or response.status >= 300) {
         log.info(.http, "external stylesheet status", .{ .status = response.status, .url = resolved });
         return self.fireElementEvent(element, comptime .wrap("error"));
@@ -2273,6 +2288,15 @@ pub fn loadImage(self: *Frame, image: *Element.Html.Image, src: []const u8) !voi
         return self.queueElementEvent(image._proto, .@"error");
     };
     defer response.deinit(arena);
+
+    // See the matching comment in loadExternalStylesheet: syncRequest()
+    // blocks this frame, which makes DeferringLayer buffer other in-flight
+    // transfers on this frame; only an explicit flushFrame() releases them,
+    // and DeferredContext's sticky `deferring` flag means they never
+    // self-resolve. Flush here so a synchronous image load (e.g. an <img>
+    // resolved inline) doesn't permanently strand unrelated XHR/fetch
+    // requests on the same frame.
+    defer http_client.deferring_layer.flushFrame(self._frame_id);
 
     if (response.status < 200 or response.status >= 300) {
         log.info(.http, "image status", .{ .status = response.status, .url = resolved });

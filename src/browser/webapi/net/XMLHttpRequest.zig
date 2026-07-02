@@ -836,6 +836,7 @@ test "WebApi: XHR" {
     try testing.htmlRunner("net/xhr_cors_request_headers.html", .{});
     try testing.htmlRunner("net/xhr_cors_preflight_success.html", .{});
     try testing.htmlRunner("net/xhr_cors_preflight_required.html", .{});
+    try testing.htmlRunner("net/xhr_survives_sync_image_load.html", .{});
 }
 
 test "WebApi: XHR in worker" {

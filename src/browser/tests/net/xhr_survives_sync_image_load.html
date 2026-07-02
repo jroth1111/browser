@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=xhr_survives_sync_image_load type=module>
+  {
+    // Regression: DeferringLayer buffers callbacks for every OTHER in-flight
+    // transfer on a frame while Client.blocking_requests is set for that
+    // frame - i.e. while a *synchronous* subresource fetch (a classic
+    // blocking <script src>, a <link rel=stylesheet>, or - as exercised
+    // here - an <img> whose src is set from JS, which drives
+    // Frame.loadImage()'s syncRequest()) is in flight. Once a
+    // DeferredContext starts buffering (`deferring = true`), its done/error
+    // callback keeps buffering unconditionally forever - see
+    // DeferredContext.doneCallback in DeferringLayer.zig - unless something
+    // calls DeferringLayer.flushFrame() for that frame afterward.
+    // loadImage() (and loadExternalStylesheet()) used to call syncRequest()
+    // without ever flushing, so an XHR whose completion callback happened to
+    // fire mid-image-load would never dispatch its `load` event. This is
+    // exactly the symptom observed live on pixelscan.net: fingerprint
+    // widgets stuck on "collecting data..." forever because their XHR polls
+    // got silently swallowed by a concurrent synchronous ad-image load on
+    // the same frame.
+    const state = await testing.async();
+    const req = new XMLHttpRequest();
+    req.onload = () => { state.resolve('xhr-loaded'); };
+    req.open('GET', 'http://127.0.0.1:9582/xhr');
+    req.send();
+
+    // Image.setSrc calls imageAddedCallback -> Frame.loadImage()
+    // SYNCHRONOUSLY (no await needed): this blocks JS execution and pumps
+    // the whole curl multi-handle via Client.syncRequest()'s tick() loop,
+    // during which the XHR above's done_callback can fire and - absent a
+    // flushFrame() call after this returns - get silently swallowed.
+    const img = new Image();
+    img.src = 'http://127.0.0.1:9582/resource/record-image-headers.png';
+
+    await state.done((result) => {
+      testing.expectEqual('xhr-loaded', result);
+    });
+  }
+</script>
