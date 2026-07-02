@@ -157,7 +157,7 @@ fn fromConfigWithCurlAvailability(config: anytype, curl_impersonate_available: b
         .impersonation_target = target,
         .requires_curl_impersonate = false,
         .curl_impersonate_available = curl_impersonate_available,
-        .impersonation_active = false,
+        .impersonation_active = target != null and curl_impersonate_available,
         .header_profile_active = false,
         .navigator_profile_active = false,
         .uadata_profile_active = false,
