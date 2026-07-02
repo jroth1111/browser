@@ -39,6 +39,13 @@ const log = lp.log;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
+// Upper bound on established WebSocket connections serviced per perform()
+// tick via curl_multi_poll's extra_fds (see Client.perform). Sized to the
+// full range of Config.wsMaxConcurrent (a u8), not the configured value
+// itself, so a stack array can be used without plumbing config access
+// into perform().
+const MAX_WS_EXTRA_FDS = std.math.maxInt(u8);
+
 pub const Method = http.Method;
 pub const Header = http.Header;
 pub const Headers = http.Headers;
@@ -1395,6 +1402,39 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
         return;
     }
 
+    // Established WebSocket connections (CONNECT_ONLY=2) are invisible to
+    // curl_multi_perform once their upgrade handshake completes — see
+    // processMessages' .websocket branch and WebSocket.establish. We
+    // service them ourselves via wsSend/wsRecv, folding their raw sockets
+    // into the SAME curl_multi_poll call used for general HTTP I/O via
+    // its extra_fds parameter, rather than running a second event loop.
+    var extra_fds: [MAX_WS_EXTRA_FDS]http.WaitFd = undefined;
+    var extra_conns: [MAX_WS_EXTRA_FDS]*http.Connection = undefined;
+    var extra_count: usize = 0;
+
+    if (self.ws_active > 0) {
+        var it = self.in_use.first;
+        while (it) |node| : (it = node.next) {
+            const conn: *http.Connection = @fieldParentPtr("node", node);
+            const ws = switch (conn.transport) {
+                .websocket => |w| w,
+                else => continue,
+            };
+            if (!ws._established) continue;
+            if (extra_count >= extra_fds.len) {
+                log.warn(.websocket, "extra_fds capacity exceeded", .{ .cap = extra_fds.len });
+                break;
+            }
+            extra_fds[extra_count] = .{
+                .fd = ws._active_socket.?,
+                .events = .{ .pollin = true, .pollout = ws.wantsWrite() },
+                .revents = .{},
+            };
+            extra_conns[extra_count] = conn;
+            extra_count += 1;
+        }
+    }
+
     // Poll for HTTP I/O. The Network thread will call curl_multi_wakeup
     // on our multi handle whenever it pushes to our inbox, so we drop
     // out of poll promptly even when we have no curl handles in flight
@@ -1403,10 +1443,28 @@ fn perform(self: *Client, timeout_ms: c_int) anyerror!void {
     // returned; in tests (which never register) and during the
     // pre-handshake window the flag stays false and we don't waste a
     // poll timeout waiting for a wakeup that won't arrive.
-    if (running > 0 or self.cdp_link_active) {
+    if (running > 0 or self.cdp_link_active or extra_count > 0) {
         // when cdp_link_active == true, the network thread will unblock this
         // by calling wakup on our multi.
-        try self.handles.poll(&.{}, timeout_ms);
+        try self.handles.poll(extra_fds[0..extra_count], timeout_ms);
+    }
+
+    for (extra_conns[0..extra_count], extra_fds[0..extra_count]) |conn, fd| {
+        const ws = conn.transport.websocket;
+        if (fd.revents.pollin) {
+            ws.tryRecv() catch |err| {
+                ws.disconnected(if (err == error.GotNothing) null else err);
+                continue;
+            };
+        }
+        // tryRecv above may have torn this connection down (e.g. a
+        // server-initiated close ack completing the close handshake) -
+        // don't touch it again this tick.
+        if (ws._established and fd.revents.pollout) {
+            ws.trySend() catch |err| {
+                ws.disconnected(err);
+            };
+        }
     }
 
     _ = try self.processMessages();
@@ -1671,13 +1729,30 @@ fn processMessages(self: *Client) !bool {
                 }
             },
             .websocket => |ws| {
-                // ws_active will be decremented through the call to disconnected
+                // Under CURLOPT_CONNECT_ONLY=2, libcurl's multi transfer
+                // reports DONE immediately after the WS upgrade handshake
+                // completes (not at actual session end) — see ws.c: once
+                // the handshake succeeds it hands control to the
+                // application for curl_ws_send/curl_ws_recv and the
+                // "transfer" is considered finished from curl_multi's
+                // point of view. So a DONE with no error the *first* time
+                // means "handshake succeeded, go live", not "disconnect".
+                // ws_active is decremented only through disconnected().
                 if (msg.err) |err| switch (err) {
                     error.GotNothing => ws.disconnected(null),
                     else => ws.disconnected(err),
-                } else {
-                    // Clean close - no error
+                } else if (ws._established) {
+                    // Already live and serviced via wsSend/wsRecv outside
+                    // curl_multi_perform's bookkeeping. A second clean
+                    // DONE isn't expected for a connect-only handle, but
+                    // treat it as a real (clean) disconnect rather than
+                    // silently dropping it.
                     ws.disconnected(null);
+                } else {
+                    ws.establish() catch |err| {
+                        log.err(.websocket, "establish failed", .{ .err = err, .url = ws.getUrl() });
+                        ws.disconnected(err);
+                    };
                 }
 
                 processed = true;

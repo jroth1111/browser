@@ -55,6 +55,15 @@ _binary_type: BinaryType = .blob,
 _got_101: bool = false,
 _got_upgrade: bool = false,
 
+// True once the CONNECT_ONLY=2 upgrade handshake has completed
+// successfully (the multi transfer reported DONE with no error). From
+// this point libcurl's own transfer state machine does nothing further
+// for this handle; send/recv happen exclusively via the pull-model
+// conn.wsSend/wsRecv, driven by HttpClient.perform() polling
+// _active_socket via Handles.poll's extra_fds.
+_established: bool = false,
+_active_socket: ?http.CurlSocket = null,
+
 _conn: ?*http.Connection,
 _http_client: *HttpClient,
 _req_headers: http.Headers,
@@ -126,10 +135,15 @@ pub fn init(url: []const u8, protocols: [][]const u8, exec: *const Execution) !*
     errdefer http_client.network.releaseConnection(conn);
 
     try conn.setURL(resolved_url);
-    try conn.setConnectOnly(false);
-
-    try conn.setReadCallback(sendDataCallback, true);
-    try conn.setWriteCallback(receivedDataCallback);
+    // CONNECT_ONLY=2: libcurl performs the upgrade request and reads all
+    // response headers (still delivered via the header callback below),
+    // then hands control to us for wsSend/wsRecv. The vendored curl 8.15
+    // build lacks curl_ws_start_frame (needs 8.16+), so the old
+    // push-model send (read callback) / receive (write callback) path
+    // can't be used; WS payload bytes are never delivered through
+    // WRITEFUNCTION under connect_only (confirmed in http.zig's "WS
+    // connect_only=2 bypasses WRITEFUNCTION" regression test).
+    try conn.setConnectOnly(true);
     try conn.setHeaderCallback(receivedHeaderCallback);
 
     var headers = try http_client.newHeadersForUrl(resolved_url);
@@ -307,6 +321,13 @@ fn teardownConn(self: *WebSocket) void {
     self._http_client.removeConn(conn);
     self._req_headers.deinit();
     self._conn = null;
+    // Reset so tryRecv/trySend/HttpClient.perform's extra_fds scan (which
+    // key off _established) stop touching this connection immediately,
+    // rather than relying solely on _conn == null - guards against
+    // re-entrant teardown from inside tryRecv's own receive loop (a
+    // server-initiated-close ack dispatches disconnected() mid-drain).
+    self._established = false;
+    self._active_socket = null;
     for (self._send_queue.items) |msg| {
         msg.deinit(self._exec.page);
     }
@@ -314,15 +335,12 @@ fn teardownConn(self: *WebSocket) void {
 }
 
 fn queueMessage(self: *WebSocket, msg: Message) !void {
-    const was_empty = self._send_queue.items.len == 0;
     try self._send_queue.append(self._arena, msg);
-
-    if (was_empty) {
-        // Unpause the send callback so libcurl will request data
-        if (self._conn) |conn| {
-            try conn.pause(.{ .cont = true });
-        }
-    }
+    // No wakeup needed: send()/close() only ever run from JS execution
+    // between HttpClient.perform() ticks (single worker thread owns both
+    // this WebSocket and its Client), so the next perform() tick's
+    // extra_fds construction naturally picks up a non-empty send queue
+    // and requests POLLOUT for it.
 }
 
 fn isValidProtocol(protocol: []const u8) bool {
@@ -432,7 +450,26 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     self._ready_state = .closing;
     self._close_code = code;
     self._close_reason = try self._arena.dupe(u8, reason);
-    try self.queueMessage(.close);
+    try self.queueMessage(try self.buildCloseMessage(code, reason));
+}
+
+// Serializes a close frame payload (2-byte big-endian code + optional
+// reason, RFC 6455 §5.5.1) into its own arena so it can be queued and sent
+// through the same uniform curl_ws_send path as text/binary messages.
+fn buildCloseMessage(self: *WebSocket, code: u16, reason: []const u8) !Message {
+    // Reason is capped at 123 bytes so the full close frame payload stays
+    // within the 125-byte control-frame limit (2 bytes code + 123 reason).
+    const reason_len: usize = @min(reason.len, 123);
+    const arena = try self._exec.getArena(2 + reason_len, "WebSocket.close");
+    errdefer self._exec.releaseArena(arena);
+
+    const data = try arena.alloc(u8, 2 + reason_len);
+    data[0] = @intCast((code >> 8) & 0xFF);
+    data[1] = @intCast(code & 0xFF);
+    if (reason_len > 0) {
+        @memcpy(data[2..], reason[0..reason_len]);
+    }
+    return .{ .close = .{ .arena = arena, .data = data } };
 }
 
 pub fn getUrl(self: *const WebSocket) []const u8 {
@@ -445,11 +482,8 @@ pub fn getReadyState(self: *const WebSocket) u16 {
 
 pub fn getBufferedAmount(self: *const WebSocket) u32 {
     var buffered: u32 = 0;
-    for (self._send_queue.items) |msg| {
-        switch (msg) {
-            .text, .binary => |byte_msg| buffered += @intCast(byte_msg.data.len),
-            .close => buffered += @intCast(2 + self._close_reason.len),
-        }
+    for (self._send_queue.items) |*msg| {
+        buffered += @intCast(msg.content().data.len);
     }
     return buffered;
 }
@@ -579,107 +613,95 @@ fn dispatchCloseEvent(self: *WebSocket, code: u16, reason: []const u8, was_clean
     }
 }
 
-fn sendDataCallback(buffer: [*]u8, buf_count: usize, buf_len: usize, data: *anyopaque) usize {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(buf_count == 1);
-    }
-    const conn: *http.Connection = @ptrCast(@alignCast(data));
-    return _sendDataCallback(conn, buffer[0..buf_len]) catch |err| {
-        log.warn(.websocket, "send callback", .{ .err = err });
-        return http.readfunc_pause;
-    };
+// Called once the CONNECT_ONLY=2 upgrade handshake has completed
+// successfully (multi transfer reported DONE with no error - see
+// HttpClient.processMessages). From here on libcurl's own transfer state
+// machine does nothing further for this handle: HttpClient.perform()
+// services it purely by polling _active_socket (added to Handles.poll's
+// extra_fds) and calling trySend/tryRecv below.
+pub fn establish(self: *WebSocket) !void {
+    const conn = self._conn orelse return error.NotConnected;
+    self._active_socket = try conn.getActiveSocket();
+    self._established = true;
 }
 
-fn _sendDataCallback(conn: *http.Connection, buf: []u8) !usize {
-    lp.assert(buf.len >= 2, "WS short buffer", .{ .len = buf.len });
-
-    const self = conn.transport.websocket;
-
-    if (self._send_queue.items.len == 0) {
-        // No data to send - pause until queueMessage is called
-        return http.readfunc_pause;
-    }
-
-    const msg = &self._send_queue.items[0];
-
-    switch (msg.*) {
-        .close => {
-            const code = self._close_code;
-            const reason = self._close_reason;
-
-            // Close frame: 2 bytes for code (big-endian) + optional reason
-            // Truncate reason to fit in buf (max 123 bytes per spec)
-            const reason_len: usize = @min(reason.len, 123, buf.len -| 2);
-            const frame_len = 2 + reason_len;
-            const to_copy = @min(buf.len, frame_len);
-
-            var close_payload: [125]u8 = undefined;
-            close_payload[0] = @intCast((code >> 8) & 0xFF);
-            close_payload[1] = @intCast(code & 0xFF);
-            if (reason_len > 0) {
-                @memcpy(close_payload[2..][0..reason_len], reason[0..reason_len]);
-            }
-
-            try conn.wsStartFrame(.close, to_copy);
-            @memcpy(buf[0..to_copy], close_payload[0..to_copy]);
-
-            _ = self._send_queue.orderedRemove(0);
-            return to_copy;
-        },
-        .text => |content| return self.writeContent(conn, buf, content, .text),
-        .binary => |content| return self.writeContent(conn, buf, content, .binary),
-    }
+pub fn wantsWrite(self: *const WebSocket) bool {
+    return self._send_queue.items.len > 0;
 }
 
-fn writeContent(self: *WebSocket, conn: *http.Connection, buf: []u8, byte_msg: Message.Content, frame_type: http.WsFrameType) !usize {
-    if (self._send_offset == 0) {
-        // start of the message
-        if (comptime IS_DEBUG) {
-            log.debug(.websocket, "send start", .{ .url = self._url, .len = byte_msg.data.len });
+// Flushes as much of the queued outgoing messages as the socket accepts
+// right now. A clean return (no error) means either the queue drained or
+// the socket signalled CURLE_AGAIN - either way the caller just waits for
+// the next writable poll. Any other error is a real transport failure;
+// the caller (HttpClient.perform) tears the connection down via
+// disconnected().
+pub fn trySend(self: *WebSocket) !void {
+    const conn = self._conn orelse return;
+
+    while (self._send_queue.items.len > 0) {
+        const msg = &self._send_queue.items[0];
+        const content = msg.content();
+        const remaining = content.data[self._send_offset..];
+
+        if (self._send_offset == 0 and comptime IS_DEBUG) {
+            log.debug(.websocket, "send start", .{ .url = self._url, .len = content.data.len });
         }
-        try conn.wsStartFrame(frame_type, byte_msg.data.len);
-    }
 
-    const remaining = byte_msg.data[self._send_offset..];
-    const to_copy = @min(remaining.len, buf.len);
-    @memcpy(buf[0..to_copy], remaining[0..to_copy]);
+        var sent: usize = 0;
+        conn.wsSend(remaining, &sent, msg.frameType()) catch |err| {
+            if (err == http.Error.Again) return;
+            return err;
+        };
 
-    self._send_offset += to_copy;
+        self._send_offset += sent;
+        if (self._send_offset < content.data.len) {
+            // Partial send. sent==0 with no error shouldn't normally
+            // happen (libcurl returns CURLE_AGAIN instead), but guard
+            // against a busy-loop rather than spinning forever.
+            if (sent == 0) return;
+            continue;
+        }
 
-    if (self._send_offset >= byte_msg.data.len) {
         const removed = self._send_queue.orderedRemove(0);
         removed.deinit(self._exec.page);
         if (comptime IS_DEBUG) {
-            log.debug(.websocket, "send complete", .{ .url = self._url, .len = byte_msg.data.len, .queue = self._send_queue.items.len });
+            log.debug(.websocket, "send complete", .{ .url = self._url, .len = content.data.len, .queue = self._send_queue.items.len });
         }
         self._send_offset = 0;
     }
-
-    return to_copy;
 }
 
-fn receivedDataCallback(buffer: [*]const u8, buf_count: usize, buf_len: usize, data: *anyopaque) usize {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(buf_count == 1);
+// Drains all currently-buffered incoming WS data. A clean return means
+// CURLE_AGAIN was hit (nothing more available right now). Any other error
+// (notably error.GotNothing on peer close) is a real transport failure;
+// the caller tears the connection down via disconnected().
+pub fn tryRecv(self: *WebSocket) !void {
+    const conn = self._conn orelse return;
+
+    var buf: [16 * 1024]u8 = undefined;
+    while (true) {
+        var n: usize = 0;
+        var meta: ?http.WsFrameMeta = null;
+        conn.wsRecv(&buf, &n, &meta) catch |err| {
+            if (err == http.Error.Again) return;
+            return err;
+        };
+        const m = meta orelse {
+            log.err(.websocket, "missing meta", .{ .url = self._url });
+            return error.NoFrameMeta;
+        };
+        try self.handleRecvChunk(m, buf[0..n]);
+
+        // handleRecvChunk's close-frame handling can call disconnected()
+        // directly (client-initiated close ack), tearing this connection
+        // down mid-drain. Stop immediately rather than looping back into
+        // conn.wsRecv on a connection HttpClient.removeConn may already
+        // have unlinked/queued for pool release.
+        if (!self._established) return;
     }
-    const conn: *http.Connection = @ptrCast(@alignCast(data));
-    _receivedDataCallback(conn, buffer[0..buf_len]) catch |err| {
-        log.warn(.websocket, "receive callback", .{ .err = err });
-        // TODO: are there errors, like an invalid frame, that we shouldn't treat
-        // as an error?
-        return http.writefunc_error;
-    };
-
-    return buf_len;
 }
 
-fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
-    const self = conn.transport.websocket;
-    const meta = conn.wsMeta() orelse {
-        log.err(.websocket, "missing meta", .{ .url = self._url });
-        return error.NoFrameMeta;
-    };
-
+fn handleRecvChunk(self: *WebSocket, meta: http.WsFrameMeta, data: []const u8) !void {
     if (meta.offset == 0) {
         if (comptime IS_DEBUG) {
             log.debug(.websocket, "incoming message", .{ .url = self._url, .len = meta.len, .bytes_left = meta.bytes_left, .type = meta.frame_type });
@@ -716,11 +738,13 @@ fn _receivedDataCallback(conn: *http.Connection, data: []const u8) !void {
             } else {
                 // Server-initiated close: send reciprocal close frame per RFC 6455 §5.5.1
                 self._close_code = received_code;
+                var reason: []const u8 = "";
                 if (message.len > 2) {
-                    self._close_reason = try self._arena.dupe(u8, message[2..]);
+                    reason = message[2..];
+                    self._close_reason = try self._arena.dupe(u8, reason);
                 }
                 self._ready_state = .closing;
-                try self.queueMessage(.close);
+                try self.queueMessage(try self.buildCloseMessage(received_code, reason));
             }
         },
         .ping, .pong, .cont => {},
@@ -783,18 +807,35 @@ fn receivedHeaderCallback(buffer: [*]const u8, header_count: usize, buf_len: usi
 }
 
 const Message = union(enum) {
-    close,
     text: Content,
     binary: Content,
+    // Pre-serialized close frame payload (2-byte big-endian code +
+    // optional reason, RFC 6455 §5.5.1). Built by buildCloseMessage so it
+    // can flow through the same uniform curl_ws_send path as text/binary.
+    close: Content,
 
     const Content = struct {
         arena: Allocator,
         data: []const u8,
     };
+
+    fn content(self: *const Message) Content {
+        return switch (self.*) {
+            inline else => |c| c,
+        };
+    }
+
+    fn frameType(self: *const Message) http.WsFrameType {
+        return switch (self.*) {
+            .text => .text,
+            .binary => .binary,
+            .close => .close,
+        };
+    }
+
     fn deinit(self: Message, page: *Page) void {
         switch (self) {
-            .text, .binary => |msg| page.releaseArena(msg.arena),
-            .close => {},
+            .text, .binary, .close => |msg| page.releaseArena(msg.arena),
         }
     }
 };

@@ -31,11 +31,14 @@ pub const ENABLE_DEBUG = false;
 
 pub const Blob = libcurl.CurlBlob;
 pub const WaitFd = libcurl.CurlWaitFd;
+pub const WaitEvents = libcurl.CurlWaitEvents;
 pub const readfunc_pause = libcurl.curl_readfunc_pause;
 pub const writefunc_error = libcurl.curl_writefunc_error;
 pub const WsFrameType = libcurl.WsFrameType;
+pub const WsFrameMeta = libcurl.WsFrameMeta;
+pub const CurlSocket = libcurl.CurlSocket;
 
-const Error = libcurl.Error;
+pub const Error = libcurl.Error;
 
 pub fn curl_version() [*c]const u8 {
     return libcurl.curl_version();
@@ -720,12 +723,30 @@ pub const Connection = struct {
         return self.getResponseCode();
     }
 
-    pub fn wsStartFrame(self: *const Connection, frame_type: libcurl.WsFrameType, size: usize) !void {
-        try libcurl.curl_ws_start_frame(self._easy, frame_type, @intCast(size));
+    // Raw fd behind an established CONNECT_ONLY=2 WebSocket transfer. Only
+    // meaningful after the transfer has connected (see setConnectOnly);
+    // used to add the socket into Handles.poll's extra_fds for manual
+    // servicing via wsSend/wsRecv, since libcurl's own multi-transfer state
+    // machine does nothing further for a connect-only handle once the
+    // upgrade handshake completes.
+    pub fn getActiveSocket(self: *const Connection) !libcurl.CurlSocket {
+        var sock: libcurl.CurlSocket = undefined;
+        try libcurl.curl_easy_getinfo(self._easy, .active_socket, &sock);
+        return sock;
     }
 
-    pub fn wsMeta(self: *const Connection) ?libcurl.WsFrameMeta {
-        return libcurl.curl_ws_meta(self._easy);
+    // Pull-model WebSocket send/recv (curl 8.15+; the alternative
+    // push-model curl_ws_start_frame API needs curl 8.16+ and isn't
+    // available in the vendored curl-impersonate build). Only valid once
+    // setConnectOnly(true) was used and the upgrade handshake has
+    // completed. See WebSocket.zig for the full transport built on top of
+    // these.
+    pub fn wsSend(self: *const Connection, buffer: []const u8, sent: *usize, frame_type: libcurl.WsFrameType) !void {
+        try libcurl.curl_ws_send(self._easy, buffer, sent, 0, frame_type);
+    }
+
+    pub fn wsRecv(self: *const Connection, buffer: []u8, recv: *usize, meta: *?libcurl.WsFrameMeta) !void {
+        try libcurl.curl_ws_recv(self._easy, buffer, recv, meta);
     }
 };
 
@@ -736,7 +757,30 @@ pub const Handles = struct {
         const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
         errdefer libcurl.curl_multi_cleanup(multi) catch {};
 
-        try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
+        // CURLMOPT_MAX_HOST_CONNECTIONS is a single shared bucket per
+        // (host, port) covering every connection curl knows about to that
+        // host - regular HTTP transfers *and* WebSocket handles alike, since
+        // both live on this same multi. Established WebSocket connections
+        // (CONNECT_ONLY=2) report their transfer as curl-DONE right after
+        // the upgrade handshake - see WebSocket.establish - even though the
+        // app keeps using the raw socket via curl_ws_send/curl_ws_recv long
+        // after that. From curl's point of view a DONE, still-added handle
+        // looks like an idle, reusable connection, so once the bucket for a
+        // host fills up curl silently closes the oldest one to make room
+        // for the next. Sized to httpMaxHostOpen() alone, that "oldest one"
+        // is regularly a WebSocket connection we're still actively using -
+        // CURLINFO_ACTIVESOCKET on it then returns CURL_SOCKET_BAD and the
+        // connection is stuck forever (confirmed via instrumented run: with
+        // the plain default of 4, exactly 4 of N concurrent WebSocket
+        // connections to one host stayed alive, the rest silently died).
+        // wsMaxConcurrent() is the real application-level cap on concurrent
+        // WebSocket connections (enforced up front in Network.newConnection,
+        // independent of this multi); folding it into the bucket size
+        // guarantees curl never needs to evict a live WS connection to
+        // admit a new one within that already-approved budget, while
+        // leaving httpMaxHostOpen()'s regular HTTP throttling untouched.
+        const max_host_connections = @as(u32, config.httpMaxHostOpen()) + config.wsMaxConcurrent();
+        try libcurl.curl_multi_setopt(multi, .max_host_connections, max_host_connections);
 
         return .{ .multi = multi };
     }
