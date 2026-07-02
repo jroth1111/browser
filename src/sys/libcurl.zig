@@ -243,6 +243,10 @@ pub const CurlInfo = enum(c.CURLINFO) {
     redirect_count = c.CURLINFO_REDIRECT_COUNT,
     response_code = c.CURLINFO_RESPONSE_CODE,
     connect_code = c.CURLINFO_HTTP_CONNECTCODE,
+    // Only meaningful once a transfer has connected (e.g. after a
+    // CURLOPT_CONNECT_ONLY handshake completes); used to recover the raw fd
+    // for manual polling alongside curl_ws_send/curl_ws_recv.
+    active_socket = c.CURLINFO_ACTIVESOCKET,
 };
 
 pub const Error = error{
@@ -777,6 +781,10 @@ pub fn curl_easy_getinfo(easy: *Curl, comptime info: CurlInfo, out: anytype) Err
         },
         .private => blk: {
             const p: **anyopaque = out;
+            break :blk c.curl_easy_getinfo(easy, inf, p);
+        },
+        .active_socket => blk: {
+            const p: *CurlSocket = out;
             break :blk c.curl_easy_getinfo(easy, inf, p);
         },
     };

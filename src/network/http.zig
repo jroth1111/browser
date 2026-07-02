@@ -1078,3 +1078,128 @@ test "opensocketCallback: block_private=false allows private IP" {
 
     try testing.expect(fd >= 0);
 }
+
+// Regression test locking in the invariant the WebSocket connect_only=2
+// transport (Path A) depends on: under CURLOPT_CONNECT_ONLY=2, WS payload
+// bytes are NOT delivered via WRITEFUNCTION (they're buffered internally by
+// curl for curl_ws_recv to pull). Verified directly against the vendored
+// curl 8.15 build and the real TestWSServer (started globally by
+// testing.zig) rather than assumed from docs/source reading alone.
+test "libcurl: WS connect_only=2 bypasses WRITEFUNCTION, curl_ws_send/recv round-trip works" {
+    const Ctx = struct {
+        got_101: bool = false,
+        header_calls: usize = 0,
+        write_calls: usize = 0,
+        write_bytes: usize = 0,
+    };
+
+    const cbs = struct {
+        fn header(buffer: [*]const u8, _: usize, len: usize, data: *anyopaque) usize {
+            const ctx: *Ctx = @ptrCast(@alignCast(data));
+            ctx.header_calls += 1;
+            const h = buffer[0..len];
+            if (std.mem.indexOf(u8, h, " 101 ")) |_| ctx.got_101 = true;
+            return len;
+        }
+        fn write(_: [*]const u8, _: usize, len: usize, data: *anyopaque) usize {
+            const ctx: *Ctx = @ptrCast(@alignCast(data));
+            ctx.write_calls += 1;
+            ctx.write_bytes += len;
+            return len;
+        }
+    };
+
+    var ctx = Ctx{};
+
+    const easy = libcurl.curl_easy_init() orelse return error.FailedToInitializeEasy;
+    defer libcurl.curl_easy_cleanup(easy);
+
+    const url: [:0]const u8 = "ws://127.0.0.1:9584/";
+    try libcurl.curl_easy_setopt(easy, .url, url.ptr);
+    try libcurl.curl_easy_setopt(easy, .connect_only, @as(c_long, 2));
+    try libcurl.curl_easy_setopt(easy, .header_data, &ctx);
+    try libcurl.curl_easy_setopt(easy, .header_function, cbs.header);
+    try libcurl.curl_easy_setopt(easy, .write_data, &ctx);
+    try libcurl.curl_easy_setopt(easy, .write_function, cbs.write);
+
+    const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
+    defer libcurl.curl_multi_cleanup(multi) catch {};
+
+    try libcurl.curl_multi_add_handle(multi, easy);
+
+    var done = false;
+    var done_err: ?Error = null;
+    var iterations: usize = 0;
+    var msgs_left: c_int = 0;
+    while (!done and iterations < 500) : (iterations += 1) {
+        var running: c_int = undefined;
+        try libcurl.curl_multi_perform(multi, &running);
+
+        while (libcurl.curl_multi_info_read(multi, &msgs_left)) |msg| {
+            switch (msg.data) {
+                .done => |err| {
+                    done = true;
+                    done_err = err;
+                },
+                else => {},
+            }
+        }
+        if (!done) {
+            var wait_fds: [0]libcurl.CurlWaitFd = .{};
+            try libcurl.curl_multi_poll(multi, &wait_fds, 100, null);
+        }
+    }
+
+    try testing.expect(done);
+    try testing.expectEqual(@as(?Error, null), done_err);
+    try testing.expect(ctx.got_101);
+    // THE ANSWER: under connect_only=2, WS payload bytes are buffered
+    // internally by curl (ws->recvbuf) for curl_ws_recv, NOT delivered via
+    // WRITEFUNCTION.
+    try testing.expectEqual(@as(usize, 0), ctx.write_calls);
+    try testing.expectEqual(@as(usize, 0), ctx.write_bytes);
+
+    var active_socket: libcurl.CurlSocket = undefined;
+    try libcurl.curl_easy_getinfo(easy, .active_socket, &active_socket);
+    try testing.expect(active_socket >= 0);
+
+    // Round-trip a message purely through curl_ws_send/curl_ws_recv now that
+    // the transfer is DONE (per docs: connect-only handles must stay added
+    // to the multi to keep working).
+    var sent: usize = 0;
+    const payload = "probe-message";
+    var send_iterations: usize = 0;
+    while (send_iterations < 200) : (send_iterations += 1) {
+        libcurl.curl_ws_send(easy, payload, &sent, 0, .text) catch |err| {
+            if (err == Error.Again) {
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        break;
+    }
+    try testing.expectEqual(payload.len, sent);
+
+    var recv_buf: [256]u8 = undefined;
+    var recv_n: usize = 0;
+    var meta: ?libcurl.WsFrameMeta = null;
+    var recv_iterations: usize = 0;
+    while (recv_iterations < 200) : (recv_iterations += 1) {
+        libcurl.curl_ws_recv(easy, &recv_buf, &recv_n, &meta) catch |err| {
+            if (err == Error.Again) {
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        break;
+    }
+    // Echo server prefixes text messages with "echo-".
+    try testing.expect(std.mem.startsWith(u8, recv_buf[0..recv_n], "echo-"));
+    // Confirm WRITEFUNCTION still didn't fire for the echoed reply either —
+    // it was retrieved exclusively through curl_ws_recv.
+    try testing.expectEqual(@as(usize, 0), ctx.write_calls);
+
+    try libcurl.curl_multi_remove_handle(multi, easy);
+}
