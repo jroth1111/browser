@@ -3,6 +3,8 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 const Seeds = @import("../../chimera/Seeds.zig");
 
+const EventTarget = @import("EventTarget.zig");
+
 const Execution = js.Execution;
 
 pub fn registerTypes() []const type {
@@ -11,11 +13,21 @@ pub fn registerTypes() []const type {
 
 const RTCPeerConnection = @This();
 
-pub const _prototype_root = true;
+_proto: *EventTarget,
 
 local_description_set: bool = false,
 remote_description_set: bool = false,
 closed: bool = false,
+
+_on_icecandidate: ?js.Function.Global = null,
+_on_icecandidateerror: ?js.Function.Global = null,
+_on_iceconnectionstatechange: ?js.Function.Global = null,
+_on_icegatheringstatechange: ?js.Function.Global = null,
+_on_connectionstatechange: ?js.Function.Global = null,
+_on_signalingstatechange: ?js.Function.Global = null,
+_on_negotiationneeded: ?js.Function.Global = null,
+_on_datachannel: ?js.Function.Global = null,
+_on_track: ?js.Function.Global = null,
 
 const RTCSessionDescriptionInit = struct {
     type: []const u8,
@@ -28,7 +40,13 @@ const RTCStatsReport = struct {};
 
 pub fn constructor(_: ?js.Value, exec: *Execution) !*RTCPeerConnection {
     if (!webrtcEnabled(exec)) return error.NotSupported;
-    return exec._factory.create(RTCPeerConnection{});
+    return exec._factory.eventTarget(RTCPeerConnection{
+        ._proto = undefined,
+    });
+}
+
+pub fn asEventTarget(self: *RTCPeerConnection) *EventTarget {
+    return self._proto;
 }
 
 pub fn createDataChannel(_: *RTCPeerConnection, label: []const u8, _: ?js.Value, exec: *Execution) !*RTCDataChannel {
@@ -134,6 +152,69 @@ pub fn close(self: *RTCPeerConnection) void {
     self.closed = true;
 }
 
+pub fn getOnIceCandidate(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_icecandidate;
+}
+pub fn setOnIceCandidate(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_icecandidate = cb;
+}
+
+pub fn getOnIceCandidateError(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_icecandidateerror;
+}
+pub fn setOnIceCandidateError(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_icecandidateerror = cb;
+}
+
+pub fn getOnIceConnectionStateChange(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_iceconnectionstatechange;
+}
+pub fn setOnIceConnectionStateChange(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_iceconnectionstatechange = cb;
+}
+
+pub fn getOnIceGatheringStateChange(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_icegatheringstatechange;
+}
+pub fn setOnIceGatheringStateChange(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_icegatheringstatechange = cb;
+}
+
+pub fn getOnConnectionStateChange(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_connectionstatechange;
+}
+pub fn setOnConnectionStateChange(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_connectionstatechange = cb;
+}
+
+pub fn getOnSignalingStateChange(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_signalingstatechange;
+}
+pub fn setOnSignalingStateChange(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_signalingstatechange = cb;
+}
+
+pub fn getOnNegotiationNeeded(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_negotiationneeded;
+}
+pub fn setOnNegotiationNeeded(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_negotiationneeded = cb;
+}
+
+pub fn getOnDataChannel(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_datachannel;
+}
+pub fn setOnDataChannel(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_datachannel = cb;
+}
+
+pub fn getOnTrack(self: *const RTCPeerConnection) ?js.Function.Global {
+    return self._on_track;
+}
+pub fn setOnTrack(self: *RTCPeerConnection, cb: ?js.Function.Global) void {
+    self._on_track = cb;
+}
+
 fn description(kind: []const u8, exec: *Execution) !RTCSessionDescriptionInit {
     return .{
         .type = kind,
@@ -194,6 +275,11 @@ test "WebApi: RTCPeerConnection masks profile exit IP when WebRTC is disabled" {
     try std.testing.expectEqualStrings("203.0.113.10", exitIpForProfile(true, "203.0.113.10"));
 }
 
+const testing = @import("../../testing.zig");
+test "WebApi: RTCPeerConnection" {
+    try testing.htmlRunner("rtc_peer_connection.html", .{});
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(RTCPeerConnection);
 
@@ -202,6 +288,8 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const Prototype = EventTarget;
 
     pub const constructor = bridge.constructor(RTCPeerConnection.constructor, .{ .dom_exception = true });
     pub const localDescription = bridge.accessor(RTCPeerConnection.getLocalDescription, null, .{ .null_as_undefined = true });
@@ -228,6 +316,16 @@ pub const JsApi = struct {
     pub const getTransceivers = bridge.function(RTCPeerConnection.getTransceivers, .{});
     pub const restartIce = bridge.function(RTCPeerConnection.restartIce, .{});
     pub const close = bridge.function(RTCPeerConnection.close, .{});
+
+    pub const onicecandidate = bridge.accessor(RTCPeerConnection.getOnIceCandidate, RTCPeerConnection.setOnIceCandidate, .{});
+    pub const onicecandidateerror = bridge.accessor(RTCPeerConnection.getOnIceCandidateError, RTCPeerConnection.setOnIceCandidateError, .{});
+    pub const oniceconnectionstatechange = bridge.accessor(RTCPeerConnection.getOnIceConnectionStateChange, RTCPeerConnection.setOnIceConnectionStateChange, .{});
+    pub const onicegatheringstatechange = bridge.accessor(RTCPeerConnection.getOnIceGatheringStateChange, RTCPeerConnection.setOnIceGatheringStateChange, .{});
+    pub const onconnectionstatechange = bridge.accessor(RTCPeerConnection.getOnConnectionStateChange, RTCPeerConnection.setOnConnectionStateChange, .{});
+    pub const onsignalingstatechange = bridge.accessor(RTCPeerConnection.getOnSignalingStateChange, RTCPeerConnection.setOnSignalingStateChange, .{});
+    pub const onnegotiationneeded = bridge.accessor(RTCPeerConnection.getOnNegotiationNeeded, RTCPeerConnection.setOnNegotiationNeeded, .{});
+    pub const ondatachannel = bridge.accessor(RTCPeerConnection.getOnDataChannel, RTCPeerConnection.setOnDataChannel, .{});
+    pub const ontrack = bridge.accessor(RTCPeerConnection.getOnTrack, RTCPeerConnection.setOnTrack, .{});
 };
 
 const RTCDataChannel = struct {

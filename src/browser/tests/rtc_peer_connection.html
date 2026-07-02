@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<script src="./testing.js"></script>
+
+<script id=RTCPeerConnection#instanceof>
+{
+  const pc = new RTCPeerConnection();
+  testing.expectEqual(true, pc instanceof RTCPeerConnection);
+  testing.expectEqual(true, pc instanceof EventTarget);
+  testing.expectEqual("[object RTCPeerConnection]", Object.prototype.toString.call(pc));
+}
+</script>
+
+<script id=RTCPeerConnection#addEventListener_and_dispatchEvent>
+{
+  // Real EventTarget composition: addEventListener/dispatchEvent must work
+  // on a live instance instead of throwing (the historical bug class was
+  // Object.create(EventTarget.prototype), which only sets up the prototype
+  // chain without real EventTarget construction state, so addEventListener
+  // and dispatchEvent throw TypeError).
+  const pc = new RTCPeerConnection();
+
+  let calls = 0;
+  const handler = (e) => {
+    testing.expectEqual("icecandidate", e.type);
+    testing.expectEqual(true, e.target === pc);
+    calls += 1;
+  };
+
+  pc.addEventListener("icecandidate", handler);
+
+  const event = new Event("icecandidate");
+  const notCancelled = pc.dispatchEvent(event);
+  testing.expectEqual(true, notCancelled);
+  testing.expectEqual(1, calls);
+
+  pc.removeEventListener("icecandidate", handler);
+  pc.dispatchEvent(new Event("icecandidate"));
+  testing.expectEqual(1, calls);
+}
+</script>
+
+<script id=RTCPeerConnection#event_handler_properties>
+{
+  const pc = new RTCPeerConnection();
+
+  testing.expectEqual(null, pc.onicecandidate);
+  testing.expectEqual(null, pc.ondatachannel);
+  testing.expectEqual(null, pc.oniceconnectionstatechange);
+  testing.expectEqual(null, pc.onicegatheringstatechange);
+  testing.expectEqual(null, pc.onconnectionstatechange);
+  testing.expectEqual(null, pc.onsignalingstatechange);
+  testing.expectEqual(null, pc.onnegotiationneeded);
+  testing.expectEqual(null, pc.ontrack);
+  testing.expectEqual(null, pc.onicecandidateerror);
+
+  const fn = () => {};
+  pc.onicecandidate = fn;
+  testing.expectEqual(true, pc.onicecandidate === fn);
+
+  pc.onicecandidate = null;
+  testing.expectEqual(null, pc.onicecandidate);
+}
+</script>

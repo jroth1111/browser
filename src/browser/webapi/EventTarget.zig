@@ -54,6 +54,7 @@ pub const Type = union(enum) {
     notification: *@import("Notification.zig"),
     media_devices: *@import("MediaDevices.zig"),
     animation: *@import("animation/Animation.zig"),
+    rtc_peer_connection: *@import("RTCPeerConnection.zig"),
 };
 
 pub fn init(page: *Page) !*EventTarget {
@@ -169,6 +170,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .notification => writer.writeAll("<Notification>"),
         .media_devices => writer.writeAll("<MediaDevices>"),
         .animation => writer.writeAll("<Animation>"),
+        .rtc_peer_connection => writer.writeAll("<RTCPeerConnection>"),
     };
 }
 
@@ -196,6 +198,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .notification => return "[object Notification]",
         .media_devices => return "[object MediaDevices]",
         .animation => return "[object Animation]",
+        .rtc_peer_connection => return "[object RTCPeerConnection]",
     };
 }
 
