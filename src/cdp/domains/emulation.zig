@@ -512,6 +512,43 @@ test "cdp.Emulation: low entropy Accept-CH response clears high entropy opt in" 
     try testing.expect(!snapshot.high_entropy_client_hint_present);
 }
 
+test "cdp.Emulation: screen.availHeight tracks screen.height instead of a frozen default (cross-signal consistency)" {
+    // Regression for a cross-signal incoherence: screen.availHeight used to
+    // be a bare hardcoded literal (1040) that only ever agreed with
+    // screen.height by coincidence, at the old fixed 1920x1080 default.
+    // Once the viewport moves (e.g. via Emulation.setDeviceMetricsOverride),
+    // a real browser's availHeight always tracks height minus a constant
+    // OS-chrome offset — the two must never drift apart or invert.
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-DM3" });
+    _ = try bc.session.createPage();
+    const page = bc.mainPage().?;
+    const frame = &page.frame;
+
+    // Default viewport: availHeight must be <= height and must not be the
+    // old frozen literal in a way decoupled from the real height.
+    try expectFrameEvalTrue(frame, "screen.availHeight <= screen.height");
+    try expectFrameEvalTrue(frame, "screen.availWidth <= screen.width");
+
+    try ctx.processMessage(.{
+        .id = 20,
+        .method = "Emulation.setDeviceMetricsOverride",
+        .params = .{ .width = 800, .height = 600 },
+    });
+    try ctx.expectSentResult(null, .{ .id = 20 });
+
+    // After the override, availHeight must have moved WITH height (not
+    // stayed pinned at the old default-viewport-derived constant), and the
+    // invariant availHeight <= height must still hold at the new size.
+    try testing.expectEqual(600, page.getViewport().height);
+    try expectFrameEvalTrue(frame, "screen.height === 600");
+    try expectFrameEvalTrue(frame, "screen.availHeight <= screen.height");
+    try expectFrameEvalTrue(frame, "screen.availHeight < 1040");
+    try expectFrameEvalTrue(frame, "screen.availWidth === screen.width");
+}
+
 test "cdp.Emulation: setDeviceMetricsOverride and clear" {
     var ctx = try testing.context();
     defer ctx.deinit();

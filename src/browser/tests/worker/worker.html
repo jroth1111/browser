@@ -247,6 +247,10 @@
       testing.expectEqual(r.loc_href, r.loc_to_string);
       testing.expectEqual('http:', r.loc_protocol);
       testing.expectTrue(r.loc_pathname.endsWith('api-worker.js'));
+
+      // isSecureContext (R10 #8 sibling)
+      testing.expectEqual('boolean', r.is_secure_context_type);
+      testing.expectEqual(true, r.is_secure_context);
     });
   }
 </script>
@@ -259,7 +263,11 @@
     worker.onmessage = function(event) {
       state.resolve(event.data);
     };
-    worker.postMessage({ pageUserAgent: navigator.userAgent });
+    worker.postMessage({
+      pageUserAgent: navigator.userAgent,
+      pagePlatform: navigator.platform,
+      pageIsSecureContext: window.isSecureContext,
+    });
 
     await state.done((data) => {
       testing.expectTrue(data.ok, 'worker navigator error: ' + data.err);
@@ -275,6 +283,12 @@
       testing.expectEqual(true, r.user_agent_matches_page);
       testing.expectEqual('Netscape', r.app_name);
       testing.expectTrue(r.platform.length > 0);
+      // Cross-signal identity coherence: the worker's navigator.platform and
+      // self.isSecureContext must agree with the same-origin page's values,
+      // not be independently derived/hardcoded copies that can drift apart.
+      testing.expectEqual(true, r.platform_matches_page);
+      testing.expectEqual('boolean', typeof r.is_secure_context);
+      testing.expectEqual(true, r.is_secure_context_matches_page);
       testing.expectEqual(true, r.on_line);
       testing.expectEqual(true, r.identity_stable);
 

@@ -26,7 +26,14 @@ onmessage = async function(event) {
       user_agent_matches_page: navigator.userAgent === event.data.pageUserAgent,
       app_name: navigator.appName,
       platform: navigator.platform,
+      platform_matches_page: navigator.platform === event.data.pagePlatform,
       on_line: navigator.onLine,
+      // Cross-signal identity coherence: a same-origin worker spawned from a
+      // secure-context page must itself report a secure context (both derive
+      // from the same origin-trustworthiness algorithm, not independent
+      // hardcoded values that can drift apart).
+      is_secure_context: self.isSecureContext,
+      is_secure_context_matches_page: self.isSecureContext === event.data.pageIsSecureContext,
       // SameObject: navigator should be stable across reads.
       identity_stable: navigator === navigator,
 

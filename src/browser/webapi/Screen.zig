@@ -53,6 +53,18 @@ pub fn getHeight(_: *const Screen, frame: *Frame) u32 {
     return frame._page.getViewport().height;
 }
 
+// Chrome's availHeight excludes OS-chrome (taskbar/dock) from the full
+// screen height. That offset is a reasonable constant, but availHeight must
+// still move with the real viewport height (e.g. after
+// Emulation.setDeviceMetricsOverride) rather than being a frozen literal
+// that only agreed with `height` at the old hardcoded 1920x1080 default.
+const avail_height_os_chrome_offset: u32 = 40;
+
+pub fn getAvailHeight(self: *const Screen, frame: *Frame) u32 {
+    const height = self.getHeight(frame);
+    return if (height > avail_height_os_chrome_offset) height - avail_height_os_chrome_offset else height;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Screen);
 
@@ -65,7 +77,7 @@ pub const JsApi = struct {
     pub const width = bridge.accessor(Screen.getWidth, null, .{});
     pub const height = bridge.accessor(Screen.getHeight, null, .{});
     pub const availWidth = bridge.accessor(Screen.getWidth, null, .{});
-    pub const availHeight = bridge.property(1040, .{ .template = false });
+    pub const availHeight = bridge.accessor(Screen.getAvailHeight, null, .{});
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });
     pub const orientation = bridge.accessor(Screen.getOrientation, null, .{});
