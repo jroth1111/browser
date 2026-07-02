@@ -84,6 +84,7 @@ pub const Type = union(enum) {
     cookie_change_event: *@import("event/CookieChangeEvent.zig"),
     toggle_event: *@import("event/ToggleEvent.zig"),
     media_query_list_event: *@import("event/MediaQueryListEvent.zig"),
+    rtc_peer_connection_ice_event: *@import("event/RTCPeerConnectionIceEvent.zig"),
 };
 
 pub const Options = struct {
@@ -178,6 +179,7 @@ pub fn is(self: *Event, comptime T: type) ?*T {
         .cookie_change_event => |e| return if (T == @import("event/CookieChangeEvent.zig")) e else null,
         .toggle_event => |e| return if (T == @import("event/ToggleEvent.zig")) e else null,
         .media_query_list_event => |e| return if (T == @import("event/MediaQueryListEvent.zig")) e else null,
+        .rtc_peer_connection_ice_event => |e| return if (T == @import("event/RTCPeerConnectionIceEvent.zig")) e else null,
         .ui_event => |e| {
             if (T == @import("event/UIEvent.zig")) {
                 return e;

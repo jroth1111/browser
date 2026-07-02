@@ -61,3 +61,85 @@
   testing.expectEqual(null, pc.onicecandidate);
 }
 </script>
+
+<script id=RTCPeerConnection#automatic_icecandidate_gathering type=module>
+{
+  // Real Chrome fires a live `icecandidate` sequence (a host candidate,
+  // then a final null-candidate end-of-gathering signal) once a local
+  // description is set - this is the pattern WebRTC IP-leak detectors
+  // (e.g. pixelscan.net) rely on and hang forever without. This test
+  // exercises the automatic dispatch path (not manual dispatchEvent(),
+  // which #addEventListener_and_dispatchEvent above already covers).
+  const state = await testing.async();
+
+  const pc = new RTCPeerConnection();
+  testing.expectEqual("new", pc.iceGatheringState);
+
+  const gatheringStates = [];
+  pc.onicegatheringstatechange = () => {
+    gatheringStates.push(pc.iceGatheringState);
+  };
+
+  // Both dispatch paths - the on* property handler and addEventListener -
+  // must receive the same events (matches the manual-dispatch coverage in
+  // #addEventListener_and_dispatchEvent above).
+  const onPropertyCandidates = [];
+  pc.onicecandidate = (e) => {
+    testing.expectEqual(true, e instanceof Event);
+    testing.expectEqual("icecandidate", e.type);
+    testing.expectEqual(true, e.target === pc);
+    onPropertyCandidates.push(e.candidate);
+  };
+
+  const addListenerCandidates = [];
+  pc.addEventListener("icecandidate", (e) => {
+    addListenerCandidates.push(e.candidate);
+  });
+
+  const offer = await pc.createOffer();
+  testing.expectEqual(true, offer.sdp.includes("a=candidate:"));
+
+  // Gathering must not start before setLocalDescription (an ICE agent must
+  // not gather candidates prior to setLocalDescription, per spec): no
+  // events, no state transition yet, purely from calling createOffer().
+  testing.expectEqual("new", pc.iceGatheringState);
+  testing.expectEqual(0, onPropertyCandidates.length);
+  testing.expectEqual(0, gatheringStates.length);
+
+  await pc.setLocalDescription(offer);
+  state.resolve();
+
+  await state.done(() => {
+    testing.expectEqual("gathering", gatheringStates[0]);
+    testing.expectEqual("complete", gatheringStates[1]);
+    testing.expectEqual(2, gatheringStates.length);
+    testing.expectEqual("complete", pc.iceGatheringState);
+
+    testing.expectEqual(2, onPropertyCandidates.length);
+    testing.expectEqual(true, onPropertyCandidates[0] !== null);
+    testing.expectEqual(null, onPropertyCandidates[1]);
+
+    testing.expectEqual(2, addListenerCandidates.length);
+    testing.expectEqual(true, addListenerCandidates[0] !== null);
+    testing.expectEqual(null, addListenerCandidates[1]);
+
+    // The dispatched candidate must reuse the exact same declared exit IP
+    // already baked into the SDP - never a new, independently-sourced
+    // address, and never a real local/network IP.
+    const candidate = onPropertyCandidates[0];
+    testing.expectEqual(true, candidate instanceof RTCIceCandidate);
+    testing.expectEqual(true, offer.sdp.includes(candidate.address));
+    testing.expectEqual(true, candidate.candidate.includes(candidate.address));
+    testing.expectEqual("host", candidate.type);
+    testing.expectEqual(true, candidate.usernameFragment.length > 0);
+
+    // Gathering is one-shot: a second setLocalDescription() call must not
+    // re-fire the sequence.
+  });
+
+  await pc.setLocalDescription(offer);
+  testing.expectEqual(2, onPropertyCandidates.length);
+  testing.expectEqual(2, gatheringStates.length);
+}
+</script>
+

@@ -4,11 +4,14 @@ const js = @import("../js/js.zig");
 const Seeds = @import("../../chimera/Seeds.zig");
 
 const EventTarget = @import("EventTarget.zig");
+const Event = @import("Event.zig");
+const RTCPeerConnectionIceEvent = @import("event/RTCPeerConnectionIceEvent.zig");
 
 const Execution = js.Execution;
+const Allocator = std.mem.Allocator;
 
 pub fn registerTypes() []const type {
-    return &.{ RTCPeerConnection, RTCDataChannel };
+    return &.{ RTCPeerConnection, RTCDataChannel, RTCIceCandidate };
 }
 
 const RTCPeerConnection = @This();
@@ -18,6 +21,13 @@ _proto: *EventTarget,
 local_description_set: bool = false,
 remote_description_set: bool = false,
 closed: bool = false,
+
+// Real Chrome only starts ICE candidate gathering once a local description
+// has been set (an ICE agent must not gather candidates prior to
+// setLocalDescription, per the WebRTC spec), and gathering never restarts
+// for the lifetime of this synthetic single-candidate connection.
+_ice_gathering_state: IceGatheringState = .new,
+_ice_gathering_started: bool = false,
 
 _on_icecandidate: ?js.Function.Global = null,
 _on_icecandidateerror: ?js.Function.Global = null,
@@ -37,6 +47,20 @@ const RTCSessionDescriptionInit = struct {
 const RTCConfiguration = struct {};
 
 const RTCStatsReport = struct {};
+
+const IceGatheringState = enum {
+    new,
+    gathering,
+    complete,
+
+    fn toString(self: IceGatheringState) []const u8 {
+        return switch (self) {
+            .new => "new",
+            .gathering => "gathering",
+            .complete => "complete",
+        };
+    }
+};
 
 pub fn constructor(_: ?js.Value, exec: *Execution) !*RTCPeerConnection {
     if (!webrtcEnabled(exec)) return error.NotSupported;
@@ -65,6 +89,7 @@ pub fn createAnswer(_: *RTCPeerConnection, exec: *Execution) !js.Promise {
 
 pub fn setLocalDescription(self: *RTCPeerConnection, _: ?RTCSessionDescriptionInit, exec: *Execution) !js.Promise {
     self.local_description_set = true;
+    try self.startIceGathering(exec);
     return exec.js.local.?.resolvePromise(js.Undefined{});
 }
 
@@ -118,8 +143,8 @@ pub fn getSignalingState(self: *const RTCPeerConnection) []const u8 {
     return "stable";
 }
 
-pub fn getIceGatheringState(_: *const RTCPeerConnection) []const u8 {
-    return "complete";
+pub fn getIceGatheringState(self: *const RTCPeerConnection) []const u8 {
+    return self._ice_gathering_state.toString();
 }
 
 pub fn getIceConnectionState(self: *const RTCPeerConnection) []const u8 {
@@ -227,6 +252,7 @@ fn sdp(exec: *Execution) ![]const u8 {
     const seed = profileSeed(exec);
     const ufrag = Seeds.mix(seed, 0x574542525443);
     const pwd = Seeds.mix(seed, 0x4348494D455241);
+    const candidate_attr = try iceCandidateAttr(exec.call_arena, ip);
     return std.fmt.allocPrint(
         exec.call_arena,
         "v=0\r\n" ++
@@ -243,10 +269,80 @@ fn sdp(exec: *Execution) ![]const u8 {
             "a=ice-pwd:{x}{x}\r\n" ++
             "a=fingerprint:sha-256 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r\n" ++
             "a=setup:actpass\r\n" ++
-            "a=candidate:1 1 udp 2122260223 {s} 9 typ host generation 0 network-id 1\r\n" ++
+            "a={s}\r\n" ++
             "a=end-of-candidates\r\n",
-        .{ seed, ip, ufrag, pwd, Seeds.mix(seed, 0x504153535744), ip },
+        .{ seed, ip, ufrag, pwd, Seeds.mix(seed, 0x504153535744), candidate_attr },
     );
+}
+
+// Shared source of truth for the fake host candidate: both the static SDP
+// (`sdp()`, above) and the live `icecandidate` event dispatch (below) build
+// this from the same declared profile exit IP, so nothing here ever gathers
+// or exposes a real local/network address.
+fn iceCandidateAttr(arena: Allocator, ip: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(
+        arena,
+        "candidate:1 1 udp 2122260223 {s} 9 typ host generation 0 network-id 1",
+        .{ip},
+    );
+}
+
+fn iceUfragHex(arena: Allocator, seed: u64) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{x}", .{Seeds.mix(seed, 0x574542525443)});
+}
+
+// Fires the real Chrome `icecandidate`/`icegatheringstatechange` sequence
+// that RTCPeerConnection never dispatched before: gathering starts once a
+// local description is set, one host candidate (derived from the same
+// declared exit IP already baked into the SDP) is announced, then gathering
+// completes and a final null-candidate `icecandidate` event signals
+// end-of-candidates. Sites that wait for that null-candidate signal (the
+// universal WebRTC IP-leak-detection pattern) would otherwise hang forever.
+fn startIceGathering(self: *RTCPeerConnection, exec: *Execution) !void {
+    if (self._ice_gathering_started or self.closed) {
+        return;
+    }
+    self._ice_gathering_started = true;
+
+    const target = self.asEventTarget();
+
+    self._ice_gathering_state = .gathering;
+    try self.dispatchIceGatheringStateChange(exec, target);
+
+    const ip = profileExitIp(exec);
+    const candidate = try exec._factory.create(RTCIceCandidate{
+        ._candidate = try iceCandidateAttr(exec.arena, ip),
+        ._address = ip,
+        ._username_fragment = try iceUfragHex(exec.arena, profileSeed(exec)),
+    });
+
+    const candidate_event = try RTCPeerConnectionIceEvent.initTrusted(
+        comptime .wrap("icecandidate"),
+        .{ .candidate = candidate },
+        exec.page,
+    );
+    try exec.dispatch(target, candidate_event.asEvent(), self._on_icecandidate, .{ .context = "RTCPeerConnection icecandidate" });
+
+    // A listener may have closed the connection synchronously in response
+    // to the candidate above; real Chrome fires no further events once closed.
+    if (self.closed) {
+        return;
+    }
+
+    self._ice_gathering_state = .complete;
+    try self.dispatchIceGatheringStateChange(exec, target);
+
+    const end_event = try RTCPeerConnectionIceEvent.initTrusted(
+        comptime .wrap("icecandidate"),
+        .{ .candidate = null },
+        exec.page,
+    );
+    try exec.dispatch(target, end_event.asEvent(), self._on_icecandidate, .{ .context = "RTCPeerConnection icecandidate end-of-candidates" });
+}
+
+fn dispatchIceGatheringStateChange(self: *RTCPeerConnection, exec: *Execution, target: *EventTarget) !void {
+    const event = try Event.initTrusted(.wrap("icegatheringstatechange"), .{}, exec.page);
+    try exec.dispatch(target, event, self._on_icegatheringstatechange, .{ .context = "RTCPeerConnection icegatheringstatechange" });
 }
 
 fn profileExitIp(exec: *const Execution) []const u8 {
@@ -359,5 +455,89 @@ const RTCDataChannel = struct {
         pub const readyState = bridge.accessor(RTCDataChannel.getReadyState, null, .{});
         pub const send = bridge.function(RTCDataChannel.send, .{});
         pub const close = bridge.function(RTCDataChannel.close, .{});
+    };
+};
+
+// The candidate carried by a real `icecandidate` event. Every dynamic field
+// here (`_candidate`, `_address`, `_username_fragment`) is derived solely
+// from the same declared profile exit IP / seed already used to build the
+// static SDP in `sdp()` above - never a real local/network address.
+pub const RTCIceCandidate = struct {
+    _candidate: []const u8,
+    _address: []const u8,
+    _username_fragment: []const u8,
+    _sdp_mid: []const u8 = "0",
+    _sdp_m_line_index: u16 = 0,
+    _foundation: []const u8 = "1",
+    _component: []const u8 = "rtp",
+    _priority: u32 = 2122260223,
+    _protocol: []const u8 = "udp",
+    _port: u16 = 9,
+    _type: []const u8 = "host",
+
+    pub fn getCandidate(self: *const RTCIceCandidate) []const u8 {
+        return self._candidate;
+    }
+
+    pub fn getAddress(self: *const RTCIceCandidate) []const u8 {
+        return self._address;
+    }
+
+    pub fn getUsernameFragment(self: *const RTCIceCandidate) []const u8 {
+        return self._username_fragment;
+    }
+
+    pub fn getSdpMid(self: *const RTCIceCandidate) []const u8 {
+        return self._sdp_mid;
+    }
+
+    pub fn getSdpMLineIndex(self: *const RTCIceCandidate) u16 {
+        return self._sdp_m_line_index;
+    }
+
+    pub fn getFoundation(self: *const RTCIceCandidate) []const u8 {
+        return self._foundation;
+    }
+
+    pub fn getComponent(self: *const RTCIceCandidate) []const u8 {
+        return self._component;
+    }
+
+    pub fn getPriority(self: *const RTCIceCandidate) u32 {
+        return self._priority;
+    }
+
+    pub fn getProtocol(self: *const RTCIceCandidate) []const u8 {
+        return self._protocol;
+    }
+
+    pub fn getPort(self: *const RTCIceCandidate) u16 {
+        return self._port;
+    }
+
+    pub fn getType(self: *const RTCIceCandidate) []const u8 {
+        return self._type;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(RTCIceCandidate);
+
+        pub const Meta = struct {
+            pub const name = "RTCIceCandidate";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const candidate = bridge.accessor(RTCIceCandidate.getCandidate, null, .{});
+        pub const address = bridge.accessor(RTCIceCandidate.getAddress, null, .{});
+        pub const usernameFragment = bridge.accessor(RTCIceCandidate.getUsernameFragment, null, .{});
+        pub const sdpMid = bridge.accessor(RTCIceCandidate.getSdpMid, null, .{});
+        pub const sdpMLineIndex = bridge.accessor(RTCIceCandidate.getSdpMLineIndex, null, .{});
+        pub const foundation = bridge.accessor(RTCIceCandidate.getFoundation, null, .{});
+        pub const component = bridge.accessor(RTCIceCandidate.getComponent, null, .{});
+        pub const priority = bridge.accessor(RTCIceCandidate.getPriority, null, .{});
+        pub const protocol = bridge.accessor(RTCIceCandidate.getProtocol, null, .{});
+        pub const port = bridge.accessor(RTCIceCandidate.getPort, null, .{});
+        pub const @"type" = bridge.accessor(RTCIceCandidate.getType, null, .{});
     };
 };
