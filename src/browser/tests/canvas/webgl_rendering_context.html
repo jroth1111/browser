@@ -245,6 +245,78 @@
 }
 </script>
 
+<script id=WebGLRenderingContext#drawElements_indexed_quad>
+{
+  const element = document.createElement("canvas");
+  element.setAttribute("width", "16");
+  element.setAttribute("height", "16");
+  const ctx = element.getContext("webgl");
+
+  const vertexShader = ctx.createShader(ctx.VERTEX_SHADER);
+  ctx.shaderSource(vertexShader, "attribute vec2 position; void main() { gl_Position = vec4(position, 0.0, 1.0); }");
+  ctx.compileShader(vertexShader);
+
+  const fragmentShader = ctx.createShader(ctx.FRAGMENT_SHADER);
+  ctx.shaderSource(fragmentShader, "void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }");
+  ctx.compileShader(fragmentShader);
+
+  const program = ctx.createProgram();
+  ctx.attachShader(program, vertexShader);
+  ctx.attachShader(program, fragmentShader);
+  ctx.linkProgram(program);
+  testing.expectEqual(true, ctx.getProgramParameter(program, ctx.LINK_STATUS));
+  ctx.useProgram(program);
+  const position = ctx.getAttribLocation(program, "position");
+  ctx.enableVertexAttribArray(position);
+
+  // A quad covering the whole clip space, built from 4 vertices + an
+  // element/index buffer describing two triangles - mirrors the pattern
+  // real-world fingerprinting sites (e.g. pixelscan.net) use to draw a
+  // solid-color rectangle via drawElements rather than drawArrays.
+  const vertexBuffer = ctx.createBuffer();
+  ctx.bindBuffer(ctx.ARRAY_BUFFER, vertexBuffer);
+  ctx.bufferData(ctx.ARRAY_BUFFER, new Float32Array([
+    -1, -1,
+     1, -1,
+     1,  1,
+    -1,  1,
+  ]), ctx.STATIC_DRAW);
+  ctx.vertexAttribPointer(position, 2, ctx.FLOAT, false, 0, 0);
+
+  ctx.clearColor(0, 0, 0, 0);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+
+  const pixelsBeforeIndexBuffer = new Uint8Array(4);
+  ctx.drawElements(ctx.TRIANGLES, 6, ctx.UNSIGNED_SHORT, 0);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixelsBeforeIndexBuffer);
+  testing.expectEqual(0, pixelsBeforeIndexBuffer[0]);
+  testing.expectEqual(0, pixelsBeforeIndexBuffer[3]);
+
+  const indexBuffer = ctx.createBuffer();
+  ctx.bindBuffer(ctx.ELEMENT_ARRAY_BUFFER, indexBuffer);
+  ctx.bufferData(ctx.ELEMENT_ARRAY_BUFFER, new Uint16Array([3, 2, 1, 3, 1, 0]), ctx.STATIC_DRAW);
+
+  ctx.drawElements(ctx.TRIANGLES, 6, ctx.UNSIGNED_SHORT, 0);
+  const pixelsAfterDraw = new Uint8Array(4);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixelsAfterDraw);
+  testing.expectEqual(255, pixelsAfterDraw[0]);
+  testing.expectEqual(0, pixelsAfterDraw[1]);
+  testing.expectEqual(0, pixelsAfterDraw[2]);
+  testing.expectEqual(255, pixelsAfterDraw[3]);
+
+  // Deleting the bound element buffer un-binds it, so a subsequent
+  // drawElements call is a no-op again.
+  ctx.deleteBuffer(indexBuffer);
+  ctx.clearColor(0, 0, 0, 0);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+  ctx.drawElements(ctx.TRIANGLES, 6, ctx.UNSIGNED_SHORT, 0);
+  const pixelsAfterDelete = new Uint8Array(4);
+  ctx.readPixels(0, 0, 1, 1, ctx.RGBA, ctx.UNSIGNED_BYTE, pixelsAfterDelete);
+  testing.expectEqual(0, pixelsAfterDelete[0]);
+  testing.expectEqual(0, pixelsAfterDelete[3]);
+}
+</script>
+
 <script id=WebGLRenderingContext#texture_sampler_draw_state>
 {
   const element = document.createElement("canvas");

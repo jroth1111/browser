@@ -55,6 +55,7 @@ clear_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
 draw_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
 has_drawn_pixels: bool = false,
 bound_array_buffer: ?*WebGLBuffer = null,
+bound_element_array_buffer: ?*WebGLBuffer = null,
 bound_framebuffer: ?*WebGLFramebuffer = null,
 texture_units_2d: [texture_unit_count]?*WebGLTexture = .{null} ** texture_unit_count,
 active_texture_unit: usize = 0,
@@ -1107,8 +1108,11 @@ pub fn readPixels(self: *const WebGLRenderingContext, _: i32, _: i32, width: i32
 }
 
 pub fn bindBuffer(self: *WebGLRenderingContext, target: u32, buffer: ?*WebGLBuffer) void {
-    if (target != glConst32(ARRAY_BUFFER)) return;
-    self.bound_array_buffer = buffer;
+    if (target == glConst32(ARRAY_BUFFER)) {
+        self.bound_array_buffer = buffer;
+    } else if (target == glConst32(ELEMENT_ARRAY_BUFFER)) {
+        self.bound_element_array_buffer = buffer;
+    }
 }
 
 pub fn bindFramebuffer(self: *WebGLRenderingContext, target: u32, framebuffer: ?*WebGLFramebuffer) void {
@@ -1130,8 +1134,12 @@ pub fn activeTexture(self: *WebGLRenderingContext, texture: u32) void {
 }
 
 pub fn bufferData(self: *WebGLRenderingContext, target: u32, _: ?js.Value, usage: u32) void {
-    if (target != glConst32(ARRAY_BUFFER)) return;
-    const buffer = self.bound_array_buffer orelse return;
+    const buffer = if (target == glConst32(ARRAY_BUFFER))
+        self.bound_array_buffer orelse return
+    else if (target == glConst32(ELEMENT_ARRAY_BUFFER))
+        self.bound_element_array_buffer orelse return
+    else
+        return;
     if (buffer.deleted) return;
     buffer.byte_length = 1;
     buffer.usage = usage;
@@ -1158,6 +1166,31 @@ pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i3
     if (!self.attrib0_array_enabled or !self.attrib0_pointer_enabled) return;
     const buffer = self.bound_array_buffer orelse return;
     if (buffer.deleted or buffer.byte_length == 0) return;
+    const program = self.current_program orelse return;
+    if (!program.linked or program.deleted) return;
+    const fragment_shader = program.fragment_shader orelse return;
+    if (!fragment_shader.compiled or fragment_shader.deleted) return;
+
+    const pixel_values = self.fragmentDrawColor(program, fragment_shader) orelse return;
+    if (self.bound_framebuffer != null) {
+        if (self.boundFramebufferTexture()) |texture| {
+            setTexturePixels(texture, pixel_values);
+            texture.has_image = true;
+        }
+        return;
+    }
+    self.draw_pixel_values = pixel_values;
+    self.has_drawn_pixels = true;
+}
+
+pub fn drawElements(self: *WebGLRenderingContext, mode: u32, count: i32, typ: u32, _: i32) void {
+    if (mode != glConst32(TRIANGLES) or count < 3) return;
+    if (typ != glConst32(UNSIGNED_BYTE) and typ != glConst32(UNSIGNED_SHORT)) return;
+    if (!self.attrib0_array_enabled or !self.attrib0_pointer_enabled) return;
+    const array_buffer = self.bound_array_buffer orelse return;
+    if (array_buffer.deleted or array_buffer.byte_length == 0) return;
+    const element_buffer = self.bound_element_array_buffer orelse return;
+    if (element_buffer.deleted or element_buffer.byte_length == 0) return;
     const program = self.current_program orelse return;
     if (!program.linked or program.deleted) return;
     const fragment_shader = program.fragment_shader orelse return;
@@ -1257,6 +1290,7 @@ pub fn deleteBuffer(self: *WebGLRenderingContext, buffer: ?*WebGLBuffer) void {
     target.deleted = true;
     target.byte_length = 0;
     if (self.bound_array_buffer == target) self.bound_array_buffer = null;
+    if (self.bound_element_array_buffer == target) self.bound_element_array_buffer = null;
 }
 
 pub fn deleteFramebuffer(self: *WebGLRenderingContext, framebuffer: ?*WebGLFramebuffer) void {
@@ -1385,7 +1419,7 @@ pub const JsApi = struct {
     pub const disable = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const disableVertexAttribArray = bridge.function(WebGLRenderingContext.disableVertexAttribArray, .{});
     pub const drawArrays = bridge.function(WebGLRenderingContext.drawArrays, .{});
-    pub const drawElements = bridge.function(WebGLRenderingContext.noop4, .{ .noop = true });
+    pub const drawElements = bridge.function(WebGLRenderingContext.drawElements, .{});
     pub const enable = bridge.function(WebGLRenderingContext.noop1, .{ .noop = true });
     pub const enableVertexAttribArray = bridge.function(WebGLRenderingContext.enableVertexAttribArray, .{});
     pub const finish = bridge.function(WebGLRenderingContext.noop, .{ .noop = true });
