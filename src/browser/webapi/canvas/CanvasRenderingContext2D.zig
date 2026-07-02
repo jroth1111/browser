@@ -344,19 +344,15 @@ pub fn stroke(self: *CanvasRenderingContext2D) void {
 pub fn clip(self: *CanvasRenderingContext2D, maybe_fill_rule: ?[]const u8) void {
     self._paint_stack.appendClip(self._path, maybe_fill_rule);
 }
-pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
+pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64, exec: *Execution) !void {
     self.syncComposite();
-    const text_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font) orelse return;
-    if (self._transform.filledRect(text_rect)) |transformed| {
-        self._paint_stack.appendRect(transformed);
-    }
+    const owned = try exec.arena.dupe(u8, text);
+    self._paint_stack.appendFilledText(owned, x, y, max_width, self._fill_style, self._font, self._transform);
 }
-pub fn strokeText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
+pub fn strokeText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64, exec: *Execution) !void {
     self.syncComposite();
-    const text_rect = CanvasBitmap.textFilledRect(text, x, y, max_width, self._fill_style, self._font) orelse return;
-    if (self._transform.filledRect(text_rect)) |transformed| {
-        self._paint_stack.appendRect(transformed);
-    }
+    const owned = try exec.arena.dupe(u8, text);
+    self._paint_stack.appendFilledText(owned, x, y, max_width, self._stroke_style, self._font, self._transform);
 }
 pub fn measureText(self: *const CanvasRenderingContext2D, text: []const u8, exec: *Execution) !*TextMetrics {
     const font_size = CanvasBitmap.fontPixelSize(self._font);

@@ -523,19 +523,95 @@
   ctx.font = "18px/1.2 Arial";
   testing.expectEqual("18px/1.2 Arial", ctx.font);
 
-  const before = ctx.getImageData(2, 12, 1, 1).data;
-  testing.expectEqual(0, before[3]);
+  // Count opaque pixels in a region; glyph rendering fills only glyph shapes,
+  // so we assert over a band rather than a single pixel.
+  function opaqueCount(x, y, w, h) {
+    const data = ctx.getImageData(x, y, w, h).data;
+    let n = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) n++;
+    return n;
+  }
+
+  testing.expectEqual(0, opaqueCount(0, 0, 96, 32));
   ctx.fillStyle = "#111111";
   ctx.fillText("Chimera", 2, 22);
-  const after = ctx.getImageData(2, 12, 1, 1).data;
-  testing.expectEqual(true, after[3] > 0);
+  // Text now rasterizes as actual glyphs: some pixels set, plenty of empty
+  // space around them (unlike the old solid bounding-box block).
+  const drawn = opaqueCount(0, 0, 96, 32);
+  testing.expectEqual(true, drawn > 0);
+  testing.expectEqual(true, drawn < 96 * 32);
 
   ctx.clearRect(0, 0, 96, 32);
   ctx.fillText("Chimera", 2, 22, 6);
-  const insideLimitedWidth = ctx.getImageData(5, 12, 1, 1).data;
-  const outsideLimitedWidth = ctx.getImageData(12, 12, 1, 1).data;
-  testing.expectEqual(true, insideLimitedWidth[3] > 0);
-  testing.expectEqual(0, outsideLimitedWidth[3]);
+  // maxWidth compresses the text into [2, 8); nothing renders past it.
+  testing.expectEqual(true, opaqueCount(2, 8, 6, 16) > 0);
+  testing.expectEqual(0, opaqueCount(10, 8, 20, 16));
+}
+</script>
+
+<script id="CanvasRenderingContext2D#fillText renders glyph shapes">
+{
+  // Rasterize `text` at a fixed spot and return a signature string of which
+  // pixels are opaque, plus the opaque pixel count.
+  function raster(text) {
+    const element = document.createElement("canvas");
+    element.width = 120;
+    element.height = 32;
+    const ctx = element.getContext("2d");
+    ctx.fillStyle = "#000000";
+    ctx.font = "24px sans-serif";
+    ctx.fillText(text, 4, 24);
+    const data = ctx.getImageData(0, 0, 120, 32).data;
+    let sig = "";
+    let count = 0;
+    for (let i = 3; i < data.length; i += 4) {
+      const on = data[i] > 0;
+      if (on) count++;
+      sig += on ? "1" : "0";
+    }
+    return { sig, count };
+  }
+
+  // (a) Different strings produce different pixel output (not identical blocks).
+  const abc = raster("ABC");
+  const xyz = raster("XYZ");
+  testing.expectEqual(true, abc.sig !== xyz.sig);
+
+  // A single wide char and a different single char also differ.
+  const w = raster("W");
+  const i = raster("i");
+  testing.expectEqual(true, w.sig !== i.sig);
+  // "W" is much denser than "i": glyphs vary with content, not just extent.
+  testing.expectEqual(true, w.count > i.count);
+
+  // (b) Non-degenerate: real set pixels, but far from a solid block. A solid
+  // bounding box for "ABC" at 24px would fill ~24*35 ~= 840 px; glyphs fill
+  // far fewer, with empty space between and around letters.
+  testing.expectEqual(true, abc.count > 20);
+  testing.expectEqual(true, abc.count < 500);
+  // There is empty space between the three glyphs: scanning the row band, we
+  // find opaque pixels separated by transparent gaps (more than one run).
+  const element = document.createElement("canvas");
+  element.width = 120;
+  element.height = 32;
+  const ctx = element.getContext("2d");
+  ctx.fillStyle = "#000000";
+  ctx.font = "24px sans-serif";
+  ctx.fillText("A A", 4, 24); // explicit gap in the middle
+  const row = ctx.getImageData(0, 8, 120, 1).data;
+  let runs = 0;
+  let prev = false;
+  for (let p = 3; p < row.length; p += 4) {
+    const on = row[p] > 0;
+    if (on && !prev) runs++;
+    prev = on;
+  }
+  testing.expectEqual(true, runs >= 2); // two separate "A" glyphs => >=2 runs
+
+  // (c) Deterministic: same string rasterizes identically across runs.
+  const again = raster("ABC");
+  testing.expectEqual(abc.sig, again.sig);
+  testing.expectEqual(abc.count, again.count);
 }
 </script>
 

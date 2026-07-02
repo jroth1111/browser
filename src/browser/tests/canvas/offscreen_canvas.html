@@ -584,18 +584,23 @@
   ctx.font = "18px/1.2 Arial";
   testing.expectEqual("18px/1.2 Arial", ctx.font);
 
-  const before = ctx.getImageData(2, 12, 1, 1).data;
-  testing.expectEqual(0, before[3]);
+  function opaqueCount(x, y, w, h) {
+    const data = ctx.getImageData(x, y, w, h).data;
+    let n = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) n++;
+    return n;
+  }
+
+  testing.expectEqual(0, opaqueCount(0, 0, 96, 32));
   ctx.fillStyle = "#111111";
   ctx.fillText("Chimera", 2, 22);
-  const after = ctx.getImageData(2, 12, 1, 1).data;
-  testing.expectEqual(true, after[3] > 0);
+  const drawn = opaqueCount(0, 0, 96, 32);
+  testing.expectEqual(true, drawn > 0);
+  testing.expectEqual(true, drawn < 96 * 32);
 
   ctx.clearRect(0, 0, 96, 32);
   ctx.fillText("Chimera", 2, 22, 6);
-  const insideLimitedWidth = ctx.getImageData(5, 12, 1, 1).data;
-  const outsideLimitedWidth = ctx.getImageData(12, 12, 1, 1).data;
-  testing.expectEqual(true, insideLimitedWidth[3] > 0);
-  testing.expectEqual(0, outsideLimitedWidth[3]);
+  testing.expectEqual(true, opaqueCount(2, 8, 6, 16) > 0);
+  testing.expectEqual(0, opaqueCount(10, 8, 20, 16));
 }
 </script>
