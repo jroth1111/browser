@@ -5,6 +5,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const CanvasBitmap = @import("../../canvas/CanvasBitmap.zig");
+const color = @import("../../../color.zig");
 
 const Image = @This();
 _proto: *HtmlElement,
@@ -516,4 +517,133 @@ test "WebApi: HTML.Image dimensions from image headers" {
         0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03,
     }).?);
     try testing.expectEqual(ImageDimensions{ .width = 4, .height = 5 }, parseImageDimensions("GIF89a\x04\x00\x05\x00").?);
+}
+
+// The 14 RGB swatches from the compatibility test site's canvas round-trip
+// fidelity check: fillRect -> toDataURL (PNG encode) -> <img> decode ->
+// drawImage -> getImageData, requiring all 25 pixels of each l=5,v=5 swatch
+// block to come back byte-exact. See CanvasBitmap.zig's `noisyChannel` /
+// `paintStackPixelAt` for why a seeded profile breaks this (tests below).
+const round_trip_swatches = [_][3]u8{
+    .{ 255, 0, 0 },     .{ 0, 255, 0 },     .{ 0, 0, 255 },     .{ 255, 255, 0 },
+    .{ 255, 0, 255 },   .{ 0, 255, 255 },   .{ 1, 1, 1 },       .{ 254, 254, 254 },
+    .{ 0, 0, 0 },       .{ 51, 51, 51 },    .{ 102, 102, 102 }, .{ 153, 153, 153 },
+    .{ 204, 204, 204 }, .{ 255, 255, 255 },
+};
+
+/// Runs the exact algorithm the fingerprint-compat site uses (l=5, v=5),
+/// through the real production code paths: `Transform.filledRect` +
+/// `PaintStack.appendRect` (fillRect), `CanvasBitmap.png` (toDataURL's PNG
+/// encoder), `decodePngPixels` (the <img> decoder), `PaintStack.appendDrawImage`
+/// (drawImage's 1:1 blit/composite), and `paintStackPixelAt` (getImageData).
+/// Returns, per swatch, how many of the 25 pixels came back byte-exact.
+fn runCanvasRoundTripFidelity(allocator: std.mem.Allocator, seed: u64) ![round_trip_swatches.len]u32 {
+    const l: u32 = 5;
+    const v: u32 = 5;
+    const width = l * round_trip_swatches.len;
+    const height = v;
+
+    // canvas1: ctx.fillRect(l*idx, 0, l*(1+idx), v) for each swatch, in order.
+    var stack1 = CanvasBitmap.PaintStack{};
+    for (round_trip_swatches, 0..) |rgb, idx| {
+        const hex = try std.fmt.allocPrint(allocator, "#{x:0>2}{x:0>2}{x:0>2}", .{ rgb[0], rgb[1], rgb[2] });
+        const rgba = try color.RGBA.parse(hex); // fillStyle hex parsing (suspect #4)
+        const rect = (CanvasBitmap.Transform{}).filledRect(.{
+            .x = @floatFromInt(l * idx),
+            .y = 0,
+            .width = @floatFromInt(l * (1 + idx)),
+            .height = @floatFromInt(v),
+            .rgba = rgba,
+        }).?;
+        stack1.appendRect(rect);
+    }
+
+    // toDataURL(): PNG-encode canvas1's raw pixels (noise, if any, is baked in here).
+    const raw_len = CanvasBitmap.rawLen(width, height).?;
+    const raw = try CanvasBitmap.rawPixelsForPaintStack(allocator, seed, width, height, raw_len, &stack1);
+    const png_bytes = try CanvasBitmap.png(allocator, width, height, raw);
+
+    // <img>.src = dataUrl; onload decodes the PNG (real decoder, not a re-derivation).
+    const decoded = decodePngPixels(allocator, png_bytes) orelse return error.DecodeFailed;
+
+    // canvas2.drawImage(img, 0, 0): 1:1 opaque blit via the real compositor.
+    var stack2 = CanvasBitmap.PaintStack{};
+    try stack2.appendDrawImage(
+        allocator,
+        .{ .width = width, .height = height, .static_pixels = decoded },
+        .{},
+        0,
+        0,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    );
+
+    // getImageData(l*idx, 0, l, v) per swatch, matchCount against the original color.
+    var counts: [round_trip_swatches.len]u32 = undefined;
+    for (round_trip_swatches, 0..) |rgb, idx| {
+        var matches: u32 = 0;
+        var y: u32 = 0;
+        while (y < v) : (y += 1) {
+            var x: u32 = 0;
+            while (x < l) : (x += 1) {
+                const px = CanvasBitmap.paintStackPixelAt(&stack2, @intCast(l * idx + x), @intCast(y), seed);
+                if (px.r == rgb[0] and px.g == rgb[1] and px.b == rgb[2] and px.a == 255) matches += 1;
+            }
+        }
+        counts[idx] = matches;
+    }
+    return counts;
+}
+
+test "WebApi: HTML.Image canvas round-trip fidelity is byte-exact with no seeded canvas noise" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // seed=0 mirrors the default (no chimera canvas profile authority loaded),
+    // which is what `make test`'s HTML/CDP harness runs under. This isolates
+    // fillRect/fillStyle parsing, the PNG encoder, the PNG decoder, and
+    // drawImage's compositor from the seeded-noise stealth surface below:
+    // every one of the 4 "likely suspect" stages is clean at seed=0.
+    const counts = try runCanvasRoundTripFidelity(arena.allocator(), 0);
+    const expected_all_25 = [_]u32{25} ** round_trip_swatches.len;
+    try testing.expectEqualSlices(u32, &expected_all_25, &counts);
+}
+
+test "WebApi: HTML.Image canvas round-trip fidelity is corrupted by seeded canvas noise (not a fill/encode/decode/composite bug)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // A nonzero seed reproduces `profile.canvas.enabled=true` in
+    // CanvasRenderingContext2D.canvasSeed / Canvas.canvasSeed: every read of
+    // the canvas (both the raw pixels PNG-encoded by toDataURL, and the
+    // getImageData readback on canvas2) runs through
+    // CanvasBitmap.paintStackPixelAt, which perturbs each color channel by
+    // -1/0/+1 (CanvasBitmap.zig's `noisyChannel`) as a function of
+    // (seed, x, y, channel). Since the perturbation is deterministic per
+    // pixel rather than randomized per call, and the exact-match test compares
+    // against the *original* swatch byte values (not self-consistency), any
+    // nonzero delta at any of the 3 channels fails that pixel — this alone
+    // fully explains a live capture's reported per-swatch counts out of 25
+    // (e.g. 6, 8, 5, 7, 9, 3, 2, 1, 7, 1, 0, 0, 1, 7): saturated colors
+    // (channels at the 0/255 clamp boundary) survive roughly (2/3)^3 of the
+    // time, unsaturated colors roughly (1/3)^3 of the time. This is the
+    // canvas-noise stealth surface (commit 4c03a57f) working as designed,
+    // not an implementation defect in fill/encode/decode/composite.
+    const seed: u64 = 0xC0FFEE_1234_5678;
+    const counts = try runCanvasRoundTripFidelity(arena.allocator(), seed);
+
+    var any_imperfect = false;
+    for (counts) |count| {
+        if (count != 25) any_imperfect = true;
+    }
+    try testing.expect(any_imperfect);
+
+    // Regression-lock the actual counts this seed produces, so a future
+    // change to the noise formula (or its wiring) is caught either way.
+    const expected = [_]u32{ 8, 4, 5, 5, 7, 6, 0, 3, 10, 1, 1, 2, 3, 4 };
+    try testing.expectEqualSlices(u32, &expected, &counts);
 }
