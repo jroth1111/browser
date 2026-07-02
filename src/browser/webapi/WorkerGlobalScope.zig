@@ -294,6 +294,14 @@ pub fn getLocation(self: *WorkerGlobalScope) *WorkerLocation {
     return &self._location;
 }
 
+// R10 #8 sibling: a worker's isSecureContext must derive from its own origin
+// trustworthiness, same as Window — a same-origin worker spawned from an
+// https:// page is a secure context in real Chrome. A hardcoded false is the
+// same blatant tell R10 #8 flagged on Window, just on this surface instead.
+pub fn getIsSecureContext(self: *const WorkerGlobalScope) bool {
+    return URL.isPotentiallyTrustworthy(self.url);
+}
+
 pub fn getCookieStore(self: *WorkerGlobalScope) !*CookieStore {
     if (self._cookie_store) |cs| return cs;
     const cs = try self._factory.eventTargetWithAllocator(self.arena, CookieStore{ ._proto = undefined });
@@ -577,6 +585,5 @@ pub const JsApi = struct {
     pub const setInterval = bridge.function(WorkerGlobalScope.setInterval, .{});
     pub const clearInterval = bridge.function(WorkerGlobalScope.clearInterval, .{});
 
-    // Return false since workers don't have secure-context-only APIs
-    pub const isSecureContext = bridge.property(false, .{ .template = false });
+    pub const isSecureContext = bridge.accessor(WorkerGlobalScope.getIsSecureContext, null, .{});
 };

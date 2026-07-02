@@ -318,27 +318,10 @@ pub fn getOrigin(self: *const Window) []const u8 {
 
 // R10 #8: derive isSecureContext from the document's real origin
 // trustworthiness per the Secure Contexts spec, instead of a hardcoded false.
-// An origin is a secure context when it is "potentially trustworthy": the
-// https/wss schemes, the file scheme, or an http/ws origin on a loopback /
-// localhost host. A hardcoded false made https:// pages report a non-secure
-// context, a clear parity probe.
+// A hardcoded false made https:// pages report a non-secure context, a clear
+// parity probe. See URL.isPotentiallyTrustworthy for the shared algorithm.
 pub fn getIsSecureContext(self: *const Window) bool {
-    return isPotentiallyTrustworthy(self._frame.url);
-}
-
-fn isPotentiallyTrustworthy(url: []const u8) bool {
-    if (std.mem.startsWith(u8, url, "https:") or std.mem.startsWith(u8, url, "wss:")) return true;
-    if (std.mem.startsWith(u8, url, "file:")) return true;
-    // http/ws are only trustworthy on loopback / localhost.
-    if (std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "ws://")) {
-        const host = url["http://".len..];
-        if (std.mem.startsWith(u8, host, "localhost") or std.mem.startsWith(u8, host, "127.0.0.1") or
-            std.mem.startsWith(u8, host, "[::1]") or std.mem.startsWith(u8, host, "0.0.0.0"))
-        {
-            return true;
-        }
-    }
-    return false;
+    return URL.isPotentiallyTrustworthy(self._frame.url);
 }
 
 pub fn getSelection(self: *const Window) *Selection {

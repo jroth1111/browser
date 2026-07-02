@@ -59,6 +59,13 @@
     const loc_pathname = loc.pathname;
     const loc_to_string = String(loc);
 
+    // R10 #8 sibling: a same-origin worker inherits its owning page's origin
+    // trustworthiness, same as Window. This worker is fetched over
+    // http://127.0.0.1 (loopback), which is potentially trustworthy, so
+    // this must be true; a hardcoded false is the same tell R10 #8 flagged.
+    const is_secure_context_type = typeof self.isSecureContext;
+    const is_secure_context = self.isSecureContext;
+
     postMessage({
       ok: true,
       results: {
@@ -90,6 +97,8 @@
         loc_protocol,
         loc_pathname,
         loc_to_string,
+        is_secure_context_type,
+        is_secure_context,
       },
     });
   } catch (e) {

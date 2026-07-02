@@ -12,6 +12,16 @@
   testing.expectEqual(1920, innerWidth);
 </script>
 
+<script id=is_secure_context>
+  // R10 #8: isSecureContext must be derived from the page's origin, not
+  // hardcoded false. The test server serves over http://127.0.0.1, which is
+  // "potentially trustworthy" per spec (loopback exception), so this must be
+  // true here — a hardcoded false (the original bug) would fail this.
+  testing.expectEqual('boolean', typeof window.isSecureContext);
+  testing.expectEqual(true, location.protocol === 'http:');
+  testing.expectEqual(true, window.isSecureContext);
+</script>
+
 <script id=load>
   let call1 = 0;
   let call2 = 0;

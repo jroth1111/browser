@@ -531,6 +531,25 @@ pub fn isSecure(raw: [:0]const u8) bool {
     return std.mem.startsWith(u8, raw, "https:") or std.mem.startsWith(u8, raw, "wss:");
 }
 
+// Per the Secure Contexts spec, an origin is "potentially trustworthy" when
+// it's https:/wss:/file:, or an http:/ws: origin whose host is loopback
+// (localhost / 127.0.0.1 / [::1] / 0.0.0.0). Used to derive isSecureContext
+// for both Window and worker global scopes.
+pub fn isPotentiallyTrustworthy(raw: [:0]const u8) bool {
+    if (isSecure(raw)) return true;
+    if (std.mem.eql(u8, getProtocol(raw), "file:")) return true;
+    const protocol = getProtocol(raw);
+    if (std.mem.eql(u8, protocol, "http:") or std.mem.eql(u8, protocol, "ws:")) {
+        const hostname = getHostname(raw);
+        return std.mem.eql(u8, hostname, "localhost") or
+            std.mem.endsWith(u8, hostname, ".localhost") or
+            std.mem.eql(u8, hostname, "127.0.0.1") or
+            std.mem.eql(u8, hostname, "[::1]") or
+            std.mem.eql(u8, hostname, "0.0.0.0");
+    }
+    return false;
+}
+
 pub fn getHostname(raw: [:0]const u8) []const u8 {
     const host = getHost(raw);
     const port_sep = findPortSeparator(host) orelse return host;
@@ -1862,6 +1881,42 @@ test "URL: getHostname" {
     // IPv6 without port - must return full bracket notation
     try testing.expectEqualSlices(u8, "[::1]", getHostname("http://[::1]/path"));
     try testing.expectEqualSlices(u8, "[2001:db8::1]", getHostname("https://[2001:db8::1]/"));
+}
+
+test "URL: isPotentiallyTrustworthy" {
+    // https:/wss: are always trustworthy.
+    try testing.expect(isPotentiallyTrustworthy("https://example.com/path"));
+    try testing.expect(isPotentiallyTrustworthy("wss://example.com/socket"));
+
+    // file: is always trustworthy.
+    try testing.expect(isPotentiallyTrustworthy("file:///tmp/x.html"));
+
+    // Plain http:/ws: on a non-loopback host is not trustworthy.
+    try testing.expect(!isPotentiallyTrustworthy("http://example.com/path"));
+    try testing.expect(!isPotentiallyTrustworthy("ws://example.com/socket"));
+
+    // http: on loopback hosts is trustworthy.
+    try testing.expect(isPotentiallyTrustworthy("http://localhost/path"));
+    try testing.expect(isPotentiallyTrustworthy("http://localhost:8080/path"));
+    try testing.expect(isPotentiallyTrustworthy("http://127.0.0.1/path"));
+    try testing.expect(isPotentiallyTrustworthy("http://127.0.0.1:9582/path"));
+    try testing.expect(isPotentiallyTrustworthy("http://[::1]/path"));
+    try testing.expect(isPotentiallyTrustworthy("http://[::1]:8080/path"));
+    try testing.expect(isPotentiallyTrustworthy("http://0.0.0.0/path"));
+    try testing.expect(isPotentiallyTrustworthy("http://sub.localhost/path"));
+
+    // ws: on loopback hosts is trustworthy too. This is the regression case:
+    // a prior implementation sliced the host assuming a fixed "http://"
+    // prefix length, which corrupted the host for ws: (shorter prefix),
+    // making ws://localhost wrongly report untrustworthy.
+    try testing.expect(isPotentiallyTrustworthy("ws://localhost/socket"));
+    try testing.expect(isPotentiallyTrustworthy("ws://localhost:8080/socket"));
+    try testing.expect(isPotentiallyTrustworthy("ws://127.0.0.1:8080/socket"));
+
+    // A non-loopback host containing "127.0.0.1" as a substring/prefix of a
+    // longer hostname must not be treated as loopback.
+    try testing.expect(!isPotentiallyTrustworthy("http://127.0.0.1.evil.com/path"));
+    try testing.expect(!isPotentiallyTrustworthy("http://notlocalhost.com/path"));
 }
 
 test "URL: getPort" {
