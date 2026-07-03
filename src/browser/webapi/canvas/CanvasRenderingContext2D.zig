@@ -194,6 +194,7 @@ pub fn drawImage(
         exec.arena,
         source,
         self._transform,
+        canvasSeed(exec),
         dx,
         dy,
         arg3,

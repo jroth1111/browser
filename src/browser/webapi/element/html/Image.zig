@@ -522,8 +522,12 @@ test "WebApi: HTML.Image dimensions from image headers" {
 // The 14 RGB swatches from the compatibility test site's canvas round-trip
 // fidelity check: fillRect -> toDataURL (PNG encode) -> <img> decode ->
 // drawImage -> getImageData, requiring all 25 pixels of each l=5,v=5 swatch
-// block to come back byte-exact. See CanvasBitmap.zig's `noisyChannel` /
-// `paintStackPixelAt` for why a seeded profile breaks this (tests below).
+// block to come back self-consistent -- i.e. matching what a direct
+// (non-round-tripped) read of the source canvas reports at that same pixel,
+// noise included. See CanvasBitmap.zig's `noisyChannel` / `Paint.noiseEligible`
+// / `PaintStack.basePixelAt` for how the seeded anti-tracking noise is baked
+// in exactly once, at vector-rasterization time, so it survives an
+// encode/decode/composite round trip without being re-applied on readback.
 const round_trip_swatches = [_][3]u8{
     .{ 255, 0, 0 },     .{ 0, 255, 0 },     .{ 0, 0, 255 },     .{ 255, 255, 0 },
     .{ 255, 0, 255 },   .{ 0, 255, 255 },   .{ 1, 1, 1 },       .{ 254, 254, 254 },
@@ -536,7 +540,11 @@ const round_trip_swatches = [_][3]u8{
 /// `PaintStack.appendRect` (fillRect), `CanvasBitmap.png` (toDataURL's PNG
 /// encoder), `decodePngPixels` (the <img> decoder), `PaintStack.appendDrawImage`
 /// (drawImage's 1:1 blit/composite), and `paintStackPixelAt` (getImageData).
-/// Returns, per swatch, how many of the 25 pixels came back byte-exact.
+/// Returns, per swatch, how many of the 25 pixels came back *self-consistent*
+/// with a direct (non-round-tripped) read of canvas1 at that same coordinate
+/// -- not how many match the pre-noise input byte value, since a seeded
+/// profile is expected to (and must, for the anti-tracking property to mean
+/// anything) legitimately differ from the literal fillRect color.
 fn runCanvasRoundTripFidelity(allocator: std.mem.Allocator, seed: u64) ![round_trip_swatches.len]u32 {
     const l: u32 = 5;
     const v: u32 = 5;
@@ -572,6 +580,7 @@ fn runCanvasRoundTripFidelity(allocator: std.mem.Allocator, seed: u64) ![round_t
         allocator,
         .{ .width = width, .height = height, .static_pixels = decoded },
         .{},
+        seed,
         0,
         0,
         null,
@@ -582,16 +591,23 @@ fn runCanvasRoundTripFidelity(allocator: std.mem.Allocator, seed: u64) ![round_t
         null,
     );
 
-    // getImageData(l*idx, 0, l, v) per swatch, matchCount against the original color.
+    // getImageData(l*idx, 0, l, v) per swatch: compare the round-tripped pixel
+    // against a DIRECT (non-round-tripped) read of canvas1's own paint stack
+    // at the same coordinate. That is the actual self-consistency invariant --
+    // canvas1's own noised output, reproduced faithfully through the PNG
+    // encode/decode/composite hop -- not equality with the pre-noise input.
     var counts: [round_trip_swatches.len]u32 = undefined;
-    for (round_trip_swatches, 0..) |rgb, idx| {
+    for (round_trip_swatches, 0..) |_, idx| {
         var matches: u32 = 0;
         var y: u32 = 0;
         while (y < v) : (y += 1) {
             var x: u32 = 0;
             while (x < l) : (x += 1) {
-                const px = CanvasBitmap.paintStackPixelAt(&stack2, @intCast(l * idx + x), @intCast(y), seed);
-                if (px.r == rgb[0] and px.g == rgb[1] and px.b == rgb[2] and px.a == 255) matches += 1;
+                const px_x: i64 = @intCast(l * idx + x);
+                const px_y: i64 = @intCast(y);
+                const direct = CanvasBitmap.paintStackPixelAt(&stack1, px_x, px_y, seed);
+                const round_tripped = CanvasBitmap.paintStackPixelAt(&stack2, px_x, px_y, seed);
+                if (std.meta.eql(direct, round_tripped)) matches += 1;
             }
         }
         counts[idx] = matches;
@@ -613,37 +629,84 @@ test "WebApi: HTML.Image canvas round-trip fidelity is byte-exact with no seeded
     try testing.expectEqualSlices(u32, &expected_all_25, &counts);
 }
 
-test "WebApi: HTML.Image canvas round-trip fidelity is corrupted by seeded canvas noise (not a fill/encode/decode/composite bug)" {
+test "WebApi: HTML.Image canvas round-trip fidelity stays self-consistent under seeded canvas noise" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
     // A nonzero seed reproduces `profile.canvas.enabled=true` in
-    // CanvasRenderingContext2D.canvasSeed / Canvas.canvasSeed: every read of
-    // the canvas (both the raw pixels PNG-encoded by toDataURL, and the
-    // getImageData readback on canvas2) runs through
-    // CanvasBitmap.paintStackPixelAt, which perturbs each color channel by
-    // -1/0/+1 (CanvasBitmap.zig's `noisyChannel`) as a function of
-    // (seed, x, y, channel). Since the perturbation is deterministic per
-    // pixel rather than randomized per call, and the exact-match test compares
-    // against the *original* swatch byte values (not self-consistency), any
-    // nonzero delta at any of the 3 channels fails that pixel — this alone
-    // fully explains a live capture's reported per-swatch counts out of 25
-    // (e.g. 6, 8, 5, 7, 9, 3, 2, 1, 7, 1, 0, 0, 1, 7): saturated colors
-    // (channels at the 0/255 clamp boundary) survive roughly (2/3)^3 of the
-    // time, unsaturated colors roughly (1/3)^3 of the time. This is the
-    // canvas-noise stealth surface (commit 4c03a57f) working as designed,
-    // not an implementation defect in fill/encode/decode/composite.
+    // CanvasRenderingContext2D.canvasSeed / Canvas.canvasSeed. Previously,
+    // every read of a canvas -- including a `.image` op holding pixel bytes
+    // already noised once by an earlier materialization -- ran back through
+    // CanvasBitmap.paintStackPixelAt's blanket per-read noise, perturbing
+    // already-noised bytes a second time. That broke this exact round trip:
+    // fillRect (fresh vector content, noised once at toDataURL's PNG raster)
+    // -> PNG decode -> drawImage (copies the already-noised bytes verbatim)
+    // -> getImageData (used to re-noise them on top).
+    //
+    // The fix (CanvasBitmap.zig: `Paint.noiseEligible`, `basePixelAt`) bakes
+    // the -1/0/+1 `noisyChannel` perturbation in once, at the point a *vector*
+    // op (rect/path/text/stroke) is actually sampled/rasterized, and never
+    // applies it to `.image` ops (already-materialized/copied pixel data --
+    // from `drawImage` or `putImageData`). So the PNG-encoded bytes, the
+    // decoded `.image` patch copied into canvas2, and canvas2's own
+    // `getImageData` readback all carry the *same* single noised value that a
+    // direct read of canvas1 would report at that coordinate: every swatch
+    // pixel is self-consistent, even though the seed is active and the
+    // pixel's color legitimately differs from the pre-noise fillRect input
+    // (that divergence from the input is the anti-tracking property working;
+    // see the differentiation tests below).
     const seed: u64 = 0xC0FFEE_1234_5678;
     const counts = try runCanvasRoundTripFidelity(arena.allocator(), seed);
 
-    var any_imperfect = false;
-    for (counts) |count| {
-        if (count != 25) any_imperfect = true;
-    }
-    try testing.expect(any_imperfect);
+    const expected_all_25 = [_]u32{25} ** round_trip_swatches.len;
+    try testing.expectEqualSlices(u32, &expected_all_25, &counts);
+}
 
-    // Regression-lock the actual counts this seed produces, so a future
-    // change to the noise formula (or its wiring) is caught either way.
-    const expected = [_]u32{ 8, 4, 5, 5, 7, 6, 0, 3, 10, 1, 1, 2, 3, 4 };
-    try testing.expectEqualSlices(u32, &expected, &counts);
+test "WebApi: HTML.Image canvas noise still differentiates seeds for identical drawn content" {
+    // Property (a): different profiles/seeds must still produce different
+    // canvas output for byte-identical drawn content -- the anti-tracking
+    // property the noise exists for must survive the self-consistency fix.
+    var stack = CanvasBitmap.PaintStack{};
+    stack.appendRect(.{ .x = 0, .y = 0, .width = 20, .height = 20, .rgba = try color.RGBA.parse("#336699") });
+
+    const seed_a: u64 = 0xC0FFEE_1234_5678;
+    const seed_b: u64 = 0xFACADE_9876_5432;
+
+    var differing: u32 = 0;
+    var y: i64 = 0;
+    while (y < 20) : (y += 1) {
+        var x: i64 = 0;
+        while (x < 20) : (x += 1) {
+            const a = CanvasBitmap.paintStackPixelAt(&stack, x, y, seed_a);
+            const b = CanvasBitmap.paintStackPixelAt(&stack, x, y, seed_b);
+            if (!std.meta.eql(a, b)) differing += 1;
+        }
+    }
+    // Two independent seeds should diverge across most of a 400-pixel fill;
+    // a noise formula that accidentally collapsed to a no-op (or to the same
+    // output regardless of seed) would fail this outright.
+    try testing.expect(differing > 200);
+}
+
+test "WebApi: HTML.Image canvas noise still differentiates distinct drawn content" {
+    // Property (b): distinct actual content must still produce visibly
+    // different output under the same seed -- noise must not accidentally
+    // collapse different drawings to indistinguishable pixels.
+    var stack_red = CanvasBitmap.PaintStack{};
+    var stack_blue = CanvasBitmap.PaintStack{};
+    stack_red.appendRect(.{ .x = 0, .y = 0, .width = 10, .height = 10, .rgba = try color.RGBA.parse("#ff0000") });
+    stack_blue.appendRect(.{ .x = 0, .y = 0, .width = 10, .height = 10, .rgba = try color.RGBA.parse("#0000ff") });
+
+    const seed: u64 = 0xC0FFEE_1234_5678;
+    var differing: u32 = 0;
+    var y: i64 = 0;
+    while (y < 10) : (y += 1) {
+        var x: i64 = 0;
+        while (x < 10) : (x += 1) {
+            const red_px = CanvasBitmap.paintStackPixelAt(&stack_red, x, y, seed);
+            const blue_px = CanvasBitmap.paintStackPixelAt(&stack_blue, x, y, seed);
+            if (!std.meta.eql(red_px, blue_px)) differing += 1;
+        }
+    }
+    try testing.expectEqual(@as(u32, 100), differing);
 }

@@ -614,6 +614,19 @@ pub const Paint = union(enum) {
             .image => |image| image.pixelAt(x, y),
         };
     }
+
+    /// Whether this op's pixels are freshly rasterized vector content (and so
+    /// should receive the seeded anti-tracking noise) versus already
+    /// materialized/copied pixel bytes (an `.image` patch from `drawImage` or
+    /// `putImageData`, which may already carry noise baked in from an earlier
+    /// materialization -- e.g. a `toDataURL` PNG encode -- and must not be
+    /// perturbed again on every subsequent read). See `noisyChannel` below.
+    fn noiseEligible(self: *const Paint) bool {
+        return switch (self.*) {
+            .image => false,
+            else => true,
+        };
+    }
 };
 
 const PaintOp = struct {
@@ -774,6 +787,7 @@ pub const PaintStack = struct {
         allocator: std.mem.Allocator,
         source: SourceBitmap,
         transform: Transform,
+        seed: u64,
         dx: f64,
         dy: f64,
         arg3: ?f64,
@@ -800,7 +814,13 @@ pub const PaintStack = struct {
                     src_y >= @as(i64, @intCast(source.height)))
                     color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 }
                 else if (source.paint_stack) |paint_stack|
-                    paintStackPixelAt(paint_stack, src_x, src_y, 0)
+                    // Sampling a live canvas's paint stack as a `drawImage`
+                    // source materializes those pixels into concrete copied
+                    // bytes right here -- bake the noise in now (once), same
+                    // as a direct `getImageData`/`toDataURL` read of the
+                    // source would. The resulting `.image` patch below is
+                    // then noise-ineligible, so it is never perturbed again.
+                    paintStackPixelAt(paint_stack, src_x, src_y, seed)
                 else if (source.static_pixels) |pixels|
                     staticPixelAt(pixels, source.width, src_x, src_y)
                 else
@@ -845,11 +865,25 @@ pub const PaintStack = struct {
         self.ops[max_paint_ops - 1] = op;
     }
 
-    fn basePixelAt(self: *const PaintStack, x: i64, y: i64) color.RGBA {
+    /// Composites this stack's ops at `(x, y)`. `seed` (0 = disabled) applies
+    /// the anti-tracking noise to each *vector* op's contribution before it is
+    /// blended into the running composite -- i.e. at the point that op's pixel
+    /// is actually rasterized -- so noise is baked in exactly once per pixel
+    /// regardless of how many times this stack is later read, copied via
+    /// `drawImage`, or PNG-encoded via `toDataURL`. `.image` ops (already
+    /// materialized/copied pixel bytes) are never perturbed here; see
+    /// `Paint.noiseEligible`.
+    fn basePixelAt(self: *const PaintStack, x: i64, y: i64, seed: u64) color.RGBA {
         var rgba = color.RGBA{ .r = 0, .g = 0, .b = 0, .a = 0 };
         for (self.ops[0..self.count]) |*op| {
             if (!self.clipContains(op.clip_bits, x, y)) continue;
-            if (op.paint.pixelAt(x, y)) |painted| rgba = compositePixel(rgba, painted, op.composite);
+            if (op.paint.pixelAt(x, y)) |painted| {
+                const source = if (seed != 0 and painted.a != 0 and op.paint.noiseEligible())
+                    noisePixel(painted, seed, x, y)
+                else
+                    painted;
+                rgba = compositePixel(rgba, source, op.composite);
+            }
         }
         return rgba;
     }
@@ -1303,13 +1337,7 @@ pub fn pixelAt(filled_rect: ?FilledRect, x: i64, y: i64, seed: u64) color.RGBA {
 }
 
 pub fn paintStackPixelAt(paint_stack: *const PaintStack, x: i64, y: i64, seed: u64) color.RGBA {
-    var rgba = paint_stack.basePixelAt(x, y);
-    if (seed != 0 and rgba.a != 0) {
-        rgba.r = noisyChannel(rgba.r, seed, x, y, 0);
-        rgba.g = noisyChannel(rgba.g, seed, x, y, 1);
-        rgba.b = noisyChannel(rgba.b, seed, x, y, 2);
-    }
-    return rgba;
+    return paint_stack.basePixelAt(x, y, seed);
 }
 
 pub fn png(allocator: std.mem.Allocator, width: u32, height: u32, raw: []const u8) ![]const u8 {
@@ -1332,6 +1360,18 @@ pub fn png(allocator: std.mem.Allocator, width: u32, height: u32, raw: []const u
     appendPngChunk(out, &pos, "IDAT", idat);
     appendPngChunk(out, &pos, "IEND", "");
     return out;
+}
+
+/// Applies `noisyChannel` to each color channel of a freshly-rasterized
+/// vector op's pixel. Alpha passes through untouched -- noise only ever
+/// perturbs color, never coverage.
+fn noisePixel(rgba: color.RGBA, seed: u64, x: i64, y: i64) color.RGBA {
+    return .{
+        .r = noisyChannel(rgba.r, seed, x, y, 0),
+        .g = noisyChannel(rgba.g, seed, x, y, 1),
+        .b = noisyChannel(rgba.b, seed, x, y, 2),
+        .a = rgba.a,
+    };
 }
 
 fn noisyChannel(value: u8, seed: u64, x: i64, y: i64, channel: u8) u8 {
@@ -1676,6 +1716,7 @@ test "CanvasBitmap drawImage copies and scales source paint" {
         .{},
         0,
         0,
+        0,
         4,
         2,
         null,
@@ -1703,6 +1744,7 @@ test "CanvasBitmap drawImage supports source and destination rectangles" {
         arena.allocator(),
         .{ .width = 6, .height = 6, .paint_stack = &source },
         .{},
+        0,
         2,
         1,
         2,
