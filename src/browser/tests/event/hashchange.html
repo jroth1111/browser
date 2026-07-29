@@ -45,12 +45,24 @@
 }
 </script>
 
+<script>
+  // Navigation cases share one location/history. Serialize them while Runner
+  // remains responsible for delivering each queued hashchange task.
+  globalThis.hashchangeTestTail = Promise.resolve();
+  globalThis.runHashchangeTest = (callback) => {
+    const result = globalThis.hashchangeTestTail.then(callback);
+    globalThis.hashchangeTestTail = result.catch(() => {});
+    return result;
+  };
+</script>
+
 <script id=hashChangeFiresOnFragmentNavigation type=module>
+  const state = await testing.async();
+  await runHashchangeTest(async () => {
 {
   // hashchange is fired by queuing a task (not synchronously): the handler
   // below is registered AFTER the first `location.hash` change yet still
   // observes it, and each fragment change fires its own event.
-  const state = await testing.async();
   const root = location.href.split('#')[0];
 
   const oldURLs = [];
@@ -80,15 +92,17 @@
     window.onhashchange = null;
   });
 }
+  });
 </script>
 
 <script id=hashChangeFiresOnHistoryTraversal type=module>
+  const state = await testing.async();
+  await runHashchangeTest(async () => {
 {
   // Traversing history (history.back) between entries that share a document
   // but differ only by fragment must also fire hashchange. The decision is
   // owned by Navigation.navigateInner (single resolved-URL source of truth),
   // not re-derived in History.goInner.
-  const state = await testing.async();
 
   const events = [];
   window.onhashchange = (e) => {
@@ -113,4 +127,5 @@
     window.onhashchange = null;
   });
 }
+  });
 </script>

@@ -260,7 +260,9 @@ fn loadInitialScript(self: *Worker, script: []const u8) !void {
         },
     }
 
-    ls.local.runMacrotasks();
+    // The initial script boundary requires only its synchronous microtask
+    // checkpoint. Browser/Runner cooperatively pumps V8 foreground work.
+    ls.local.runMicrotasks();
 }
 
 fn managedWorkerBootstrapSource(self: *Worker) !?[]const u8 {

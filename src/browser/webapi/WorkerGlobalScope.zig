@@ -436,7 +436,9 @@ fn importScript(self: *WorkerGlobalScope, arena: Allocator, url: [:0]const u8) !
         return;
     };
 
-    ls.local.runMacrotasks();
+    // Do not run a microtask checkpoint between entries in one importScripts()
+    // call. The enclosing worker task boundary owns that checkpoint, preserving
+    // run-to-completion across the full synchronous import sequence.
 }
 
 pub fn reportError(self: *WorkerGlobalScope, err: JS.Value) !void {

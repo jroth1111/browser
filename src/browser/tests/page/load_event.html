@@ -1,5 +1,19 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
+<script id=parser_script_microtask_setup>
+  globalThis.parserScriptMicrotaskRan = false;
+  globalThis.parserScriptTimerRan = false;
+  Promise.resolve().then(() => { globalThis.parserScriptMicrotaskRan = true; });
+  setTimeout(() => { globalThis.parserScriptTimerRan = true; }, 0);
+  testing.expectEqual(false, globalThis.parserScriptMicrotaskRan);
+  testing.expectEqual(false, globalThis.parserScriptTimerRan);
+</script>
+<script id=parser_script_microtask_checkpoint>
+  // The parser observes the previous script's microtasks, but Runner exclusively
+  // owns timers: the zero-delay callback cannot interrupt parser execution.
+  testing.expectEqual(true, globalThis.parserScriptMicrotaskRan);
+  testing.expectEqual(false, globalThis.parserScriptTimerRan);
+</script>
 <script id=DOMContentLoaded>
   let call1 = false;
   let ex1 = null;
@@ -13,6 +27,7 @@
     testing.expectEqual(document, ex1.target);
     testing.expectEqual('DOMContentLoaded', ex1.type);
     testing.expectEqual(true, call1);
+    testing.expectEqual(true, globalThis.parserScriptTimerRan);
   });
   testing.expectEqual(true, true);
 </script>

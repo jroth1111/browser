@@ -417,14 +417,19 @@
     var received = [];
     worker.onmessage = function(event) {
       received.push(event);
-      if (received.length == 2) {
+      if (received.length == 5) {
         state.resolve();
       }
     };
 
     await state.done(() => {
+      // A multi-import call is one synchronous task: both scripts and the code
+      // after importScripts() run before either imported Promise continuation.
       testing.expectEqual('importScripts-1', received[0].data);
       testing.expectEqual('importScripts-2', received[1].data);
+      testing.expectEqual('importScripts-after', received[2].data);
+      testing.expectEqual('importScripts-1-microtask', received[3].data);
+      testing.expectEqual('importScripts-2-microtask', received[4].data);
     });
   }
 </script>

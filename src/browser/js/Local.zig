@@ -109,12 +109,6 @@ pub fn newCallback(
     return .{ .local = self, .handle = handle };
 }
 
-pub fn runMacrotasks(self: *const Local) void {
-    const env = self.ctx.env;
-    env.drainMessageLoop();
-    env.runMicrotasks(); // macrotasks can cause microtasks to queue
-}
-
 pub fn runMicrotasks(self: *const Local) void {
     self.ctx.env.runMicrotasks();
 }

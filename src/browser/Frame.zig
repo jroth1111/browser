@@ -624,11 +624,11 @@ fn executeJavaScriptURL(self: *Frame, request_url: []const u8) !void {
         return;
     };
 
-    // Keep the JavaScript URL evaluation synchronous, but leave timers and
-    // posted work to the outer Runner safe point. Recursively draining this
-    // frame and every browser context here lets iframe-heavy pages monopolize
-    // the worker before queued CDP commands can be serviced.
-    ls.local.runMacrotasks();
+    // Keep the JavaScript URL evaluation synchronous through its required
+    // microtask checkpoint, but leave V8 foreground work, timers, and posted
+    // work to the outer Runner safe point. Recursively draining here lets
+    // iframe-heavy pages monopolize the worker before CDP can be serviced.
+    ls.local.runMicrotasks();
 }
 
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {

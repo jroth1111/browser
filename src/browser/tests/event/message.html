@@ -64,9 +64,11 @@
   let receivedEvent = null;
 
   const handler = (e) => {
+    if (e.data !== 'test data') return;
+    window.removeEventListener('message', handler);
     receivedEvent = e;
   };
-  window.addEventListener('message', handler, { once: true });
+  window.addEventListener('message', handler);
 
   window.postMessage('test data', '*');
 
@@ -83,9 +85,11 @@
   let receivedData = null;
 
   const handler = (e) => {
+    if (e.data?.type !== 'test' || e.data?.value !== 123) return;
+    window.removeEventListener('message', handler);
     receivedData = e.data;
   };
-  window.addEventListener('message', handler, { once: true });
+  window.addEventListener('message', handler);
 
   const testObj = { type: 'test', value: 123, nested: { key: 'value' } };
   window.postMessage(testObj, '*');
@@ -114,9 +118,11 @@
   let received = null;
 
   const handler = (e) => {
+    if (e.data !== 42) return;
+    window.removeEventListener('message', handler);
     received = e.data;
   };
-  window.addEventListener('message', handler, { once: true });
+  window.addEventListener('message', handler);
 
   window.postMessage(42, '*');
 
@@ -131,9 +137,11 @@
   let received = null;
 
   const handler = (e) => {
+    if (!Array.isArray(e.data)) return;
+    window.removeEventListener('message', handler);
     received = e.data;
   };
-  window.addEventListener('message', handler, { once: true });
+  window.addEventListener('message', handler);
 
   const arr = [1, 2, 3, 'test'];
   window.postMessage(arr, '*');
@@ -149,9 +157,11 @@
   let received = undefined;
 
   const handler = (e) => {
+    if (e.data !== null) return;
+    window.removeEventListener('message', handler);
     received = e.data;
   };
-  window.addEventListener('message', handler, { once: true });
+  window.addEventListener('message', handler);
 
   window.postMessage(null, '*');
 
@@ -173,10 +183,12 @@
   channel.port1.onmessage = (e) => { echoed = e.data; };
 
   const handler = (e) => {
+    if (e.data !== 'ping') return;
+    window.removeEventListener('message', handler);
     received = e.ports[0];
     received.postMessage('pong');
   };
-  window.addEventListener('message', handler, { once: true });
+  window.addEventListener('message', handler);
 
   window.postMessage('ping', '*', [channel.port2]);
 
@@ -192,9 +204,11 @@
   let receivedOrigin = null;
 
   const handler = (e) => {
+    if (e.data !== 'test') return;
+    window.removeEventListener('message', handler);
     receivedOrigin = e.origin;
   };
-  window.addEventListener('message', handler, { once: true });
+  window.addEventListener('message', handler);
 
   window.postMessage('test', '*');
 

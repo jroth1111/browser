@@ -7,8 +7,12 @@
     testing.expectEqual(true, list instanceof PerformanceObserverEntryList);
     testing.expectEqual(true, observer instanceof PerformanceObserver);
 
-    const entries = list.getEntries();
-    testing.expectEqual(true, entries instanceof Array);
+    const allEntries = list.getEntries();
+    testing.expectEqual(true, allEntries instanceof Array);
+    // Delivery is a Runner-owned task, so later parser scripts can add marks
+    // before this observer runs. Assert only the entries created by this test.
+    const entries = allEntries.filter((entry) =>
+      entry.name === "operationStart" || entry.name === "operationEnd");
     testing.expectEqual(2, entries.length);
 
     {
@@ -34,6 +38,7 @@
   observer.observe({ type: "mark" });
   performance.mark("operationStart", { startTime: 20.0 });
   performance.mark("operationEnd", { startTime: 34.0 });
+  testing.expectEqual(true, true);
 }
 </script>
 
@@ -80,14 +85,17 @@
   performance.clearMeasures();
 
   const observer = new PerformanceObserver((list) => {
-    const marks = list.getEntriesByType("mark");
-    testing.expectEqual(true, marks instanceof Array);
+    const allMarks = list.getEntriesByType("mark");
+    testing.expectEqual(true, allMarks instanceof Array);
+    const marks = allMarks.filter((entry) =>
+      entry.name === "lbt1" || entry.name === "lbt2");
     testing.expectEqual(2, marks.length);
     testing.expectEqual("lbt1", marks[0].name);
     testing.expectEqual("mark", marks[0].entryType);
     testing.expectEqual("lbt2", marks[1].name);
 
-    const measures = list.getEntriesByType("measure");
+    const measures = list.getEntriesByType("measure").filter(
+      (entry) => entry.name === "lbtMeasure");
     testing.expectEqual(1, measures.length);
     testing.expectEqual("lbtMeasure", measures[0].name);
     testing.expectEqual("measure", measures[0].entryType);
@@ -104,6 +112,7 @@
   performance.mark("lbt1");
   performance.mark("lbt2");
   performance.measure("lbtMeasure");
+  testing.expectEqual(true, true);
 }
 </script>
 
@@ -142,6 +151,7 @@
   performance.mark("lbnShared");
   performance.measure("lbnShared");
   performance.mark("lbnOnlyMark");
+  testing.expectEqual(true, true);
 }
 </script>
 
@@ -156,7 +166,8 @@
 
   let receivedEntries = null;
   const observer = new PerformanceObserver((list) => {
-    receivedEntries = list.getEntries();
+    receivedEntries = list.getEntries().filter((entry) =>
+      entry.name === "early1" || entry.name === "early2");
     // Disconnect as soon as the buffered entries arrive so later marks
     // (e.g. from other tests sharing the global performance buffer) don't
     // trigger a second callback that overwrites receivedEntries.

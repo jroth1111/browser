@@ -937,10 +937,10 @@ pub const Script = struct {
         }
 
         defer {
-            local.runMacrotasks(); // also runs microtasks
-            _ = frame.js.scheduler.run() catch |err| {
-                log.err(.frame, "scheduler", .{ .err = err });
-            };
+            // A script execution boundary requires a microtask checkpoint, not
+            // foreground or scheduler work. Browser/Runner owns those cooperative
+            // pumps so queued CDP commands can progress between callbacks.
+            local.runMicrotasks();
         }
 
         if (success) {
