@@ -93,6 +93,12 @@ inspector: ?*Inspector,
 private_symbols: PrivateSymbols,
 
 microtask_queues_are_running: bool,
+discard_all_microtasks_pending: bool = false,
+
+// Round-robin cursor for browser-wide macrotask fairness. A scheduler can use
+// up to 500ms per queue; without a global pass budget, many active iframe or
+// worker contexts can delay the next CDP inbox drain for tens of seconds.
+macrotask_context_cursor: usize = 0,
 
 // Serializes V8 calls that race with TerminateExecution (which can fire from
 // the sighandler thread). Without this, a terminate landing between the
@@ -381,6 +387,21 @@ pub fn destroyContext(self: *Env, context: *Context) void {
     context.deinit();
 }
 
+pub fn runMicrotasksForContext(self: *Env, ctx: *Context) void {
+    if (self.microtask_queues_are_running) return;
+    if (std.mem.indexOfScalar(*Context, self.contexts.items, ctx) == null) return;
+
+    self.terminate_mutex.lock();
+    defer self.terminate_mutex.unlock();
+
+    const v8_isolate = self.isolate.handle;
+    if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) return;
+
+    self.microtask_queues_are_running = true;
+    defer self.microtask_queues_are_running = false;
+    v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
+}
+
 pub fn runMicrotasks(self: *Env) void {
     if (self.microtask_queues_are_running == false) {
         self.terminate_mutex.lock();
@@ -392,29 +413,82 @@ pub fn runMicrotasks(self: *Env) void {
             return;
         }
 
+        const initial_context_count = self.contexts.items.len;
+        var stack_snapshot: [64]*Context = undefined;
+        const contexts_snapshot = if (initial_context_count <= stack_snapshot.len)
+            stack_snapshot[0..initial_context_count]
+        else
+            self.allocator.alloc(*Context, initial_context_count) catch |err| {
+                log.warn(.js, "microtask context snapshot", .{ .err = err });
+                return;
+            };
+        defer if (initial_context_count > stack_snapshot.len) self.allocator.free(contexts_snapshot);
+        @memcpy(contexts_snapshot, self.contexts.items[0..initial_context_count]);
+
         self.microtask_queues_are_running = true;
         defer self.microtask_queues_are_running = false;
 
-        // Re-read len/items each iteration: a checkpoint can run JS that creates
-        // a new context (e.g. an iframe), appending to (and reallocating) the list.
-        var i: usize = 0;
-        while (i < self.contexts.items.len) : (i += 1) {
-            const ctx = self.contexts.items[i];
+        for (contexts_snapshot) |ctx| {
+            if (std.mem.indexOfScalar(*Context, self.contexts.items, ctx) == null) {
+                continue;
+            }
             v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
+            if (v8.v8__Isolate__IsExecutionTerminating(v8_isolate)) {
+                break;
+            }
         }
     }
+}
+
+pub fn markTerminatedMicrotasks(self: *Env) void {
+    self.discard_all_microtasks_pending = true;
+}
+
+pub fn discardTerminatedMicrotasks(self: *Env) void {
+    if (!self.discard_all_microtasks_pending) return;
+
+    self.terminate_mutex.lock();
+    defer self.terminate_mutex.unlock();
+
+    for (self.contexts.items) |ctx| {
+        if (!ctx.discardMicrotasks()) return;
+    }
+    self.discard_all_microtasks_pending = false;
 }
 
 pub fn runMacrotasks(self: *Env) !void {
     if (v8.v8__Isolate__IsExecutionTerminating(self.isolate.handle)) {
         return;
     }
+    if (self.contexts.items.len == 0) {
+        self.macrotask_context_cursor = 0;
+        return;
+    }
 
-    // Re-read len/items each iteration: scheduler.run() can create a new context
-    // (e.g. an iframe), appending to (and reallocating) the list.
-    var i: usize = 0;
-    while (i < self.contexts.items.len) : (i += 1) {
-        const ctx = self.contexts.items[i];
+    var timer = std.time.Timer.start() catch unreachable;
+    const initial_context_count = self.contexts.items.len;
+    var stack_snapshot: [64]*Context = undefined;
+    const contexts_snapshot = if (initial_context_count <= stack_snapshot.len)
+        stack_snapshot[0..initial_context_count]
+    else
+        try self.allocator.alloc(*Context, initial_context_count);
+    defer if (initial_context_count > stack_snapshot.len) self.allocator.free(contexts_snapshot);
+    @memcpy(contexts_snapshot, self.contexts.items[0..initial_context_count]);
+    const snapshot_start = self.macrotask_context_cursor % initial_context_count;
+
+    // Visit only contexts that existed at the start of this pass. The live list
+    // can grow or shrink inside a callback, so retain stable pointer membership
+    // while re-checking liveness before dereferencing each snapshot entry.
+    for (0..initial_context_count) |offset| {
+        if (timer.read() >= 50 * std.time.ns_per_ms) return;
+        if (self.contexts.items.len == 0) {
+            self.macrotask_context_cursor = 0;
+            return;
+        }
+        const ctx = contexts_snapshot[(snapshot_start + offset) % initial_context_count];
+        const live_index = std.mem.indexOfScalar(*Context, self.contexts.items, ctx) orelse continue;
+        self.macrotask_context_cursor = (live_index + 1) % self.contexts.items.len;
+
         if (comptime builtin.is_test == false) {
             // I hate this comptime check as much as you do. But we have tests
             // which rely on short execution before shutdown. In real world, it's
@@ -425,10 +499,26 @@ pub fn runMacrotasks(self: *Env) !void {
             }
         }
 
+        const elapsed_ms = timer.read() / std.time.ns_per_ms;
+        if (elapsed_ms >= 50) return;
+
         var hs: js.HandleScope = undefined;
         const entered = ctx.enter(&hs);
         defer entered.exit();
-        try ctx.scheduler.run();
+        try ctx.scheduler.runFor(50 - elapsed_ms);
+
+        if (self.contexts.items.len == 0) {
+            self.macrotask_context_cursor = 0;
+        } else if (std.mem.indexOfScalar(*Context, self.contexts.items, ctx)) |current_index| {
+            self.macrotask_context_cursor = (current_index + 1) % self.contexts.items.len;
+        } else {
+            self.macrotask_context_cursor = live_index % self.contexts.items.len;
+        }
+
+        // A single JavaScript callback can overrun the remaining budget, but no
+        // additional callback or context runs before the outer Runner drains
+        // network and CDP inboxes. The cursor resumes at the next context.
+        if (timer.read() >= 50 * std.time.ns_per_ms) return;
     }
 }
 
@@ -455,16 +545,26 @@ pub fn hasBackgroundTasks(self: *const Env) bool {
     return v8.v8__Isolate__HasPendingBackgroundTasks(self.isolate.handle);
 }
 
-pub fn waitForBackgroundTasks(self: *Env) void {
+pub fn waitForBackgroundTasks(
+    self: *Env,
+    stop: *const std.atomic.Value(bool),
+) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     const isolate = self.isolate.handle;
     const platform = self.platform.handle;
-    while (v8.v8__Isolate__HasPendingBackgroundTasks(isolate)) {
-        _ = v8.v8__Platform__PumpMessageLoop(platform, isolate, true);
-        self.runMicrotasks();
+    while (!stop.load(.acquire) and
+        v8.v8__Isolate__HasPendingBackgroundTasks(isolate))
+    {
+        if (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {
+            self.runMicrotasks();
+        } else {
+            // Blocking PumpMessageLoop cannot be woken by RequestInterrupt.
+            // Poll lightly so the execution watchdog can bound this wait.
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+        }
     }
 }
 
@@ -552,6 +652,44 @@ fn terminateInterrupt(_: ?*v8.Isolate, data: ?*anyopaque) callconv(.c) void {
         v8.v8__Isolate__TerminateExecution(self.isolate.handle);
     }
 }
+
+pub const ScopedTerminate = struct {
+    env: *Env,
+    requested: std.atomic.Value(bool) = .init(false),
+
+    pub fn request(self: *ScopedTerminate) void {
+        self.requested.store(true, .release);
+        v8.v8__Isolate__RequestInterrupt(
+            self.env.isolate.handle,
+            scopedTerminateInterrupt,
+            self,
+        );
+    }
+
+    pub fn cancel(self: *ScopedTerminate) void {
+        self.requested.store(false, .release);
+
+        self.env.terminate_mutex.lock();
+        v8.v8__Isolate__CancelTerminateExecution(self.env.isolate.handle);
+        self.env.terminate_mutex.unlock();
+
+        // CancelTerminateExecution clears the isolate-wide state. Preserve a
+        // concurrent shutdown request by scheduling its interrupt again.
+        if (self.env.terminate_requested.load(.acquire)) {
+            self.env.requestTerminate();
+        }
+    }
+
+    fn scopedTerminateInterrupt(
+        _: ?*v8.Isolate,
+        data: ?*anyopaque,
+    ) callconv(.c) void {
+        const self: *ScopedTerminate = @ptrCast(@alignCast(data.?));
+        if (self.requested.load(.acquire)) {
+            v8.v8__Isolate__TerminateExecution(self.env.isolate.handle);
+        }
+    }
+};
 
 /// Clears a pending termination so V8 calls (e.g. those made during cleanup)
 /// don't keep tripping over the terminating-state asserts. Safe to call

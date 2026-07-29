@@ -23,7 +23,8 @@ const Frame = @import("../../Frame.zig");
 const Profile = @import("../../../chimera/Profile.zig");
 
 const texture_unit_count: usize = 32;
-const texture_sample_texel_count: usize = 16;
+const framebuffer_texel_capacity: usize = 65_536;
+const buffer_value_capacity: usize = 4096;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -52,6 +53,7 @@ viewport_values: [4]i32 = .{ 0, 0, 300, 150 },
 scissor_box_values: [4]i32 = .{ 0, 0, 300, 150 },
 clear_color_values: [4]f32 = .{ 0.0, 0.0, 0.0, 0.0 },
 clear_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
+framebuffer_pixels: [framebuffer_texel_capacity][4]u8 = .{.{ 0, 0, 0, 0 }} ** framebuffer_texel_capacity,
 draw_pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
 has_drawn_pixels: bool = false,
 bound_array_buffer: ?*WebGLBuffer = null,
@@ -306,6 +308,23 @@ const TextureSampleCoord = struct {
     v: f64 = 0.0,
 };
 
+const Vec2 = struct {
+    x: f64,
+    y: f64,
+};
+
+const RenderTarget = union(enum) {
+    default: *WebGLRenderingContext,
+    texture: *WebGLTexture,
+};
+
+const BufferDataKind = enum {
+    none,
+    u8,
+    u16,
+    f32,
+};
+
 fn containsCompact(source: []const u8, comptime needle: []const u8) bool {
     if (needle.len == 0) return true;
 
@@ -383,11 +402,11 @@ fn clampColorValue(value: f64) f32 {
 }
 
 fn colorByte(value: f32) u8 {
-    return @intFromFloat(std.math.clamp(value, 0.0, 1.0) * 255.0);
+    return @intFromFloat(@round(std.math.clamp(value, 0.0, 1.0) * 255.0));
 }
 
-fn repeatedTexturePixels(pixel: [4]u8) [texture_sample_texel_count][4]u8 {
-    var values: [texture_sample_texel_count][4]u8 = undefined;
+fn repeatedTexturePixels(pixel: [4]u8) [framebuffer_texel_capacity][4]u8 {
+    var values: [framebuffer_texel_capacity][4]u8 = undefined;
     for (&values) |*target| target.* = pixel;
     return values;
 }
@@ -396,7 +415,7 @@ fn storedTextureTexelCount(texture: *const WebGLTexture) usize {
     if (texture.width <= 0 or texture.height <= 0) return 0;
     const width: usize = @intCast(texture.width);
     const height: usize = @intCast(texture.height);
-    return @min(texture_sample_texel_count, width * height);
+    return @min(framebuffer_texel_capacity, width * height);
 }
 
 fn textureTexelFromValues(values: []const u8, format: u32, index: usize, fallback: [4]u8) [4]u8 {
@@ -445,8 +464,172 @@ fn sampleTexturePixel(texture: *const WebGLTexture, coord: TextureSampleCoord) [
     const x = textureCoordIndex(coord.u, width);
     const y = textureCoordIndex(coord.v, height);
     const index = y * width + x;
-    if (index >= texture_sample_texel_count) return texture.pixel_values;
+    if (index >= framebuffer_texel_capacity) return texture.pixel_values;
     return texture.texel_values[index];
+}
+
+fn storeF32Buffer(buffer: *WebGLBuffer, values: []const f32, usage: u32) void {
+    const count = @min(values.len, buffer_value_capacity);
+    @memset(buffer.f32_values[0..], 0.0);
+    @memcpy(buffer.f32_values[0..count], values[0..count]);
+    buffer.data_kind = .f32;
+    buffer.value_count = count;
+    buffer.byte_length = count * @sizeOf(f32);
+    buffer.usage = usage;
+}
+
+fn storeU16Buffer(buffer: *WebGLBuffer, values: []const u16, usage: u32) void {
+    const count = @min(values.len, buffer_value_capacity);
+    @memset(buffer.u16_values[0..], 0);
+    @memcpy(buffer.u16_values[0..count], values[0..count]);
+    buffer.data_kind = .u16;
+    buffer.value_count = count;
+    buffer.byte_length = count * @sizeOf(u16);
+    buffer.usage = usage;
+}
+
+fn storeU8Buffer(buffer: *WebGLBuffer, values: []const u8, usage: u32) void {
+    const count = @min(values.len, buffer_value_capacity);
+    @memset(buffer.u8_values[0..], 0);
+    @memcpy(buffer.u8_values[0..count], values[0..count]);
+    buffer.data_kind = .u8;
+    buffer.value_count = count;
+    buffer.byte_length = count;
+    buffer.usage = usage;
+}
+
+fn renderTarget(self: *WebGLRenderingContext) ?RenderTarget {
+    if (self.bound_framebuffer != null) {
+        const texture = self.boundFramebufferTexture() orelse return null;
+        return .{ .texture = texture };
+    }
+    return .{ .default = self };
+}
+
+fn renderTargetWidth(target: RenderTarget) usize {
+    return switch (target) {
+        .default => |ctx| @intCast(ctx.drawing_buffer_width),
+        .texture => |texture| if (texture.width > 0) @intCast(texture.width) else 0,
+    };
+}
+
+fn renderTargetHeight(target: RenderTarget) usize {
+    return switch (target) {
+        .default => |ctx| @intCast(ctx.drawing_buffer_height),
+        .texture => |texture| if (texture.height > 0) @intCast(texture.height) else 0,
+    };
+}
+
+fn targetTexelCount(width: usize, height: usize) usize {
+    return @min(framebuffer_texel_capacity, width * height);
+}
+
+fn setTargetPixel(target: RenderTarget, x: usize, y: usize, pixel: [4]u8) void {
+    const width = renderTargetWidth(target);
+    const height = renderTargetHeight(target);
+    if (x >= width or y >= height) return;
+    const index = y * width + x;
+    if (index >= framebuffer_texel_capacity) return;
+    switch (target) {
+        .default => |ctx| ctx.framebuffer_pixels[index] = pixel,
+        .texture => |texture| {
+            texture.texel_values[index] = pixel;
+            texture.pixel_values = pixel;
+            texture.has_image = true;
+        },
+    }
+}
+
+fn getTargetPixel(target: RenderTarget, x: usize, y: usize) [4]u8 {
+    const width = renderTargetWidth(target);
+    const height = renderTargetHeight(target);
+    if (x >= width or y >= height) return .{ 0, 0, 0, 0 };
+    const index = y * width + x;
+    if (index >= framebuffer_texel_capacity) return .{ 0, 0, 0, 0 };
+    return switch (target) {
+        .default => |ctx| ctx.framebuffer_pixels[index],
+        .texture => |texture| texture.texel_values[index],
+    };
+}
+
+fn clearTarget(target: RenderTarget, pixel: [4]u8) void {
+    const count = targetTexelCount(renderTargetWidth(target), renderTargetHeight(target));
+    switch (target) {
+        .default => |ctx| {
+            for (ctx.framebuffer_pixels[0..count]) |*texel| texel.* = pixel;
+            ctx.clear_pixel_values = pixel;
+            ctx.has_drawn_pixels = false;
+        },
+        .texture => |texture| {
+            for (texture.texel_values[0..count]) |*texel| texel.* = pixel;
+            texture.pixel_values = pixel;
+            texture.has_image = true;
+        },
+    }
+}
+
+fn clipToPixel(vertex: Vec2, viewport_values_arg: [4]i32) Vec2 {
+    return .{
+        .x = @as(f64, @floatFromInt(viewport_values_arg[0])) + ((vertex.x + 1.0) * 0.5 * @as(f64, @floatFromInt(viewport_values_arg[2]))),
+        .y = @as(f64, @floatFromInt(viewport_values_arg[1])) + ((vertex.y + 1.0) * 0.5 * @as(f64, @floatFromInt(viewport_values_arg[3]))),
+    };
+}
+
+fn edge(a: Vec2, b: Vec2, p: Vec2) f64 {
+    return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
+}
+
+fn pointInTriangle(p: Vec2, a: Vec2, b: Vec2, c: Vec2) bool {
+    const e0 = edge(a, b, p);
+    const e1 = edge(b, c, p);
+    const e2 = edge(c, a, p);
+    return (e0 >= 0.0 and e1 >= 0.0 and e2 >= 0.0) or (e0 <= 0.0 and e1 <= 0.0 and e2 <= 0.0);
+}
+
+fn vertexAt(buffer: *const WebGLBuffer, index: usize) ?Vec2 {
+    const offset = index * 2;
+    if (buffer.data_kind != .f32 or offset + 1 >= buffer.value_count) return null;
+    return .{ .x = buffer.f32_values[offset], .y = buffer.f32_values[offset + 1] };
+}
+
+fn elementIndexAt(buffer: *const WebGLBuffer, typ: u32, index: usize) ?usize {
+    if (typ == glConst32(UNSIGNED_SHORT)) {
+        if (buffer.data_kind != .u16 or index >= buffer.value_count) return null;
+        return @intCast(buffer.u16_values[index]);
+    }
+    if (typ == glConst32(UNSIGNED_BYTE)) {
+        if (buffer.data_kind != .u8 or index >= buffer.value_count) return null;
+        return @intCast(buffer.u8_values[index]);
+    }
+    return null;
+}
+
+fn rasterizeTriangle(self: *WebGLRenderingContext, target: RenderTarget, a_clip: Vec2, b_clip: Vec2, c_clip: Vec2, pixel: [4]u8) void {
+    const width = renderTargetWidth(target);
+    const height = renderTargetHeight(target);
+    if (width == 0 or height == 0 or self.viewport_values[2] <= 0 or self.viewport_values[3] <= 0) return;
+
+    const a = clipToPixel(a_clip, self.viewport_values);
+    const b = clipToPixel(b_clip, self.viewport_values);
+    const c = clipToPixel(c_clip, self.viewport_values);
+    const min_x_float = @max(0.0, @floor(@min(a.x, @min(b.x, c.x))));
+    const min_y_float = @max(0.0, @floor(@min(a.y, @min(b.y, c.y))));
+    const max_x_float = @min(@as(f64, @floatFromInt(width)), @ceil(@max(a.x, @max(b.x, c.x))));
+    const max_y_float = @min(@as(f64, @floatFromInt(height)), @ceil(@max(a.y, @max(b.y, c.y))));
+    if (max_x_float <= min_x_float or max_y_float <= min_y_float) return;
+
+    const min_x: usize = @intFromFloat(min_x_float);
+    const min_y: usize = @intFromFloat(min_y_float);
+    const max_x: usize = @intFromFloat(max_x_float);
+    const max_y: usize = @intFromFloat(max_y_float);
+    var y = min_y;
+    while (y < max_y) : (y += 1) {
+        var x = min_x;
+        while (x < max_x) : (x += 1) {
+            const sample = Vec2{ .x = @as(f64, @floatFromInt(x)) + 0.5, .y = @as(f64, @floatFromInt(y)) + 0.5 };
+            if (pointInTriangle(sample, a, b, c)) setTargetPixel(target, x, y, pixel);
+        }
+    }
 }
 
 fn boundFramebufferTexture(self: *const WebGLRenderingContext) ?*WebGLTexture {
@@ -485,6 +668,14 @@ pub fn initFromProfile(width: u32, height: u32, profile: ?*const Profile) WebGLR
     return ctx;
 }
 
+pub fn resetDrawingBuffer(self: *WebGLRenderingContext, width: u32, height: u32) void {
+    self.drawing_buffer_width = width;
+    self.drawing_buffer_height = height;
+    self.viewport_values = .{ 0, 0, @intCast(width), @intCast(height) };
+    self.scissor_box_values = .{ 0, 0, @intCast(width), @intCast(height) };
+    clearTarget(.{ .default = self }, .{ 0, 0, 0, 0 });
+}
+
 fn WebGLObjectJsApi(comptime ObjectType: type, comptime js_name: []const u8) type {
     return struct {
         pub const bridge = js.Bridge(ObjectType);
@@ -500,6 +691,11 @@ fn WebGLObjectJsApi(comptime ObjectType: type, comptime js_name: []const u8) typ
 pub const WebGLBuffer = struct {
     byte_length: usize = 0,
     usage: u32 = 0,
+    data_kind: BufferDataKind = .none,
+    value_count: usize = 0,
+    f32_values: [buffer_value_capacity]f32 = .{0.0} ** buffer_value_capacity,
+    u16_values: [buffer_value_capacity]u16 = .{0} ** buffer_value_capacity,
+    u8_values: [buffer_value_capacity]u8 = .{0} ** buffer_value_capacity,
     deleted: bool = false,
 
     pub const JsApi = WebGLObjectJsApi(WebGLBuffer, "WebGLBuffer");
@@ -556,7 +752,7 @@ pub const WebGLTexture = struct {
     width: i32 = 0,
     height: i32 = 0,
     pixel_values: [4]u8 = .{ 0, 0, 0, 0 },
-    texel_values: [texture_sample_texel_count][4]u8 = .{.{ 0, 0, 0, 0 }} ** texture_sample_texel_count,
+    texel_values: [framebuffer_texel_capacity][4]u8 = .{.{ 0, 0, 0, 0 }} ** framebuffer_texel_capacity,
     min_filter: u32 = glConst32(NEAREST),
     mag_filter: u32 = glConst32(NEAREST),
     wrap_s: u32 = glConst32(CLAMP_TO_EDGE),
@@ -1068,14 +1264,8 @@ pub fn clear(self: *WebGLRenderingContext, mask: u64) void {
         colorByte(self.clear_color_values[2]),
         colorByte(self.clear_color_values[3]),
     };
-    if (self.bound_framebuffer != null) {
-        if (self.boundFramebufferTexture()) |texture| {
-            setTexturePixels(texture, pixel_values);
-        }
-        return;
-    }
-    self.clear_pixel_values = pixel_values;
-    self.has_drawn_pixels = false;
+    const target = self.renderTarget() orelse return;
+    clearTarget(target, pixel_values);
 }
 
 pub fn viewport(self: *WebGLRenderingContext, x: i32, y: i32, width: i32, height: i32) void {
@@ -1088,22 +1278,31 @@ pub fn scissor(self: *WebGLRenderingContext, x: i32, y: i32, width: i32, height:
     self.scissor_box_values = .{ x, y, width, height };
 }
 
-pub fn readPixels(self: *const WebGLRenderingContext, _: i32, _: i32, width: i32, height: i32, _: u32, _: u32, pixels: []u8) void {
+pub fn readPixels(self: *const WebGLRenderingContext, x: i32, y: i32, width: i32, height: i32, _: u32, _: u32, pixels: []u8) void {
     if (width <= 0 or height <= 0) return;
-    const pixel_count: usize = @intCast(width * height);
-    const byte_count = @min(pixels.len, pixel_count * 4);
-    const source = if (self.bound_framebuffer != null)
-        if (self.boundFramebufferTexture()) |texture| texture.pixel_values else return
-    else if (self.has_drawn_pixels)
-        self.draw_pixel_values
+    const target = if (self.bound_framebuffer != null)
+        if (self.boundFramebufferTexture()) |texture| RenderTarget{ .texture = texture } else return
     else
-        self.clear_pixel_values;
-    var i: usize = 0;
-    while (i < byte_count) : (i += 4) {
-        pixels[i] = source[0];
-        if (i + 1 < byte_count) pixels[i + 1] = source[1];
-        if (i + 2 < byte_count) pixels[i + 2] = source[2];
-        if (i + 3 < byte_count) pixels[i + 3] = source[3];
+        RenderTarget{ .default = @constCast(self) };
+    const read_width: usize = @intCast(width);
+    const read_height: usize = @intCast(height);
+    var row: usize = 0;
+    while (row < read_height) : (row += 1) {
+        var col: usize = 0;
+        while (col < read_width) : (col += 1) {
+            const out_index = (row * read_width + col) * 4;
+            if (out_index >= pixels.len) return;
+            const src_x_i64 = @as(i64, x) + @as(i64, @intCast(col));
+            const src_y_i64 = @as(i64, y) + @as(i64, @intCast(row));
+            const source = if (src_x_i64 < 0 or src_y_i64 < 0)
+                .{ 0, 0, 0, 0 }
+            else
+                getTargetPixel(target, @intCast(src_x_i64), @intCast(src_y_i64));
+            pixels[out_index] = source[0];
+            if (out_index + 1 < pixels.len) pixels[out_index + 1] = source[1];
+            if (out_index + 2 < pixels.len) pixels[out_index + 2] = source[2];
+            if (out_index + 3 < pixels.len) pixels[out_index + 3] = source[3];
+        }
     }
 }
 
@@ -1133,7 +1332,7 @@ pub fn activeTexture(self: *WebGLRenderingContext, texture: u32) void {
     self.active_texture_unit = unit;
 }
 
-pub fn bufferData(self: *WebGLRenderingContext, target: u32, _: ?js.Value, usage: u32) void {
+pub fn bufferData(self: *WebGLRenderingContext, target: u32, value: ?js.Value, usage: u32) void {
     const buffer = if (target == glConst32(ARRAY_BUFFER))
         self.bound_array_buffer orelse return
     else if (target == glConst32(ELEMENT_ARRAY_BUFFER))
@@ -1141,7 +1340,23 @@ pub fn bufferData(self: *WebGLRenderingContext, target: u32, _: ?js.Value, usage
     else
         return;
     if (buffer.deleted) return;
+    if (value) |raw| {
+        if (raw.toZig(js.TypedArray(f32))) |typed| {
+            storeF32Buffer(buffer, typed.values, usage);
+            return;
+        } else |_| {}
+        if (raw.toZig(js.TypedArray(u16))) |typed| {
+            storeU16Buffer(buffer, typed.values, usage);
+            return;
+        } else |_| {}
+        if (raw.toZig(js.TypedArray(u8))) |typed| {
+            storeU8Buffer(buffer, typed.values, usage);
+            return;
+        } else |_| {}
+    }
     buffer.byte_length = 1;
+    buffer.value_count = 0;
+    buffer.data_kind = .none;
     buffer.usage = usage;
 }
 
@@ -1162,7 +1377,7 @@ pub fn vertexAttribPointer(self: *WebGLRenderingContext, index: u32, size: i32, 
 }
 
 pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i32) void {
-    if (mode != glConst32(TRIANGLES) or first < 0 or count < 3) return;
+    if ((mode != glConst32(TRIANGLES) and mode != glConst32(TRIANGLE_STRIP)) or first < 0 or count < 3) return;
     if (!self.attrib0_array_enabled or !self.attrib0_pointer_enabled) return;
     const buffer = self.bound_array_buffer orelse return;
     if (buffer.deleted or buffer.byte_length == 0) return;
@@ -1172,12 +1387,23 @@ pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i3
     if (!fragment_shader.compiled or fragment_shader.deleted) return;
 
     const pixel_values = self.fragmentDrawColor(program, fragment_shader) orelse return;
-    if (self.bound_framebuffer != null) {
-        if (self.boundFramebufferTexture()) |texture| {
-            setTexturePixels(texture, pixel_values);
-            texture.has_image = true;
+    const target = self.renderTarget() orelse return;
+    if (mode == glConst32(TRIANGLES)) {
+        var i: i32 = 0;
+        while (i + 2 < count) : (i += 3) {
+            const a = vertexAt(buffer, @intCast(first + i)) orelse return;
+            const b = vertexAt(buffer, @intCast(first + i + 1)) orelse return;
+            const c = vertexAt(buffer, @intCast(first + i + 2)) orelse return;
+            self.rasterizeTriangle(target, a, b, c, pixel_values);
         }
-        return;
+    } else {
+        var i: i32 = 0;
+        while (i + 2 < count) : (i += 1) {
+            const a = vertexAt(buffer, @intCast(first + i)) orelse return;
+            const b = vertexAt(buffer, @intCast(first + i + 1)) orelse return;
+            const c = vertexAt(buffer, @intCast(first + i + 2)) orelse return;
+            self.rasterizeTriangle(target, a, b, c, pixel_values);
+        }
     }
     self.draw_pixel_values = pixel_values;
     self.has_drawn_pixels = true;
@@ -1197,12 +1423,16 @@ pub fn drawElements(self: *WebGLRenderingContext, mode: u32, count: i32, typ: u3
     if (!fragment_shader.compiled or fragment_shader.deleted) return;
 
     const pixel_values = self.fragmentDrawColor(program, fragment_shader) orelse return;
-    if (self.bound_framebuffer != null) {
-        if (self.boundFramebufferTexture()) |texture| {
-            setTexturePixels(texture, pixel_values);
-            texture.has_image = true;
-        }
-        return;
+    const target = self.renderTarget() orelse return;
+    var i: i32 = 0;
+    while (i + 2 < count) : (i += 3) {
+        const ia = elementIndexAt(element_buffer, typ, @intCast(i)) orelse return;
+        const ib = elementIndexAt(element_buffer, typ, @intCast(i + 1)) orelse return;
+        const ic = elementIndexAt(element_buffer, typ, @intCast(i + 2)) orelse return;
+        const a = vertexAt(array_buffer, ia) orelse return;
+        const b = vertexAt(array_buffer, ib) orelse return;
+        const c = vertexAt(array_buffer, ic) orelse return;
+        self.rasterizeTriangle(target, a, b, c, pixel_values);
     }
     self.draw_pixel_values = pixel_values;
     self.has_drawn_pixels = true;
@@ -1573,6 +1803,8 @@ pub const JsApi = struct {
     pub const RGBA = bridge.property(WebGLRenderingContext.RGBA, .{ .template = true });
     pub const RGB = bridge.property(WebGLRenderingContext.RGB, .{ .template = true });
     pub const TRIANGLES = bridge.property(WebGLRenderingContext.TRIANGLES, .{ .template = true });
+    pub const TRIANGLE_STRIP = bridge.property(WebGLRenderingContext.TRIANGLE_STRIP, .{ .template = true });
+    pub const TRIANGLE_FAN = bridge.property(WebGLRenderingContext.TRIANGLE_FAN, .{ .template = true });
     pub const SAMPLER_2D = bridge.property(WebGLRenderingContext.SAMPLER_2D, .{ .template = true });
 };
 
@@ -1587,8 +1819,8 @@ fn expectStringParameter(expected: []const u8, value: ParameterValue) !void {
 
 test "WebApi: WebGLRenderingContext uses Chimera profile WebGL values" {
     const languages = [_][]const u8{ "en-AU", "en" };
-    const brands = [_]Profile.Brand{.{ .brand = "Chromium", .version = "149" }};
-    const full_version_list = [_]Profile.Brand{.{ .brand = "Chromium", .version = "149.0.0.0" }};
+    const brands = [_]Profile.Brand{.{ .brand = "Chromium", .version = "136" }};
+    const full_version_list = [_]Profile.Brand{.{ .brand = "Chromium", .version = "136.0.0.0" }};
     const form_factor = [_][]const u8{"Desktop"};
     const profile = Profile{
         .schema_version = Profile.VERSION,
@@ -1601,11 +1833,11 @@ test "WebApi: WebGLRenderingContext uses Chimera profile WebGL values" {
         .headers = .{
             .user_agent = "Mozilla/5.0",
             .accept_language = "en-AU,en;q=0.9",
-            .sec_ch_ua = "\"Chromium\";v=\"149\"",
+            .sec_ch_ua = "\"Chromium\";v=\"136\"",
             .sec_ch_ua_mobile = "?0",
             .sec_ch_ua_platform = "\"macOS\"",
-            .sec_ch_ua_full_version = "\"149.0.0.0\"",
-            .sec_ch_ua_full_version_list = "\"Chromium\";v=\"149.0.0.0\"",
+            .sec_ch_ua_full_version = "\"136.0.0.0\"",
+            .sec_ch_ua_full_version_list = "\"Chromium\";v=\"136.0.0.0\"",
             .sec_ch_ua_arch = "\"arm\"",
             .sec_ch_ua_bitness = "\"64\"",
             .sec_ch_ua_model = "\"\"",
@@ -1629,7 +1861,7 @@ test "WebApi: WebGLRenderingContext uses Chimera profile WebGL values" {
             .bitness = "64",
             .model = "",
             .platform_version = "27.0.0",
-            .ua_full_version = "149.0.0.0",
+            .ua_full_version = "136.0.0.0",
             .wow64 = false,
             .form_factor = form_factor[0..],
         },
@@ -1652,10 +1884,16 @@ test "WebApi: WebGLRenderingContext uses Chimera profile WebGL values" {
         },
     };
 
-    const ctx = WebGLRenderingContext.initFromProfile(640, 480, &profile);
+    var ctx = WebGLRenderingContext.initFromProfile(640, 480, &profile);
 
     try expectStringParameter("Google Inc. (Profile GPU)", ctx.getParameter(WEBGL_UNMASKED_VENDOR));
     try expectStringParameter("ANGLE (Profile GPU, Chimera Renderer)", ctx.getParameter(WEBGL_UNMASKED_RENDERER));
+
+    ctx.clearColor(0.25, 0.5, 0.75, 1.0);
+    ctx.clear(COLOR_BUFFER_BIT);
+    var pixels = [_]u8{0} ** 16;
+    ctx.readPixels(0, 0, 2, 2, @intCast(RGBA), @intCast(UNSIGNED_BYTE), pixels[0..]);
+    try testing.expectEqualSlices(u8, &([_]u8{ 64, 128, 191, 255 } ** 4), pixels[0..]);
 }
 
 test "WebApi: WebGLRenderingContext" {

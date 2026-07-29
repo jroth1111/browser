@@ -510,6 +510,111 @@
 }
 </script>
 
+<script id=WebGLRenderingContext#pixelscan_partial_viewport_rasterization>
+{
+  const element = document.createElement("canvas");
+  element.setAttribute("width", "64");
+  element.setAttribute("height", "32");
+  const ctx = element.getContext("webgl");
+
+  const vertexShader = ctx.createShader(ctx.VERTEX_SHADER);
+  ctx.shaderSource(vertexShader, "attribute vec2 position; void main() { gl_Position = vec4(position, 0.0, 1.0); }");
+  ctx.compileShader(vertexShader);
+
+  const fragmentShader = ctx.createShader(ctx.FRAGMENT_SHADER);
+  ctx.shaderSource(fragmentShader, "precision mediump float; void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }");
+  ctx.compileShader(fragmentShader);
+
+  const program = ctx.createProgram();
+  ctx.attachShader(program, vertexShader);
+  ctx.attachShader(program, fragmentShader);
+  ctx.linkProgram(program);
+  ctx.useProgram(program);
+
+  const position = ctx.getAttribLocation(program, "position");
+  const vertexBuffer = ctx.createBuffer();
+  ctx.bindBuffer(ctx.ARRAY_BUFFER, vertexBuffer);
+  ctx.bufferData(ctx.ARRAY_BUFFER, new Float32Array([
+    -1, -1,
+     1, -1,
+     1,  1,
+    -1,  1,
+  ]), ctx.STATIC_DRAW);
+  ctx.enableVertexAttribArray(position);
+  ctx.vertexAttribPointer(position, 2, ctx.FLOAT, false, 0, 0);
+
+  const indexBuffer = ctx.createBuffer();
+  ctx.bindBuffer(ctx.ELEMENT_ARRAY_BUFFER, indexBuffer);
+  ctx.bufferData(ctx.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]), ctx.STATIC_DRAW);
+
+  ctx.clearColor(0, 0, 0, 0);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+  ctx.viewport(8, 4, 32, 16);
+  ctx.drawElements(ctx.TRIANGLES, 6, ctx.UNSIGNED_SHORT, 0);
+
+  const pixels = new Uint8Array(64 * 32 * 4);
+  ctx.readPixels(0, 0, 64, 32, ctx.RGBA, ctx.UNSIGNED_BYTE, pixels);
+  const sample = (x, y) => Array.from(pixels.slice((y * 64 + x) * 4, (y * 64 + x) * 4 + 4));
+
+  const covered = sample(16, 8);
+  testing.expectEqual(255, covered[0]);
+  testing.expectEqual(0, covered[1]);
+  testing.expectEqual(0, covered[2]);
+  testing.expectEqual(255, covered[3]);
+
+  const uncoveredBeforeViewport = sample(2, 2);
+  testing.expectEqual(0, uncoveredBeforeViewport[0]);
+  testing.expectEqual(0, uncoveredBeforeViewport[1]);
+  testing.expectEqual(0, uncoveredBeforeViewport[2]);
+  testing.expectEqual(0, uncoveredBeforeViewport[3]);
+
+  const uncoveredAfterViewport = sample(50, 24);
+  testing.expectEqual(0, uncoveredAfterViewport[0]);
+  testing.expectEqual(0, uncoveredAfterViewport[1]);
+  testing.expectEqual(0, uncoveredAfterViewport[2]);
+  testing.expectEqual(0, uncoveredAfterViewport[3]);
+}
+</script>
+
+<script id=WebGLRenderingContext#texture_framebuffer_per_texel_readback>
+{
+  const element = document.createElement("canvas");
+  element.setAttribute("width", "8");
+  element.setAttribute("height", "8");
+  const ctx = element.getContext("webgl");
+
+  const texture = ctx.createTexture();
+  ctx.bindTexture(ctx.TEXTURE_2D, texture);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MIN_FILTER, ctx.NEAREST);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_MAG_FILTER, ctx.NEAREST);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_S, ctx.CLAMP_TO_EDGE);
+  ctx.texParameteri(ctx.TEXTURE_2D, ctx.TEXTURE_WRAP_T, ctx.CLAMP_TO_EDGE);
+  ctx.texImage2D(ctx.TEXTURE_2D, 0, ctx.RGBA, 2, 2, 0, ctx.RGBA, ctx.UNSIGNED_BYTE, new Uint8Array([
+    10, 20, 30, 255,
+    40, 50, 60, 255,
+    70, 80, 90, 255,
+    100, 110, 120, 255,
+  ]));
+
+  const framebuffer = ctx.createFramebuffer();
+  ctx.bindFramebuffer(ctx.FRAMEBUFFER, framebuffer);
+  ctx.framebufferTexture2D(ctx.FRAMEBUFFER, ctx.COLOR_ATTACHMENT0, ctx.TEXTURE_2D, texture, 0);
+  testing.expectEqual(ctx.FRAMEBUFFER_COMPLETE, ctx.checkFramebufferStatus(ctx.FRAMEBUFFER));
+
+  const pixels = new Uint8Array(16);
+  ctx.readPixels(0, 0, 2, 2, ctx.RGBA, ctx.UNSIGNED_BYTE, pixels);
+  const expected = [
+    10, 20, 30, 255,
+    40, 50, 60, 255,
+    70, 80, 90, 255,
+    100, 110, 120, 255,
+  ];
+  for (let i = 0; i < expected.length; i++) {
+    testing.expectEqual(expected[i], pixels[i]);
+  }
+}
+</script>
+
 <script id=identity>
 {
   const element = document.createElement('canvas');

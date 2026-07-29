@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><title>runaway-javascript-url</title></head>
+<body>
+<script>
+const frame = document.createElement('iframe');
+frame.src = 'javascript:void (() => {' +
+  'const spin = () => {' +
+    'const end = Date.now() + 5;' +
+    'while (Date.now() < end) {}' +
+    'Promise.resolve().then(spin);' +
+  '};' +
+  'Promise.resolve().then(spin);' +
+'})()';
+document.body.appendChild(frame);
+</script>
+</body>
+</html>

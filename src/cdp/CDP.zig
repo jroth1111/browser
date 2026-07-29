@@ -108,12 +108,16 @@ pub fn init(
         .notification_arena = std.heap.ArenaAllocator.init(allocator),
         .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
     };
+    errdefer self.frame_arena.deinit();
+    errdefer self.message_arena.deinit();
+    errdefer self.notification_arena.deinit();
+    errdefer self.browser_context_arena.deinit();
 
     try self.browser.init(app, .{ .env = .{ .with_inspector = true } }, self);
+    errdefer self.browser.deinit();
     const http_client = &self.browser.http_client;
 
     try self.conn.init(app, socket, json_version_response, &http_client.inbox);
-    errdefer self.conn.deinit();
 
     self.link = .{
         .cdp = self,
@@ -188,6 +192,9 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
         return;
     }
 
+    self.browser.armExecutionWatchdog();
+    defer self.browser.finishExecutionWatchdog();
+
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
     return self.dispatchParsed(arena.allocator(), .{ .cdp = self }, c.raw, c.input);
@@ -197,6 +204,9 @@ pub fn onMessage(self: *CDP, c: *Inbox.Message.Cdp) anyerror!void {
 // don't go through the Network thread / inbox pipeline) and by any
 // caller that has bytes rather than a pre-parsed InputMessage.
 pub fn processMessage(self: *CDP, msg: []const u8) !void {
+    self.browser.armExecutionWatchdog();
+    defer self.browser.finishExecutionWatchdog();
+
     const arena = &self.message_arena;
     defer _ = arena.reset(.{ .retain_with_limit = 1024 * 16 });
     return self.dispatch(arena.allocator(), .{ .cdp = self }, msg);
@@ -527,6 +537,8 @@ pub const BrowserContext = struct {
 
     inspector_session: *js.Inspector.Session,
     isolated_worlds: std.ArrayList(*IsolatedWorld),
+    buffered_inspector_call_id: ?i64 = null,
+    buffered_inspector_response: ?[]u8 = null,
 
     // Scripts registered via Page.addScriptToEvaluateOnNewDocument.
     // Evaluated in each new document after navigation completes.
@@ -1032,13 +1044,91 @@ pub const BrowserContext = struct {
         defer _ = self.cdp.notification_arena.reset(.{ .retain_with_limit = 1024 * 64 });
     }
 
-    pub fn callInspector(self: *const BrowserContext, msg: []const u8) void {
+    pub fn executionContext(self: *const BrowserContext, context_id: ?i32) ?*js.Context {
+        if (context_id == null) {
+            return (self.mainFrame() orelse return null).js;
+        }
+
+        const inspector = self.inspector_session.inspector;
+        for (self.session.browser.env.contexts.items) |ctx| {
+            if (ctx.page.session != self.session) continue;
+            var ls: js.Local.Scope = undefined;
+            ctx.localScope(&ls);
+            const candidate_id = inspector.getContextId(&ls.local);
+            ls.deinit();
+            if (candidate_id == context_id.?) return ctx;
+        }
+        return null;
+    }
+
+    pub const InspectorCheckpoint = union(enum) {
+        all,
+        none,
+        context: *js.Context,
+    };
+
+    pub const InspectorCallResult = enum {
+        completed,
+        pending,
+        terminated,
+    };
+
+    pub fn callInspector(
+        self: *BrowserContext,
+        msg: []const u8,
+        call_id: i64,
+        checkpoint: InspectorCheckpoint,
+    ) InspectorCallResult {
+        const browser = self.session.browser;
+        const fire_count_before = browser.executionWatchdogFireCount();
+        browser.armExecutionWatchdog();
+        defer browser.finishExecutionWatchdog();
+
+        self.buffered_inspector_call_id = call_id;
+        self.buffered_inspector_response = null;
+        defer self.buffered_inspector_call_id = null;
+        defer if (self.buffered_inspector_response) |response| {
+            self.cdp.allocator.free(response);
+            self.buffered_inspector_response = null;
+        };
+
         self.inspector_session.send(msg);
-        self.session.browser.env.runMicrotasks();
+        switch (checkpoint) {
+            .all => browser.env.runMicrotasks(),
+            .none => {},
+            .context => |ctx| browser.env.runMicrotasksForContext(ctx),
+        }
+
+        if (browser.executionWatchdogFireCount() != fire_count_before) {
+            return .terminated;
+        }
+        if (self.buffered_inspector_response) |response| {
+            sendInspectorMessage(self, response) catch |err| {
+                log.err(.cdp, "send inspector response", .{ .err = err });
+            };
+            return .completed;
+        }
+        return .pending;
     }
 
     pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
-        sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
+        const self: *BrowserContext = @ptrCast(@alignCast(ctx));
+        const response_id: ?i64 = blk: {
+            const parsed = json.parseFromSlice(struct {
+                id: ?i64 = null,
+            }, self.cdp.allocator, msg, .{ .ignore_unknown_fields = true }) catch break :blk null;
+            defer parsed.deinit();
+            break :blk parsed.value.id;
+        };
+        if (self.buffered_inspector_call_id != null and response_id == self.buffered_inspector_call_id) {
+            std.debug.assert(self.buffered_inspector_response == null);
+            self.buffered_inspector_response = self.cdp.allocator.dupe(u8, msg) catch |err| {
+                log.err(.cdp, "buffer inspector response", .{ .err = err });
+                return;
+            };
+            return;
+        }
+        sendInspectorMessage(self, msg) catch |err| {
             log.err(.cdp, "send inspector response", .{ .err = err });
         };
     }

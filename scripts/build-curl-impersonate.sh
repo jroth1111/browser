@@ -129,7 +129,7 @@ SOURCE="$(cd "$SOURCE" && pwd)" || die "source directory not found: $SOURCE"
 OUTPUT="$(canonical_path "$OUTPUT")"
 BUILD_DIR="$(canonical_path "$BUILD_DIR")"
 
-for tool in cmake ninja autoconf automake patch unzip curl go nm rsync perl; do
+for tool in cmake ninja autoconf automake patch unzip curl go nm rsync perl python3 git; do
   have "$tool" || die "missing required tool: $tool"
 done
 
@@ -152,6 +152,13 @@ fi
 [[ -x "$SOURCE/bin/curl_$TARGET" || -f "$SOURCE/bin/curl_$TARGET" ]] ||
   grep -q "\"$TARGET\"" "$SOURCE/patches/curl.patch" ||
   die "curl-impersonate source does not advertise target '$TARGET'"
+
+LOCK_FILE="$REPO_ROOT/curl-impersonate.lock.json"
+[[ -f "$LOCK_FILE" ]] || die "missing tracked source contract: $LOCK_FILE"
+python3 "$SCRIPT_DIR/curl_impersonate_receipt.py" source \
+  --lock "$LOCK_FILE" \
+  --source "$SOURCE" \
+  --target "$TARGET"
 
 printf 'curl-impersonate source name: %s\n' "$(basename "$SOURCE")"
 printf 'required target: %s\n' "$TARGET"
@@ -228,17 +235,14 @@ fi
 if [[ -f "$PREFIX/bin/curl_$TARGET" ]]; then
   cp "$PREFIX/bin/curl_$TARGET" "$OUTPUT/bin/"
 fi
+[[ -f "$OUTPUT/bin/curl_$TARGET" && -x "$OUTPUT/bin/curl_$TARGET" ]] ||
+  die "missing executable runtime wrapper: $OUTPUT/bin/curl_$TARGET"
 
-source_commit="$(git -C "$SOURCE" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
-source_name="$(basename "$SOURCE")"
-cat > "$OUTPUT/share/chimera-curl-impersonate.json" <<EOF
-{
-  "schema": "chimera-curl-impersonate/v1",
-  "source_name": "$source_name",
-  "source_commit": "$source_commit",
-  "target": "$TARGET"
-}
-EOF
+python3 "$SCRIPT_DIR/curl_impersonate_receipt.py" write \
+  --lock "$LOCK_FILE" \
+  --source "$SOURCE" \
+  --package "$OUTPUT" \
+  --target "$TARGET"
 
 nm_output="$(nm -g "$OUTPUT/lib/libcurl-impersonate.a")"
 grep -Eq '(^|[[:space:]])_?curl_easy_impersonate([[:space:]]|$)' <<<"$nm_output" ||

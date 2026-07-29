@@ -1421,7 +1421,11 @@ fn mapActionError(err: anytype) ToolError {
 /// If the previous action queued a navigation (form submit, link click,
 /// Enter on an input), drive the runner until it completes or times out.
 fn awaitQueuedNavigation(session: *lp.Session, frame_id: u32) ToolError!void {
-    const navigated = session.processQueuedNavigation() catch return ToolError.InternalError;
+    const navigated = blk: {
+        session.browser.armExecutionWatchdog();
+        defer session.browser.finishExecutionWatchdog();
+        break :blk session.processQueuedNavigation() catch return ToolError.InternalError;
+    };
     if (navigated == false) {
         return;
     }

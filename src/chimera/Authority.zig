@@ -93,7 +93,7 @@ pub fn fromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !Autho
 fn networkFromValue(value: std.json.Value) !Network {
     const obj = try object(value);
     return .{
-        .proxy_url = try requiredString(obj, "proxy_url"),
+        .proxy_url = try optionalString(obj, "proxy_url") orelse "",
         .route_id = try optionalString(obj, "route_id"),
         .proxy_route = try optionalString(obj, "proxy_route"),
         .requires_proxy = try optionalBoolDefault(obj, "requires_proxy", true),

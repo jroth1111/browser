@@ -376,3 +376,42 @@ test "cdp.input: dispatchKeyEvent Tab runs sequential focus navigation" {
     });
     try testing.expect((try ls.local.compileAndRun("document.activeElement.id === 'b1'", null)).isTrue());
 }
+
+test "cdp.input: select-all modifier replaces input text" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const frame = page.frame().?;
+
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try frame.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    try testing.waitForPage(bc);
+
+    var ls: lp.js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\document.body.innerHTML = '<input id="i" type="email">';
+        \\document.querySelector('#i').setAttribute('value', 'old');
+        \\document.querySelector('#i').focus();
+    , null);
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "Input.dispatchKeyEvent",
+        .params = .{ .type = "keyDown", .key = "a", .code = "KeyA", .modifiers = 2 },
+    });
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "Input.insertText",
+        .params = .{ .text = "new" },
+    });
+    try testing.expect((try ls.local.compileAndRun("document.querySelector('#i').value === 'new'", null)).isTrue());
+}

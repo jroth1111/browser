@@ -357,7 +357,11 @@ pub fn strokeText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: 
 }
 pub fn measureText(self: *const CanvasRenderingContext2D, text: []const u8, exec: *Execution) !*TextMetrics {
     const font_size = CanvasBitmap.fontPixelSize(self._font);
-    return exec._factory.create(TextMetrics.init(CanvasBitmap.textWidth(text, self._font), font_size));
+    const seed = canvasSeed(exec);
+    return exec._factory.create(if (seed != 0)
+        TextMetrics.initWithSeed(CanvasBitmap.textWidth(text, self._font), font_size, seed)
+    else
+        TextMetrics.init(CanvasBitmap.textWidth(text, self._font), font_size));
 }
 pub fn isPointInPath(self: *const CanvasRenderingContext2D, x: f64, y: f64, maybe_fill_rule: ?[]const u8) bool {
     return self._path.isPointInPath(x, y, maybe_fill_rule);
@@ -411,7 +415,7 @@ fn syncComposite(self: *CanvasRenderingContext2D) void {
 
 fn canvasSeed(exec: *Execution) u64 {
     const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
-    if (!authority.profile.canvas.enabled) return 0;
+    if (!authority.profile.canvasNoiseEnabled()) return 0;
     return Seeds.surfaceSeed(&authority.profile, .canvas);
 }
 

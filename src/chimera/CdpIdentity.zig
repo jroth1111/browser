@@ -89,22 +89,22 @@ test "cdp identity derives managed profile product and user agent" {
         \\    "schema_version":"chimera-browser-profile/v1",
         \\    "profile_id":"lightpanda:sess-identity",
         \\    "target_domain":"example.com",
-        \\    "user_agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7050.0 Safari/537.36",
+        \\    "user_agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
         \\    "app_version":"5.0",
         \\    "accept_language":"en-US,en;q=0.9",
         \\    "languages":["en-US","en"],
         \\    "headers":{
-        \\      "User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7050.0 Safari/537.36",
+        \\      "User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
         \\      "Accept-Language":"en-US,en;q=0.9",
-        \\      "Sec-CH-UA":"\"Chromium\";v=\"146\"",
+        \\      "Sec-CH-UA":"\"Chromium\";v=\"136\"",
         \\      "Sec-CH-UA-Mobile":"?0",
         \\      "Sec-CH-UA-Platform":"\"macOS\"",
-        \\      "Sec-CH-UA-Full-Version":"\"146.0.7050.0\"",
-        \\      "Sec-CH-UA-Full-Version-List":"\"Chromium\";v=\"146.0.7050.0\"",
+        \\      "Sec-CH-UA-Full-Version":"\"136.0.0.0\"",
+        \\      "Sec-CH-UA-Full-Version-List":"\"Chromium\";v=\"136.0.0.0\"",
         \\      "Sec-CH-UA-Arch":"\"arm\"",
         \\      "Sec-CH-UA-Bitness":"\"64\"",
         \\      "Sec-CH-UA-Model":"\"\"",
-        \\      "Sec-CH-UA-Platform-Version":"\"15.0.0\""
+        \\      "Sec-CH-UA-Platform-Version":"\"27.0.0\""
         \\    },
         \\    "navigator":{
         \\      "platform":"MacIntel",
@@ -116,15 +116,15 @@ test "cdp identity derives managed profile product and user agent" {
         \\      "webdriver":false
         \\    },
         \\    "ua_data":{
-        \\      "brands":[{"brand":"Chromium","version":"146"}],
-        \\      "full_version_list":[{"brand":"Chromium","version":"146.0.7050.0"}],
+        \\      "brands":[{"brand":"Chromium","version":"136"}],
+        \\      "full_version_list":[{"brand":"Chromium","version":"136.0.0.0"}],
         \\      "mobile":false,
         \\      "platform":"macOS",
         \\      "architecture":"arm",
         \\      "bitness":"64",
         \\      "model":"",
-        \\      "platform_version":"15.0.0",
-        \\      "ua_full_version":"146.0.7050.0",
+        \\      "platform_version":"27.0.0",
+        \\      "ua_full_version":"136.0.0.0",
         \\      "wow64":false,
         \\      "form_factor":["Desktop"]
         \\    },
@@ -159,7 +159,7 @@ test "cdp identity derives managed profile product and user agent" {
         \\      "usage_bytes":0
         \\    },
         \\    "transport":{
-        \\      "impersonate_target":"chrome146",
+        \\      "impersonate_target":"chrome136",
         \\      "requires_curl_impersonate":true
         \\    },
         \\    "capabilities":{
@@ -173,7 +173,7 @@ test "cdp identity derives managed profile product and user agent" {
         \\    "requires_proxy":true
         \\  },
         \\  "diagnostics":{
-        \\    "expected_impersonation_target":"chrome146",
+        \\    "expected_impersonation_target":"chrome136",
         \\    "requires_curl_impersonate":true
         \\  }
         \\}
@@ -181,12 +181,12 @@ test "cdp identity derives managed profile product and user agent" {
 
     const cdp_product = try cdpProduct(testing.allocator, &authority);
     defer cdp_product.deinit(testing.allocator);
-    try testing.expectEqualStrings("Chrome/146.0.7050.0", cdp_product.value);
+    try testing.expectEqualStrings("Chrome/136.0.0.0", cdp_product.value);
     try testing.expectEqualStrings(authority.profile.headers.user_agent, cdpUserAgent(&authority));
 
     const http_product = try httpBrowserProduct(testing.allocator, &authority);
     defer http_product.deinit(testing.allocator);
-    try testing.expectEqualStrings("Chrome/146.0.7050.0", http_product.value);
+    try testing.expectEqualStrings("Chrome/136.0.0.0", http_product.value);
     try testing.expectEqualStrings(authority.profile.headers.user_agent, httpUserAgent(&authority));
 }
 

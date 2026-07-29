@@ -208,10 +208,17 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     const browser = self.browser;
     const http_client = self.http_client;
 
-    // Drain queued navigations across every live page (one page per call)
+    // Drain queued navigations across every live page (one page per call).
+    // JavaScript URLs execute synchronously here, before the macrotask safe
+    // point below, so they need the same execution deadline.
+    const processed_navigation = blk: {
+        browser.armExecutionWatchdog();
+        defer browser.finishExecutionWatchdog();
+        break :blk try session.processQueuedNavigation();
+    };
     // A navigation can swap a frame pointer or the page set,
     // so restart the tick to re-resolve cleanly.
-    if (try session.processQueuedNavigation()) {
+    if (processed_navigation) {
         return .{ .ok = 0 };
     }
 
@@ -296,12 +303,16 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
     }
 
     if ((comptime is_cdp) or want_http_tick) {
-        var ms_to_wait = @min(timeout_ms, ms_to_next_macrotask orelse 200);
+        // Keep socket polling well below the execution deadline so the
+        // watchdog measures callback/JavaScript work, not an idle wait.
+        var ms_to_wait = @min(@min(timeout_ms, ms_to_next_macrotask orelse 200), 200);
         if (browser.hasBackgroundTasks()) {
             // background work will queue more to do soon — don't block long
             // for a client message; loop back and run macrotasks instead.
             ms_to_wait = @min(ms_to_wait, 10);
         }
+        browser.armExecutionWatchdog();
+        defer browser.finishExecutionWatchdog();
         try http_client.tick(@intCast(ms_to_wait), .all);
         return .{ .ok = 0 };
     }
@@ -459,6 +470,273 @@ test "Runner: waitForSelector" {
     var runner = page.session.runner(.{});
     const el = try runner.waitForSelector(page.frame_id, "#sel1", 10);
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
+}
+
+test "Runner: iframe macrotasks yield between contexts" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    var create_timer = try std.time.Timer.start();
+    const created = try ls.local.compileAndRun(
+        \\window.__busyDone = 0;
+        \\for (let i = 0; i < 8; i++) {
+        \\  const frame = document.createElement('iframe');
+        \\  frame.src = 'javascript:void setTimeout(() => {' +
+        \\    'const end = Date.now() + 100;' +
+        \\    'while (Date.now() < end) {}' +
+        \\    'parent.__busyDone++;' +
+        \\  '}, 0)';
+        \\  document.body.appendChild(frame);
+        \\}
+        \\document.querySelectorAll('iframe').length;
+    , null);
+    try testing.expectEqual(8.0, try created.toF64());
+    try testing.expect(create_timer.read() < 2 * std.time.ns_per_s);
+
+    var pass_timer = try std.time.Timer.start();
+    try page.session.browser.runMacrotasks();
+    try testing.expect(pass_timer.read() < 500 * std.time.ns_per_ms);
+    try testing.expectEqual(1.0, try (try ls.local.compileAndRun("window.__busyDone", null)).toF64());
+
+    for (0..7) |_| {
+        try page.session.browser.runMacrotasks();
+    }
+    try testing.expectEqual(8.0, try (try ls.local.compileAndRun("window.__busyDone", null)).toF64());
+}
+
+test "Runner: new iframe context waits for next macrotask pass" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    const created = try ls.local.compileAndRun(
+        \\window.__existingDone = 0;
+        \\window.__newDone = 0;
+        \\for (let i = 0; i < 3; i++) {
+        \\  const frame = document.createElement('iframe');
+        \\  frame.src = 'javascript:void setTimeout(() => {' +
+        \\    'parent.__existingDone++;' +
+        \\    (i === 0 ?
+        \\      "const child=document.createElement('iframe');" +
+        \\      "child.src='javascript:void setTimeout(() => parent.__newDone++, 0)';" +
+        \\      'parent.document.body.appendChild(child);' : '') +
+        \\  '}, 0)';
+        \\  document.body.appendChild(frame);
+        \\}
+        \\document.querySelectorAll('iframe').length;
+    , null);
+    try testing.expectEqual(3.0, try created.toF64());
+
+    // Start from a nonzero cursor so a live-array walk would reach the appended
+    // context before wrapping to every context that existed at pass start.
+    page.session.browser.env.macrotask_context_cursor = 1;
+    try page.session.browser.runMacrotasks();
+    try testing.expectEqual(3.0, try (try ls.local.compileAndRun("window.__existingDone", null)).toF64());
+    try testing.expectEqual(0.0, try (try ls.local.compileAndRun("window.__newDone", null)).toF64());
+
+    try page.session.browser.runMacrotasks();
+    try testing.expectEqual(1.0, try (try ls.local.compileAndRun("window.__newDone", null)).toF64());
+}
+
+test "Runner: macrotask budget stops between callbacks" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.__busyDone = 0;
+        \\const frame = document.createElement('iframe');
+        \\frame.src = 'javascript:void (() => {' +
+        \\  'for (let i = 0; i < 8; i++) {' +
+        \\    'setTimeout(() => {' +
+        \\      'const end = Date.now() + 100;' +
+        \\      'while (Date.now() < end) {}' +
+        \\      'parent.__busyDone++;' +
+        \\    '}, 0);' +
+        \\  '}' +
+        \\'})()';
+        \\document.body.appendChild(frame);
+    , null);
+
+    var pass_timer = try std.time.Timer.start();
+    try page.session.browser.runMacrotasks();
+    try testing.expect(pass_timer.read() < 500 * std.time.ns_per_ms);
+    try testing.expectEqual(1.0, try (try ls.local.compileAndRun("window.__busyDone", null)).toF64());
+
+    for (0..7) |_| {
+        try page.session.browser.runMacrotasks();
+    }
+    try testing.expectEqual(8.0, try (try ls.local.compileAndRun("window.__busyDone", null)).toF64());
+}
+
+test "Runner: execution watchdog interrupts self-replenishing microtasks" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        _ = try ls.local.compileAndRun(
+            \\setTimeout(() => {
+            \\  const spin = () => {
+            \\    const end = Date.now() + 5;
+            \\    while (Date.now() < end) {}
+            \\    Promise.resolve().then(spin);
+            \\  };
+            \\  Promise.resolve().then(spin);
+            \\}, 0);
+        , null);
+    }
+
+    const fires_before = page.session.browser.executionWatchdogFireCount();
+    var pass_timer = try std.time.Timer.start();
+    try page.session.browser.runMacrotasks();
+    try testing.expect(pass_timer.read() < 8 * std.time.ns_per_s);
+    try testing.expectEqual(fires_before + 1, page.session.browser.executionWatchdogFireCount());
+    try testing.expect(!page.session.browser.env.terminatePending());
+
+    // The next worker pass must not re-enter the interrupted Promise chain.
+    try page.session.browser.runMacrotasks();
+    try testing.expectEqual(fires_before + 1, page.session.browser.executionWatchdogFireCount());
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expectEqual(42.0, try (try ls.local.compileAndRun("21 * 2", null)).toF64());
+}
+
+test "Runner: execution watchdog discards promises queued before synchronous termination" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    page.session.browser.armExecutionWatchdog();
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        _ = ls.local.compileAndRun(
+            \\globalThis.__queuedBeforeTermination = false;
+            \\Promise.resolve().then(() => {
+            \\  globalThis.__queuedBeforeTermination = true;
+            \\});
+            \\while (true) {}
+        , null) catch {};
+    }
+    page.session.browser.finishExecutionWatchdog();
+
+    try page.session.browser.runMacrotasks();
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expect(!(try ls.local.compileAndRun(
+        "globalThis.__queuedBeforeTermination",
+        null,
+    )).toBool());
+}
+
+test "Runner: execution watchdog defers queue reset while a context is entered" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+    const env = &page.session.browser.env;
+
+    env.markTerminatedMicrotasks();
+    {
+        var ls: js.Local.Scope = undefined;
+        frame.js.localScope(&ls);
+        defer ls.deinit();
+
+        env.discardTerminatedMicrotasks();
+        try testing.expect(env.discard_all_microtasks_pending);
+    }
+
+    env.discardTerminatedMicrotasks();
+    try testing.expect(!env.discard_all_microtasks_pending);
+}
+
+test "Runner: execution watchdog interrupts JavaScript URL navigation" {
+    const fires_before = testing.test_browser.executionWatchdogFireCount();
+    var pass_timer = try std.time.Timer.start();
+    const page = try testing.pageTest("runner/runaway-javascript-url.html", .{});
+    defer page.close();
+    try testing.expect(pass_timer.read() < 8 * std.time.ns_per_s);
+    try testing.expectEqual(fires_before + 1, page.session.browser.executionWatchdogFireCount());
+
+    const frame = page.frame().?;
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+    try testing.expectEqual(42.0, try (try ls.local.compileAndRun("21 * 2", null)).toF64());
+}
+
+test "Runner: execution watchdog permits finite microtasks" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.__finiteCount = 0;
+        \\setTimeout(() => {
+        \\  const step = () => {
+        \\    window.__finiteCount += 1;
+        \\    if (window.__finiteCount < 100) {
+        \\      Promise.resolve().then(step);
+        \\    }
+        \\  };
+        \\  Promise.resolve().then(step);
+        \\}, 0);
+    , null);
+
+    const fires_before = page.session.browser.executionWatchdogFireCount();
+    try page.session.browser.runMacrotasks();
+    try testing.expectEqual(fires_before, page.session.browser.executionWatchdogFireCount());
+    try testing.expectEqual(100.0, try (try ls.local.compileAndRun("window.__finiteCount", null)).toF64());
+}
+
+test "Runner: execution watchdog permits long finite callback" {
+    const page = try testing.pageTest("runner/runner1.html", .{});
+    defer page.close();
+    const frame = page.frame().?;
+
+    var ls: js.Local.Scope = undefined;
+    frame.js.localScope(&ls);
+    defer ls.deinit();
+
+    _ = try ls.local.compileAndRun(
+        \\window.__longFiniteDone = false;
+        \\setTimeout(() => {
+        \\  const end = Date.now() + 1200;
+        \\  while (Date.now() < end) {}
+        \\  window.__longFiniteDone = true;
+        \\}, 0);
+    , null);
+
+    const fires_before = page.session.browser.executionWatchdogFireCount();
+    try page.session.browser.runMacrotasks();
+    try testing.expectEqual(fires_before, page.session.browser.executionWatchdogFireCount());
+    try testing.expect((try ls.local.compileAndRun("window.__longFiniteDone", null)).toBool());
 }
 
 test "Runner: waitForScript timeout" {

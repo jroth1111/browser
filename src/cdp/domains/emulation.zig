@@ -270,11 +270,11 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
             .userAgentMetadata = .{
                 .brands = &.{
                     .{ .brand = "Chromium", .version = "136" },
-                    .{ .brand = "Not.A/Brand", .version = "24" },
+                    .{ .brand = "Not/A)Brand", .version = "99" },
                 },
                 .fullVersionList = &.{
                     .{ .brand = "Chromium", .version = "136.0.0.0" },
-                    .{ .brand = "Not.A/Brand", .version = "24.0.0.0" },
+                    .{ .brand = "Not/A)Brand", .version = "99.0.0.0" },
                 },
                 .fullVersion = "136.0.0.0",
                 .platform = "Linux",
@@ -319,7 +319,7 @@ test "cdp.Emulation: setUserAgentOverride with optional params" {
     defer headers.deinit();
     try expectRequestHeader(headers, "User-Agent", "CustomBot/2.0");
     try expectRequestHeader(headers, "Accept-Language", "en-US,en;q=0.9");
-    try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
+    try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not/A)Brand\";v=\"99\"");
     try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
     try expectHighEntropyRequestHeadersAbsent(headers);
@@ -539,13 +539,14 @@ test "cdp.Emulation: screen.availHeight tracks screen.height instead of a frozen
     });
     try ctx.expectSentResult(null, .{ .id = 20 });
 
-    // After the override, availHeight must have moved WITH height (not
-    // stayed pinned at the old default-viewport-derived constant), and the
-    // invariant availHeight <= height must still hold at the new size.
+    // After the override, screen.height/width remain the profile's physical
+    // display dimensions (1920x1080) — they do NOT track viewport resize.
+    // Real Chrome behaves the same: screen reports monitor resolution.
     try testing.expectEqual(600, page.getViewport().height);
-    try expectFrameEvalTrue(frame, "screen.height === 600");
+    try expectFrameEvalTrue(frame, "screen.height === 1080");
+    try expectFrameEvalTrue(frame, "screen.width === 1920");
     try expectFrameEvalTrue(frame, "screen.availHeight <= screen.height");
-    try expectFrameEvalTrue(frame, "screen.availHeight < 1040");
+    try expectFrameEvalTrue(frame, "screen.availHeight < 1920");
     try expectFrameEvalTrue(frame, "screen.availWidth === screen.width");
 }
 

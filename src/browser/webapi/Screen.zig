@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
+const Profile = @import("../../chimera/Profile.zig");
 const Frame = @import("../Frame.zig");
 const EventTarget = @import("EventTarget.zig");
 
@@ -31,6 +32,14 @@ const Screen = @This();
 
 _proto: *EventTarget,
 _orientation: ?*Orientation = null,
+_screen_width: u32 = 1920,
+_screen_height: u32 = 1080,
+_is_extended: bool = false,
+
+pub fn initFromAuthority(self: *Screen, profile: *const Profile) void {
+    if (profile.screen_width) |w| self._screen_width = w;
+    if (profile.screen_height) |h| self._screen_height = h;
+}
 
 pub fn asEventTarget(self: *Screen) *EventTarget {
     return self._proto;
@@ -45,12 +54,12 @@ pub fn getOrientation(self: *Screen, frame: *Frame) !*Orientation {
     return orientation;
 }
 
-pub fn getWidth(_: *const Screen, frame: *Frame) u32 {
-    return frame._page.getViewport().width;
+pub fn getWidth(self: *const Screen, _: *Frame) u32 {
+    return self._screen_width;
 }
 
-pub fn getHeight(_: *const Screen, frame: *Frame) u32 {
-    return frame._page.getViewport().height;
+pub fn getHeight(self: *const Screen, _: *Frame) u32 {
+    return self._screen_height;
 }
 
 // Chrome's availHeight excludes OS-chrome (taskbar/dock) from the full
@@ -63,6 +72,18 @@ const avail_height_os_chrome_offset: u32 = 40;
 pub fn getAvailHeight(self: *const Screen, frame: *Frame) u32 {
     const height = self.getHeight(frame);
     return if (height > avail_height_os_chrome_offset) height - avail_height_os_chrome_offset else height;
+}
+
+pub fn getIsExtended(self: *const Screen) bool {
+    return self._is_extended;
+}
+
+pub fn getAvailLeft(_: *const Screen) u32 {
+    return 0;
+}
+
+pub fn getAvailTop(_: *const Screen) u32 {
+    return 0;
 }
 
 pub const JsApi = struct {
@@ -81,6 +102,9 @@ pub const JsApi = struct {
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });
     pub const orientation = bridge.accessor(Screen.getOrientation, null, .{});
+    pub const isExtended = bridge.accessor(Screen.getIsExtended, null, .{});
+    pub const availLeft = bridge.accessor(Screen.getAvailLeft, null, .{});
+    pub const availTop = bridge.accessor(Screen.getAvailTop, null, .{});
 };
 
 pub const Orientation = struct {

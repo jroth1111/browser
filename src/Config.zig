@@ -1105,7 +1105,7 @@ fn testChimeraAuthority(requires_curl_impersonate: bool) ChimeraAuthority {
                 .sec_ch_ua_arch = "\"arm\"",
                 .sec_ch_ua_bitness = "\"64\"",
                 .sec_ch_ua_model = "\"\"",
-                .sec_ch_ua_platform_version = "\"15.0.0\"",
+                .sec_ch_ua_platform_version = "\"27.0.0\"",
             },
             .navigator = .{
                 .platform = "MacIntel",
@@ -1124,7 +1124,7 @@ fn testChimeraAuthority(requires_curl_impersonate: bool) ChimeraAuthority {
                 .architecture = "arm",
                 .bitness = "64",
                 .model = "",
-                .platform_version = "15.0.0",
+                .platform_version = "27.0.0",
                 .ua_full_version = "136.0.0.0",
                 .wow64 = false,
                 .form_factor = form_factor,

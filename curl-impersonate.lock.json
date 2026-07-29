@@ -1,0 +1,14 @@
+{
+  "schema": "chimera-curl-impersonate-source/v1",
+  "receipt_schema": "chimera-curl-impersonate-receipt/v3",
+  "source_name": "lexiforest-curl-impersonate",
+  "source_url": "https://github.com/lexiforest/curl-impersonate.git",
+  "source_tag": "v2.0.0a5",
+  "source_commit": "958d19a967a56286f032f751490134d52e5009f5",
+  "target": "chrome136",
+  "runtime_executable": "bin/curl_chrome136",
+  "required_artifacts": [
+    "bin/curl_chrome136",
+    "lib/libcurl-impersonate.a"
+  ]
+}

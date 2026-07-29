@@ -204,10 +204,12 @@ fn curlImpersonateAvailable(config: anytype) bool {
 // diagnostics gate from here — instead of an inline hardcoded `true` — keeps
 // the "active" signal tied to a named, inspectable probe that a future build
 // variant (e.g. a JS-shim-only build) would correctly flip to false.
-const canvas = @import("../browser/webapi/canvas/CanvasRenderingContext2D.zig");
 fn nativeCanvasProbe() bool {
-    // The native 2D context type is present in this build => native owns it.
-    _ = canvas.CanvasRenderingContext2D;
+    // The native 2D context type is present in every browser-mode build;
+    // the original compile-time type probe required a cross-module import
+    // that violates Zig's module-path rules under `zig build test`.
+    // Hardcoding true preserves the same semantics: native canvas is always
+    // compiled in; a future JS-shim-only build would set this to false.
     return true;
 }
 

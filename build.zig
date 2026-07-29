@@ -86,6 +86,10 @@ pub fn build(b: *Build) !void {
         b.default_step.dependOn(fmt_step);
 
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
+        mod.addCSourceFile(.{
+            .file = b.path("src/browser/js/v8_microtask_queue.cpp"),
+            .flags = &.{"-std=c++17"},
+        });
         try linkCurl(b, mod, enable_tsan, curl_impersonate_path);
         try linkHtml5Ever(b, mod);
         linkZenai(b, mod);

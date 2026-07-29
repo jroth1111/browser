@@ -64,9 +64,28 @@ fn sendInspector(cmd: *CDP.Command, action: anytype) !void {
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const id = cmd.input.id orelse return error.RequiredId;
 
-    // the result to return is handled directly by the inspector.
-    bc.callInspector(cmd.input.json);
+    const checkpoint: CDP.BrowserContext.InspectorCheckpoint = if (action == .evaluate) blk: {
+        const params = try cmd.params(struct {
+            contextId: ?i32 = null,
+        });
+        const context_id = if (params) |p| p.contextId else null;
+        break :blk if (bc.executionContext(context_id)) |ctx|
+            .{ .context = ctx }
+        else
+            .none;
+    } else .all;
+
+    // Hold the native result until the selected queue finishes checkpointing.
+    // If that checkpoint trips the watchdog, discard the otherwise-successful
+    // native response and return one same-id termination error instead. A command
+    // with no immediate result and no watchdog fire remains legitimately pending
+    // (for example Runtime.evaluate with awaitPromise).
+    switch (bc.callInspector(cmd.input.json, id, checkpoint)) {
+        .completed, .pending => {},
+        .terminated => return cmd.sendError(-32000, "Execution was terminated", .{}),
+    }
 }
 
 fn logInspector(cmd: *CDP.Command, action: anytype) !void {
@@ -165,6 +184,129 @@ pub fn consoleMessage(arena: Allocator, bc: *CDP.BrowserContext, event: *const N
 }
 
 const testing = @import("../testing.zig");
+
+test "cdp.runtime: evaluate checkpoints only its selected execution context" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-EVAL", .url = "hi.html", .target_id = "FID-0000000EVA".* });
+    const frame = bc.mainFrame() orelse unreachable;
+    const world = try bc.createIsolatedWorld("runtime-test", true);
+    const isolated = try world.createContext(frame);
+
+    var isolated_scope: js.Local.Scope = undefined;
+    isolated.localScope(&isolated_scope);
+    defer isolated_scope.deinit();
+    bc.inspector_session.inspector.contextCreated(
+        &isolated_scope.local,
+        "runtime-test",
+        frame.origin orelse "",
+        "{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"FID-0000000EVA\"}",
+        false,
+    );
+    const isolated_id = bc.inspector_session.inspector.getContextId(&isolated_scope.local);
+
+    var main_scope: js.Local.Scope = undefined;
+    frame.js.localScope(&main_scope);
+    defer main_scope.deinit();
+    const main_id = bc.inspector_session.inspector.getContextId(&main_scope.local);
+
+    // Bypass BrowserContext.callInspector so both queues remain pending until a
+    // Runtime.evaluate command chooses which one to checkpoint.
+    const queue_main = try std.fmt.allocPrint(
+        testing.allocator,
+        "{{\"id\":901,\"method\":\"Runtime.evaluate\",\"params\":{{\"contextId\":{d},\"expression\":\"globalThis.__mainDone=false;queueMicrotask(()=>globalThis.__mainDone=true)\"}}}}",
+        .{main_id},
+    );
+    defer testing.allocator.free(queue_main);
+    bc.inspector_session.send(queue_main);
+    const queue_isolated = try std.fmt.allocPrint(
+        testing.allocator,
+        "{{\"id\":902,\"method\":\"Runtime.evaluate\",\"params\":{{\"contextId\":{d},\"expression\":\"globalThis.__isolatedDone=false;queueMicrotask(()=>globalThis.__isolatedDone=true)\"}}}}",
+        .{isolated_id},
+    );
+    defer testing.allocator.free(queue_isolated);
+    bc.inspector_session.send(queue_isolated);
+
+    // No contextId means the main context. Its queued callback runs, while the
+    // isolated world's callback remains pending.
+    try ctx.processMessage(.{ .id = 903, .method = "Runtime.evaluate", .params = .{ .expression = "0" } });
+    try ctx.processMessage(.{ .id = 904, .method = "Runtime.evaluate", .params = .{ .contextId = main_id, .expression = "__mainDone" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "boolean", .value = true } }, .{ .id = 904 });
+
+    // The explicit isolated evaluation observes false before its own selected
+    // checkpoint runs that world's queued callback.
+    try ctx.processMessage(.{ .id = 905, .method = "Runtime.evaluate", .params = .{ .contextId = isolated_id, .expression = "__isolatedDone" } });
+    try ctx.expectSentResult(.{ .result = .{ .type = "boolean", .value = false } }, .{ .id = 905 });
+}
+
+test "cdp.runtime: awaitPromise may remain pending without synthetic error" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-AWAIT", .url = "hi.html", .target_id = "FID-0000000AWT".* });
+    try ctx.processMessage(.{
+        .id = 906,
+        .method = "Runtime.evaluate",
+        .params = .{
+            .expression = "new Promise(() => {})",
+            .awaitPromise = true,
+        },
+    });
+
+    // Loading hi.html emits eight navigation events. An unresolved awaited
+    // promise has no immediate response and must not be mistaken for termination.
+    try ctx.expectSentCount(8);
+}
+
+test "cdp.runtime: delayed await response is not captured by later call" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-DELAY", .url = "hi.html", .target_id = "FID-0000000DLY".* });
+    try ctx.processMessage(.{
+        .id = 908,
+        .method = "Runtime.evaluate",
+        .params = .{
+            .expression = "new Promise(resolve => globalThis.__resolvePending = resolve)",
+            .awaitPromise = true,
+        },
+    });
+
+    // Resolving the earlier awaited promise causes its response to arrive while
+    // call 909 is buffering its own response/checkpoint. The IDs must route
+    // independently rather than asserting or overwriting the later response.
+    try ctx.processMessage(.{
+        .id = 909,
+        .method = "Runtime.evaluate",
+        .params = .{ .expression = "__resolvePending(41); 42" },
+    });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 41, .description = "41" } }, .{ .id = 908 });
+    try ctx.expectSentResult(.{ .result = .{ .type = "number", .value = 42, .description = "42" } }, .{ .id = 909 });
+    try ctx.expectSentCount(10);
+}
+
+test "cdp.runtime: target checkpoint watchdog replaces native response once" {
+    var ctx = try testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-TERM", .url = "hi.html", .target_id = "FID-0000000TRM".* });
+
+    // Inspector evaluation itself completes, but its selected-context checkpoint
+    // never drains because every microtask queues its successor. The watchdog must
+    // discard that buffered success and emit one same-id termination error.
+    try ctx.processMessage(.{
+        .id = 907,
+        .method = "Runtime.evaluate",
+        .params = .{
+            .expression = "queueMicrotask(function replenish(){queueMicrotask(replenish)}); 1",
+        },
+    });
+    try ctx.expectSentError(-32000, "Execution was terminated", .{ .id = 907 });
+    // Loading hi.html emits eight navigation events. The fallback must add
+    // exactly one response, not the buffered native success or a generic error.
+    try ctx.expectSentCount(9);
+}
 
 test "cdp.runtime: consoleAPICalled type matches the console method" {
     const filter: testing.LogFilter = .init(&.{.js});

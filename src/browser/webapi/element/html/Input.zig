@@ -752,8 +752,21 @@ pub fn setAutocomplete(self: *Input, autocomplete: []const u8, frame: *Frame) !v
 }
 
 pub fn select(self: *Input, frame: *Frame) !void {
-    const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
-    try self.setSelectionRange(0, len, null, frame);
+    if (!self.selectionAvailable()) return error.InvalidStateError;
+    return self.selectValue(frame);
+}
+
+pub fn selectForUserInput(self: *Input, frame: *Frame) !void {
+    if (!self.userSelectionAvailable()) return;
+    return self.selectValue(frame);
+}
+
+fn selectValue(self: *Input, frame: *Frame) !void {
+    const len: u32 = @intCast(self.getValue().len);
+    self._selection_start = 0;
+    self._selection_end = len;
+    self._selection_direction = .none;
+    try self.dispatchSelectionChangeEvent(frame);
     const event = try Event.init("select", .{ .bubbles = true }, frame._page);
     try frame._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
@@ -765,11 +778,18 @@ fn selectionAvailable(self: *const Input) bool {
     }
 }
 
+fn userSelectionAvailable(self: *const Input) bool {
+    return switch (self._input_type) {
+        .text, .password, .email, .url, .tel, .search, .number, .date, .time, .@"datetime-local", .month, .week => true,
+        else => false,
+    };
+}
+
 const HowSelected = union(enum) { partial: struct { u32, u32 }, full, none };
 
 fn howSelected(self: *const Input) HowSelected {
-    if (!self.selectionAvailable()) return .none;
-    const value = self._value orelse return .none;
+    if (!self.userSelectionAvailable()) return .none;
+    const value = self.getValue();
 
     if (self._selection_start == self._selection_end) return .none;
     if (self._selection_start == 0 and self._selection_end == value.len) return .full;
@@ -859,13 +879,7 @@ pub fn setSelectionRange(
         } else break :blk .none;
     };
 
-    const value = self._value orelse {
-        self._selection_start = 0;
-        self._selection_end = 0;
-        self._selection_direction = .none;
-        return;
-    };
-
+    const value = self.getValue();
     const len_u32: u32 = @intCast(value.len);
     var start: u32 = if (selection_start > len_u32) len_u32 else selection_start;
     const end: u32 = if (selection_end > len_u32) len_u32 else selection_end;

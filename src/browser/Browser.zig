@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
 const CDP = @import("../cdp/CDP.zig");
@@ -31,6 +32,7 @@ const PermissionState = @import("webapi/Permissions.zig").State;
 
 const ArenaPool = App.ArenaPool;
 const Allocator = std.mem.Allocator;
+const log = lp.log;
 
 // Browser is an instance of the browser.
 // You can create multiple browser instances.
@@ -43,6 +45,7 @@ session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: HttpClient,
+execution_watchdog: ExecutionWatchdog = .{},
 
 // Permission state set via CDP Browser.grantPermissions / setPermission /
 // resetPermissions, keyed by permission name (e.g. "geolocation"). Read back
@@ -79,6 +82,113 @@ fc_identity_pool: std.heap.MemoryPool(js.FinalizerCallback.Identity),
 // #2472).
 frame_id_gen: u32 = 0,
 
+const ExecutionWatchdog = struct {
+    const budget_ns = 5 * std.time.ns_per_s;
+    const stack_size = 128 * 1024;
+
+    mutex: std.Thread.Mutex = .{},
+    condition: std.Thread.Condition = .{},
+    thread: ?std.Thread = null,
+    browser: ?*Browser = null,
+    terminate_request: ?js.Env.ScopedTerminate = null,
+    generation: u64 = 0,
+    depth: usize = 0,
+    armed: bool = false,
+    stop: bool = false,
+    fired: std.atomic.Value(bool) = .init(false),
+    fire_count: std.atomic.Value(u64) = .init(0),
+
+    fn start(self: *ExecutionWatchdog, browser: *Browser) !void {
+        self.browser = browser;
+        self.terminate_request = .{ .env = &browser.env };
+        self.thread = try std.Thread.spawn(
+            .{ .stack_size = stack_size },
+            run,
+            .{self},
+        );
+    }
+
+    fn deinit(self: *ExecutionWatchdog) void {
+        self.mutex.lock();
+        self.stop = true;
+        self.armed = false;
+        self.generation +%= 1;
+        self.condition.broadcast();
+        self.mutex.unlock();
+        if (self.thread) |thread| thread.join();
+        self.thread = null;
+        if (self.fired.swap(false, .acq_rel)) {
+            self.terminate_request.?.cancel();
+        }
+    }
+
+    fn arm(self: *ExecutionWatchdog) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        self.depth += 1;
+        if (self.depth > 1) return;
+
+        self.generation +%= 1;
+        self.armed = true;
+        self.fired.store(false, .release);
+        self.condition.broadcast();
+    }
+
+    fn finish(self: *ExecutionWatchdog) bool {
+        self.mutex.lock();
+        std.debug.assert(self.depth > 0);
+        self.depth -= 1;
+        if (self.depth > 0) {
+            self.mutex.unlock();
+            return false;
+        }
+
+        self.armed = false;
+        self.generation +%= 1;
+        self.condition.broadcast();
+        const did_fire = self.fired.swap(false, .acq_rel);
+        self.mutex.unlock();
+        return did_fire;
+    }
+
+    fn hasFired(self: *const ExecutionWatchdog) bool {
+        return self.fired.load(.acquire);
+    }
+
+    fn hasActiveScope(self: *ExecutionWatchdog) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.depth > 0;
+    }
+
+    fn run(self: *ExecutionWatchdog) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        while (!self.stop) {
+            while (!self.stop and !self.armed) self.condition.wait(&self.mutex);
+            if (self.stop) return;
+
+            const generation = self.generation;
+            var timer = std.time.Timer.start() catch unreachable;
+            while (!self.stop and self.armed and self.generation == generation) {
+                const elapsed = timer.read();
+                if (elapsed >= budget_ns) {
+                    self.fired.store(true, .release);
+                    _ = self.fire_count.fetchAdd(1, .monotonic);
+                    self.terminate_request.?.request();
+                    self.armed = false;
+                    break;
+                }
+                self.condition.timedWait(&self.mutex, budget_ns - elapsed) catch |err| switch (err) {
+                    error.Timeout => {},
+                };
+            }
+        }
+    }
+};
+
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
 };
@@ -111,9 +221,12 @@ pub fn init(self: *Browser, app: *App, opts: InitOpts, cdp: ?*CDP) !void {
         .fc_identity_pool = .init(allocator),
     };
     try self.http_client.init(allocator, &app.network, cdp);
+    errdefer self.http_client.deinit();
+    try self.execution_watchdog.start(self);
 }
 
 pub fn deinit(self: *Browser) void {
+    self.execution_watchdog.deinit();
     self.closeSession();
     self.env.deinit();
     // After env.deinit() the Isolate is gone, so no further weak finalizer can
@@ -178,11 +291,36 @@ pub fn runMicrotasks(self: *Browser) void {
 pub fn runMacrotasks(self: *Browser) !void {
     const env = &self.env;
 
+    self.armExecutionWatchdog();
+    defer self.finishExecutionWatchdog();
+
     try self.env.runMacrotasks();
+    if (self.execution_watchdog.hasFired()) return;
     env.pumpMessageLoop();
+    if (self.execution_watchdog.hasFired()) return;
 
     // either of the above could have queued more microtasks
     env.runMicrotasks();
+}
+
+pub fn armExecutionWatchdog(self: *Browser) void {
+    if (!self.execution_watchdog.hasActiveScope()) {
+        self.env.discardTerminatedMicrotasks();
+    }
+    self.execution_watchdog.arm();
+}
+
+pub fn finishExecutionWatchdog(self: *Browser) void {
+    if (self.execution_watchdog.finish()) {
+        self.env.markTerminatedMicrotasks();
+        self.env.discardTerminatedMicrotasks();
+        self.execution_watchdog.terminate_request.?.cancel();
+        log.warn(.js, "page execution watchdog", .{ .budget_ms = ExecutionWatchdog.budget_ns / std.time.ns_per_ms });
+    }
+}
+
+pub fn executionWatchdogFireCount(self: *const Browser) u64 {
+    return self.execution_watchdog.fire_count.load(.monotonic);
 }
 
 pub fn hasBackgroundTasks(self: *Browser) bool {
@@ -190,7 +328,9 @@ pub fn hasBackgroundTasks(self: *Browser) bool {
 }
 
 pub fn waitForBackgroundTasks(self: *Browser) void {
-    self.env.waitForBackgroundTasks();
+    self.armExecutionWatchdog();
+    defer self.finishExecutionWatchdog();
+    self.env.waitForBackgroundTasks(&self.execution_watchdog.fired);
 }
 
 pub fn msToNextMacrotask(self: *Browser) ?u64 {

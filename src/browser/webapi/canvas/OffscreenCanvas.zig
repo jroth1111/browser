@@ -22,6 +22,7 @@ const js = @import("../../js/js.zig");
 const Blob = @import("../Blob.zig");
 const CanvasBitmap = @import("CanvasBitmap.zig");
 const OffscreenCanvasRenderingContext2D = @import("OffscreenCanvasRenderingContext2D.zig");
+const WebGLRenderingContext = @import("WebGLRenderingContext.zig");
 const Seeds = @import("../../../chimera/Seeds.zig");
 
 const Execution = js.Execution;
@@ -40,6 +41,7 @@ _cached: ?DrawingContext = null,
 /// we're using tagged union.
 const DrawingContext = union(enum) {
     @"2d": *OffscreenCanvasRenderingContext2D,
+    webgl: *WebGLRenderingContext,
 };
 
 pub fn constructor(width: u32, height: u32, exec: *Execution) !*OffscreenCanvas {
@@ -72,6 +74,7 @@ pub fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execu
     if (self._cached) |cached| {
         const matches = switch (cached) {
             .@"2d" => std.mem.eql(u8, context_type, "2d"),
+            .webgl => std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl"),
         };
         return if (matches) cached else null;
     }
@@ -79,6 +82,15 @@ pub fn getContext(self: *OffscreenCanvas, context_type: []const u8, exec: *Execu
     if (std.mem.eql(u8, context_type, "2d")) {
         const ctx = try exec._factory.create(OffscreenCanvasRenderingContext2D{ ._canvas = self });
         const drawing_context: DrawingContext = .{ .@"2d" = ctx };
+        self._cached = drawing_context;
+        return drawing_context;
+    }
+
+    if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
+        const authority = exec.session.browser.http_client.network.config.chimeraAuthority();
+        const profile = if (authority) |loaded| &loaded.profile else null;
+        const ctx = try exec._factory.create(WebGLRenderingContext.initFromProfile(self.getWidth(), self.getHeight(), profile));
+        const drawing_context: DrawingContext = .{ .webgl = ctx };
         self._cached = drawing_context;
         return drawing_context;
     }
@@ -105,6 +117,7 @@ fn resetBitmap(self: *OffscreenCanvas) void {
     if (self._cached) |cached| {
         switch (cached) {
             .@"2d" => |ctx| ctx.resetBitmap(),
+            .webgl => |ctx| ctx.resetDrawingBuffer(self.getWidth(), self.getHeight()),
         }
     }
 }
@@ -125,6 +138,7 @@ fn canvasRawPixels(self: *const OffscreenCanvas, allocator: Allocator, seed: u64
     if (self._cached) |cached| {
         switch (cached) {
             .@"2d" => |ctx| return ctx.pngRawPixels(allocator, seed, width, height, raw_len),
+            else => {},
         }
     }
 
@@ -138,6 +152,7 @@ pub fn canvasSourceBitmap(self: *const OffscreenCanvas) ?CanvasBitmap.SourceBitm
     if (self._cached) |cached| {
         switch (cached) {
             .@"2d" => |ctx| return ctx.sourceBitmap(width, height),
+            else => {},
         }
     }
 
@@ -146,7 +161,7 @@ pub fn canvasSourceBitmap(self: *const OffscreenCanvas) ?CanvasBitmap.SourceBitm
 
 fn canvasSeed(exec: *Execution) u64 {
     const authority = exec.session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
-    if (!authority.profile.canvas.enabled) return 0;
+    if (!authority.profile.canvasNoiseEnabled()) return 0;
     return Seeds.surfaceSeed(&authority.profile, .canvas);
 }
 

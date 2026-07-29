@@ -172,6 +172,40 @@ pub fn fromC(c_context: *const v8.Context) ?*Context {
     return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
 }
 
+extern fn lp_v8__Isolate__CanSetMicrotaskQueue(
+    isolate: *v8.Isolate,
+) bool;
+
+extern fn lp_v8__Context__SetMicrotaskQueue(
+    context: *const v8.Context,
+    queue: *v8.MicrotaskQueue,
+) void;
+
+pub fn discardMicrotasks(self: *Context) bool {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.isolate);
+    defer hs.deinit();
+
+    const context = v8.v8__Global__Get(
+        &self.handle,
+        self.isolate.handle,
+    ).?;
+    if (!lp_v8__Isolate__CanSetMicrotaskQueue(self.isolate.handle)) {
+        return false;
+    }
+
+    const replacement = v8.v8__MicrotaskQueue__New(
+        self.isolate.handle,
+        v8.kExplicit,
+    ).?;
+    lp_v8__Context__SetMicrotaskQueue(context, replacement);
+
+    const discarded = self.microtask_queue;
+    self.microtask_queue = replacement;
+    v8.v8__MicrotaskQueue__DELETE(discarded);
+    return true;
+}
+
 /// Returns the Context and v8::Context for the given isolate.
 /// If the current context is from a destroyed Context (e.g., navigated-away iframe),
 /// falls back to the incumbent context (the calling context).

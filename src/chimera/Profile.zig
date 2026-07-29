@@ -23,6 +23,8 @@ audio: SeededSurface,
 webgl: WebGL,
 webrtc: WebRTC,
 timezone: ?[]const u8 = null,
+screen_width: ?u32 = null,
+screen_height: ?u32 = null,
 geolocation: ?Geolocation = null,
 storage: Storage,
 transport: Transport,
@@ -85,6 +87,7 @@ pub const Plugins = struct {
 pub const SeededSurface = struct {
     enabled: bool,
     seed: u64,
+    exact_fidelity: bool = false,
 };
 
 pub const WebGL = struct {
@@ -225,6 +228,7 @@ pub fn fromJsonValue(allocator: Allocator, value: std.json.Value) !Profile {
         .canvas = .{
             .enabled = try requiredBool(canvas_obj, "enabled"),
             .seed = try requiredU64(canvas_obj, "seed"),
+            .exact_fidelity = try optionalBool(canvas_obj, "exact_fidelity"),
         },
         .audio = .{
             .enabled = try requiredBool(audio_obj, "enabled"),
@@ -240,6 +244,8 @@ pub fn fromJsonValue(allocator: Allocator, value: std.json.Value) !Profile {
             .exit_ip = try optionalString(webrtc_obj, "exit_ip"),
         },
         .timezone = try optionalString(obj, "timezone"),
+        .screen_width = try optionalU32(obj, "screen_width"),
+        .screen_height = try optionalU32(obj, "screen_height"),
         .geolocation = geolocation,
         .storage = storage,
         .transport = transport,
@@ -252,6 +258,10 @@ pub fn fromJsonValue(allocator: Allocator, value: std.json.Value) !Profile {
     try validateCapabilityRequirements(&profile);
     try validateIdentityCoherence(allocator, &profile);
     return profile;
+}
+
+pub fn canvasNoiseEnabled(self: *const Profile) bool {
+    return self.canvas.enabled and !self.canvas.exact_fidelity;
 }
 
 fn validateCapabilityRequirements(profile: *const Profile) !void {
@@ -374,6 +384,16 @@ fn optionalString(obj: std.json.ObjectMap, key: []const u8) !?[]const u8 {
     const value = obj.get(key) orelse return null;
     return switch (value) {
         .string => |str| if (str.len > 0) try validatedRequiredString(str) else null,
+        .null => null,
+        else => error.InvalidChimeraProfile,
+    };
+}
+
+fn optionalU32(obj: std.json.ObjectMap, key: []const u8) !?u32 {
+    const value = obj.get(key) orelse return null;
+    return switch (value) {
+        .integer => |i| if (i > 0) @intCast(i) else null,
+        .float => |f| if (f > 0.0) @intFromFloat(f) else null,
         .null => null,
         else => error.InvalidChimeraProfile,
     };
@@ -584,6 +604,8 @@ test "Chimera Profile parses managed browser identity" {
     try testing.expectEqualStrings("MacIntel", profile.navigator.platform);
     try testing.expectEqualStrings("Chromium", profile.ua_data.brands[0].brand);
     try testing.expectEqual(@as(u64, 111), profile.canvas.seed);
+    try testing.expect(!profile.canvas.exact_fidelity);
+    try testing.expect(profile.canvasNoiseEnabled());
     try testing.expect(profile.plugins.pdf_enabled);
     try testing.expect(profile.webgl.enabled);
     try testing.expectEqualStrings("Google Inc. (Apple)", profile.webgl.vendor.?);
@@ -600,6 +622,26 @@ test "Chimera Profile parses managed browser identity" {
     try testing.expectEqualStrings("chrome136", profile.transport.impersonate_target.?);
     try testing.expect(profile.transport.requires_curl_impersonate);
     try testing.expect(profile.capabilities.requires_proxy);
+}
+
+test "Chimera Profile canvas exact fidelity disables canvas noise only when explicit" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const mutated = try std.mem.replaceOwned(
+        u8,
+        arena.allocator(),
+        test_profile_json,
+        "\"canvas\":{\n    \"enabled\":true,\n    \"seed\":111\n  }",
+        "\"canvas\":{\n    \"enabled\":true,\n    \"seed\":111,\n    \"exact_fidelity\":true\n  }",
+    );
+    const value = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), mutated, .{});
+    const profile = try Profile.fromJsonValue(arena.allocator(), value);
+
+    try testing.expect(profile.canvas.enabled);
+    try testing.expect(profile.canvas.exact_fidelity);
+    try testing.expect(!profile.canvasNoiseEnabled());
 }
 
 test "Chimera Profile treats timezone as optional" {

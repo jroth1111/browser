@@ -46,6 +46,7 @@ const Element = @import("webapi/Element.zig");
 const HtmlElement = @import("webapi/element/Html.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
+const Seeds = @import("../chimera/Seeds.zig");
 const Cors = @import("webapi/net/Cors.zig");
 const Referrer = @import("webapi/net/Referrer.zig");
 const Document = @import("webapi/Document.zig");
@@ -623,13 +624,11 @@ fn executeJavaScriptURL(self: *Frame, request_url: []const u8) !void {
         return;
     };
 
+    // Keep the JavaScript URL evaluation synchronous, but leave timers and
+    // posted work to the outer Runner safe point. Recursively draining this
+    // frame and every browser context here lets iframe-heavy pages monopolize
+    // the worker before queued CDP commands can be serviced.
     ls.local.runMacrotasks();
-    self.js.scheduler.run() catch |err| {
-        log.err(.frame, "javascript url scheduler", .{ .err = err, .type = self._type, .url = self.url });
-    };
-    self._session.browser.runMacrotasks() catch |err| {
-        log.err(.frame, "javascript url macrotasks", .{ .err = err, .type = self._type, .url = self.url });
-    };
 }
 
 pub fn navigate(self: *Frame, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -3419,6 +3418,12 @@ const testing = @import("../testing.zig");
 
 fn dispositionHeader(value: []const u8) HttpClient.Header {
     return .{ .name = "content-disposition", .value = value };
+}
+
+pub fn domRectSeed(self: *const Frame) u64 {
+    const authority = self._session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
+    if (!authority.profile.canvasNoiseEnabled()) return 0;
+    return Seeds.surfaceSeed(&authority.profile, .canvas);
 }
 
 test "Frame: dispositionFilename" {

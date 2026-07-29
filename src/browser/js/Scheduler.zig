@@ -38,12 +38,14 @@ const Scheduler = @This();
 _sequence: u64,
 low_priority: Queue,
 high_priority: Queue,
+run_high_first: bool,
 
 pub fn init(allocator: std.mem.Allocator) Scheduler {
     return .{
         ._sequence = 0,
         .low_priority = Queue.init(allocator, {}),
         .high_priority = Queue.init(allocator, {}),
+        .run_high_first = false,
     };
 }
 
@@ -57,6 +59,7 @@ pub fn reset(self: *Scheduler) void {
     finalizeTasks(&self.high_priority);
     self.low_priority.clearRetainingCapacity();
     self.high_priority.clearRetainingCapacity();
+    self.run_high_first = false;
 }
 
 const AddOpts = struct {
@@ -86,6 +89,30 @@ pub fn run(self: *Scheduler) !void {
     try self.runQueue(&self.high_priority);
 }
 
+pub fn runFor(self: *Scheduler, budget_ms: u64) !void {
+    if (budget_ms == 0) return;
+    const start = milliTimestamp(.monotonic);
+
+    if (self.run_high_first) {
+        // A previous bounded pass exhausted its budget in low-priority work.
+        // Repay the deferred high-priority queue once, then restore the normal
+        // low-before-high event ordering.
+        self.run_high_first = false;
+        try self.runQueueUntil(&self.high_priority, start, budget_ms);
+        if (milliTimestamp(.monotonic) - start >= budget_ms) return;
+        return self.runQueueUntil(&self.low_priority, start, budget_ms);
+    }
+
+    try self.runQueueUntil(&self.low_priority, start, budget_ms);
+    if (milliTimestamp(.monotonic) - start >= budget_ms) {
+        // Repeating timers are requeued at low priority. Without carrying this
+        // debt into the next pass, they can permanently starve ready high work.
+        self.run_high_first = true;
+        return;
+    }
+    try self.runQueueUntil(&self.high_priority, start, budget_ms);
+}
+
 pub fn hasReadyTasks(self: *Scheduler) bool {
     const now = milliTimestamp(.monotonic);
     return queueHasReadyTask(&self.low_priority, now) or queueHasReadyTask(&self.high_priority, now);
@@ -101,11 +128,14 @@ pub fn msToNextHigh(self: *Scheduler) ?u64 {
 }
 
 fn runQueue(self: *Scheduler, queue: *Queue) !void {
+    return self.runQueueUntil(queue, milliTimestamp(.monotonic), 500);
+}
+
+fn runQueueUntil(self: *Scheduler, queue: *Queue, start: u64, budget_ms: u64) !void {
     if (queue.count() == 0) {
         return;
     }
-    const start = milliTimestamp(.monotonic);
-    var now = start;
+    var now = milliTimestamp(.monotonic);
 
     while (queue.peek()) |*task_| {
         if (task_.run_at > now) {
@@ -116,9 +146,9 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
             log.debug(.scheduler, "scheduler.runTask", .{ .name = task.name });
         }
 
-        const repeat_in_ms = task.callback(task.ctx) catch |err| {
+        const repeat_in_ms = task.callback(task.ctx) catch |err| blk: {
             log.warn(.scheduler, "task.callback", .{ .name = task.name, .err = err });
-            continue;
+            break :blk null;
         };
 
         if (repeat_in_ms) |ms| {
@@ -131,7 +161,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !void {
         }
 
         now = milliTimestamp(.monotonic);
-        if (now - start > 500) {
+        if (now - start >= budget_ms) {
             return;
         }
     }
@@ -163,3 +193,41 @@ const Task = struct {
 
 const Callback = *const fn (ctx: *anyopaque) anyerror!?u32;
 const Finalizer = *const fn (ctx: *anyopaque) void;
+
+const BudgetTestContext = struct {
+    runs: *usize,
+    busy_ms: u64,
+    fail: bool = false,
+
+    fn run(ctx: *anyopaque) anyerror!?u32 {
+        const self: *@This() = @ptrCast(@alignCast(ctx));
+        self.runs.* += 1;
+        const end = milliTimestamp(.monotonic) + self.busy_ms;
+        while (milliTimestamp(.monotonic) < end) {}
+        if (self.fail) return error.BudgetTestFailure;
+        return null;
+    }
+};
+
+test "Scheduler: bounded run repays high-priority queue debt" {
+    var scheduler = Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+    defer scheduler.low_priority.deinit();
+    defer scheduler.high_priority.deinit();
+
+    var high_runs: usize = 0;
+    var low_runs: usize = 0;
+    var high_ctx = BudgetTestContext{ .runs = &high_runs, .busy_ms = 0 };
+    var low_ctx = BudgetTestContext{ .runs = &low_runs, .busy_ms = 100, .fail = true };
+
+    try scheduler.add(&low_ctx, BudgetTestContext.run, 0, .{ .low_priority = true });
+    try scheduler.add(&low_ctx, BudgetTestContext.run, 0, .{ .low_priority = true });
+    try scheduler.add(&high_ctx, BudgetTestContext.run, 0, .{});
+
+    try scheduler.runFor(50);
+    try std.testing.expectEqual(0, high_runs);
+    try std.testing.expectEqual(1, low_runs);
+
+    try scheduler.runFor(50);
+    try std.testing.expectEqual(1, high_runs);
+}

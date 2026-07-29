@@ -680,20 +680,21 @@ pub fn newHeadersForUrl(self: *const Client, request_url: [:0]const u8) !http.He
 fn newHeadersWithHighEntropy(self: *const Client, high_entropy_client_hints: ClientHints.HighEntropyHeaderSet) !http.Headers {
     const ua_header = self.user_agent_header_override orelse self.network.config.http_headers.user_agent_header;
     const ua_data = if (self.ua_data_override) |*value| value else null;
+    const curl_impersonate_active = self.network.config.chimera_impersonate_target != null;
     return http.Headers.initBrowserWithOverrides(&self.network.config.http_headers, .{
         .user_agent_header = ua_header,
         .accept_language_header = self.accept_language_header_override,
-        .client_hints_enabled = if (ua_data) |value| value.client_hints_enabled else true,
-        .high_entropy_client_hints = high_entropy_client_hints,
-        .sec_ch_ua_header = if (ua_data) |value| value.sec_ch_ua_header else null,
-        .sec_ch_ua_mobile_header = if (ua_data) |value| value.sec_ch_ua_mobile_header else null,
-        .sec_ch_ua_platform_header = if (ua_data) |value| value.sec_ch_ua_platform_header else null,
-        .sec_ch_ua_full_version_header = if (ua_data) |value| value.sec_ch_ua_full_version_header else null,
-        .sec_ch_ua_full_version_list_header = if (ua_data) |value| value.sec_ch_ua_full_version_list_header else null,
-        .sec_ch_ua_arch_header = if (ua_data) |value| value.sec_ch_ua_arch_header else null,
-        .sec_ch_ua_bitness_header = if (ua_data) |value| value.sec_ch_ua_bitness_header else null,
-        .sec_ch_ua_model_header = if (ua_data) |value| value.sec_ch_ua_model_header else null,
-        .sec_ch_ua_platform_version_header = if (ua_data) |value| value.sec_ch_ua_platform_version_header else null,
+        .client_hints_enabled = if (curl_impersonate_active) false else if (ua_data) |value| value.client_hints_enabled else true,
+        .high_entropy_client_hints = if (curl_impersonate_active) .{} else high_entropy_client_hints,
+        .sec_ch_ua_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_header else null,
+        .sec_ch_ua_mobile_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_mobile_header else null,
+        .sec_ch_ua_platform_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_platform_header else null,
+        .sec_ch_ua_full_version_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_full_version_header else null,
+        .sec_ch_ua_full_version_list_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_full_version_list_header else null,
+        .sec_ch_ua_arch_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_arch_header else null,
+        .sec_ch_ua_bitness_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_bitness_header else null,
+        .sec_ch_ua_model_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_model_header else null,
+        .sec_ch_ua_platform_version_header = if (curl_impersonate_active) null else if (ua_data) |value| value.sec_ch_ua_platform_version_header else null,
     });
 }
 

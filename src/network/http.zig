@@ -598,7 +598,7 @@ pub const Connection = struct {
         try self.setWriteCallback(discardBody);
 
         if (config.curlImpersonateTarget()) |target| {
-            libcurl.curl_easy_impersonate(self._easy, target.ptr, 0) catch |err| {
+            libcurl.curl_easy_impersonate(self._easy, target.ptr, 1) catch |err| {
                 log.err(.http, "curl impersonate failed", .{ .target = target, .err = err });
                 return err;
             };
@@ -1006,11 +1006,11 @@ test "Headers.initBrowserWithOverrides updates identity headers together" {
     var headers = try Headers.initBrowserWithOverrides(&http_headers, .{
         .user_agent_header = "User-Agent: Override/2.0",
         .accept_language_header = "Accept-Language: en-US,en;q=0.9",
-        .sec_ch_ua_header = "Sec-CH-UA: \"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"",
+        .sec_ch_ua_header = "Sec-CH-UA: \"Chromium\";v=\"136\", \"Not/A)Brand\";v=\"99\"",
         .sec_ch_ua_mobile_header = "Sec-CH-UA-Mobile: ?0",
         .sec_ch_ua_platform_header = "Sec-CH-UA-Platform: \"Linux\"",
         .sec_ch_ua_full_version_header = "Sec-CH-UA-Full-Version: \"136.0.1.2\"",
-        .sec_ch_ua_full_version_list_header = "Sec-CH-UA-Full-Version-List: \"Chromium\";v=\"136.0.1.2\", \"Not.A/Brand\";v=\"24.0.0.0\"",
+        .sec_ch_ua_full_version_list_header = "Sec-CH-UA-Full-Version-List: \"Chromium\";v=\"136.0.1.2\", \"Not/A)Brand\";v=\"99.0.0.0\"",
         .sec_ch_ua_arch_header = "Sec-CH-UA-Arch: \"x86\"",
         .sec_ch_ua_bitness_header = "Sec-CH-UA-Bitness: \"64\"",
         .sec_ch_ua_model_header = "Sec-CH-UA-Model: \"\"",
@@ -1020,7 +1020,7 @@ test "Headers.initBrowserWithOverrides updates identity headers together" {
 
     try expectHeader(headers, "User-Agent", "Override/2.0");
     try expectHeader(headers, "Accept-Language", "en-US,en;q=0.9");
-    try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not.A/Brand\";v=\"24\"");
+    try expectHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\", \"Not/A)Brand\";v=\"99\"");
     try expectHeader(headers, "Sec-CH-UA-Mobile", "?0");
     try expectHeader(headers, "Sec-CH-UA-Platform", "\"Linux\"");
     try expectHighEntropyHeadersAbsent(headers);

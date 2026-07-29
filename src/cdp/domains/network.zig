@@ -345,7 +345,13 @@ pub fn httpRequestStart(bc: *CDP.BrowserContext, msg: *const Notification.Reques
         .loaderId = &id.toLoaderId(req.loader_id),
         .type = req.resource_type.string(),
         .documentURL = frame.url,
-        .request = RequestWriter.init(transfer),
+        .request = RequestWriter.initWithImplicitClientHints(
+            transfer,
+            if (bc.session.browser.http_client.network.config.chimera_impersonate_target != null)
+                &bc.session.browser.http_client.network.config.http_headers
+            else
+                null,
+        ),
         .initiator = .{ .type = "other" },
         .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
         .hasUserGesture = false,
@@ -393,10 +399,19 @@ pub fn httpServedFromCache(bc: *CDP.BrowserContext, msg: *const Notification.Req
 
 pub const RequestWriter = struct {
     transfer: *Transfer,
+    implicit_client_hints: ?*const Config.HttpHeaders = null,
 
     pub fn init(transfer: *Transfer) RequestWriter {
+        return .{ .transfer = transfer };
+    }
+
+    pub fn initWithImplicitClientHints(
+        transfer: *Transfer,
+        implicit_client_hints: ?*const Config.HttpHeaders,
+    ) RequestWriter {
         return .{
             .transfer = transfer,
+            .implicit_client_hints = implicit_client_hints,
         };
     }
 
@@ -440,6 +455,11 @@ pub const RequestWriter = struct {
                 try jws.objectField(hdr.name);
                 try jws.write(hdr.value);
             }
+            if (self.implicit_client_hints) |headers| {
+                try writeHeader(jws, headers.sec_ch_ua_header);
+                if (headers.sec_ch_ua_mobile_header) |header| try writeHeader(jws, header);
+                if (headers.sec_ch_ua_platform_header) |header| try writeHeader(jws, header);
+            }
             if (try request.getCookieString(transfer.arena)) |cookies| {
                 try jws.objectField("Cookie");
                 try jws.write(cookies[0 .. cookies.len - 1]);
@@ -447,6 +467,12 @@ pub const RequestWriter = struct {
             try jws.endObject();
         }
         try jws.endObject();
+    }
+
+    fn writeHeader(jws: anytype, header: []const u8) !void {
+        const separator = std.mem.indexOfScalar(u8, header, ':') orelse return;
+        try jws.objectField(std.mem.trim(u8, header[0..separator], " \t"));
+        try jws.write(std.mem.trim(u8, header[separator + 1 ..], " \t"));
     }
 };
 
@@ -725,6 +751,9 @@ test "cdp.Network: setUserAgentOverride is ignored under Chimera authority" {
     try ctx.expectSentResult(null, .{ .id = 19 });
 
     const client = &ctx.cdp().browser.http_client;
+    const config: *Config = @constCast(client.network.config);
+    config.chimera_impersonate_target = "chrome136";
+    defer config.chimera_impersonate_target = null;
     try testing.expectEqual("Mozilla/5.0", client.getUserAgent());
     try testing.expect(client.getLanguageOverride() == null);
     try testing.expect(client.getNavigatorPlatformOverride() == null);
@@ -733,9 +762,11 @@ test "cdp.Network: setUserAgentOverride is ignored under Chimera authority" {
     defer headers.deinit();
     try expectRequestHeader(headers, "User-Agent", "Mozilla/5.0");
     try expectRequestHeader(headers, "Accept-Language", "en-AU,en;q=0.9");
-    try expectRequestHeader(headers, "Sec-CH-UA", "\"Chromium\";v=\"136\"");
-    try expectRequestHeader(headers, "Sec-CH-UA-Mobile", "?0");
-    try expectRequestHeader(headers, "Sec-CH-UA-Platform", "\"macOS\"");
+    // curl-impersonate injects the low-entropy client hints on the wire.
+    // Keeping them out of the explicit slist prevents duplicate fields.
+    try expectRequestHeaderCount(headers, "Sec-CH-UA", 0);
+    try expectRequestHeaderCount(headers, "Sec-CH-UA-Mobile", 0);
+    try expectRequestHeaderCount(headers, "Sec-CH-UA-Platform", 0);
     try expectHighEntropyRequestHeadersAbsent(headers);
 }
 
@@ -747,6 +778,15 @@ fn expectRequestHeader(headers: Headers, name: []const u8, expected: []const u8)
         }
     }
     return testing.expect(false);
+}
+
+fn expectRequestHeaderCount(headers: Headers, name: []const u8, expected: usize) !void {
+    var count: usize = 0;
+    var it = headers.iterator();
+    while (it.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, name)) count += 1;
+    }
+    try testing.expectEqual(expected, count);
 }
 
 fn expectRequestHeaderAbsent(headers: Headers, name: []const u8) !void {

@@ -207,7 +207,7 @@ fn canvasPngBytes(self: *const Canvas, allocator: Allocator, frame: *Frame) !?[]
 
 fn canvasSeed(frame: *Frame) u64 {
     const authority = frame._session.browser.http_client.network.config.chimeraAuthority() orelse return 0;
-    if (!authority.profile.canvas.enabled) return 0;
+    if (!authority.profile.canvasNoiseEnabled()) return 0;
     return Seeds.surfaceSeed(&authority.profile, .canvas);
 }
 

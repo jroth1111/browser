@@ -321,6 +321,12 @@ pub fn handleKeydown(frame: *Frame, target: *Node, event: *Event) !void {
     }
 
     if (target.is(Element.Html.Input)) |input| {
+        if ((keyboard_event.getCtrlKey() or keyboard_event.getMetaKey()) and
+            std.ascii.eqlIgnoreCase(key.asString(), "a"))
+        {
+            return input.selectForUserInput(frame);
+        }
+
         if (key == .Enter) {
             return frame.submitForm(input.asElement(), input.getForm(frame), .{});
         }
