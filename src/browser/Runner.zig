@@ -203,6 +203,14 @@ pub fn tick(self: *Runner, timeout_ms: u32, conditions: []WaitCondition) !TickRe
     return self._tick(false, timeout_ms, conditions);
 }
 
+fn tickIsDone(ms_to_next_macrotask: ?u64, network_idle: bool, foreground_pending: bool) bool {
+    return ms_to_next_macrotask == null and network_idle and !foreground_pending;
+}
+
+fn canWaitForBackgroundTasks(is_cdp: bool, network_idle: bool, foreground_pending: bool) bool {
+    return !is_cdp and network_idle and !foreground_pending;
+}
+
 fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []WaitCondition) !TickResult {
     const session = self.session;
     const browser = self.browser;
@@ -222,9 +230,10 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         return .{ .ok = 0 };
     }
 
-    if (hasRunnablePage(session)) {
-        try browser.runMacrotasks();
-    }
+    const foreground_pending = if (hasRunnablePage(session))
+        try browser.runMacrotasks()
+    else
+        false;
 
     const http_active = http_client.http_active;
     const http_next_tick = http_client.next_tick_count;
@@ -233,12 +242,12 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
 
     const ms_to_next_macrotask = browser.msToNextMacrotask();
     const network_idle = total_network_activity == 0 and http_client.queue.first == null and http_client.ready_queue.first == null;
-    const is_done = ms_to_next_macrotask == null and network_idle;
+    const is_done = tickIsDone(ms_to_next_macrotask, network_idle, foreground_pending);
 
     // _we_ have nothing to run, but v8 is working on background tasks. We'll
     // wait for them. Don't do this for CDP, since new CDP messages can always
     // come in at any time.
-    if ((comptime is_cdp) == false and network_idle and browser.hasBackgroundTasks()) {
+    if (canWaitForBackgroundTasks(is_cdp, network_idle, foreground_pending) and browser.hasBackgroundTasks()) {
         browser.waitForBackgroundTasks();
         return .{ .ok = 0 };
     }
@@ -302,11 +311,15 @@ fn _tick(self: *Runner, comptime is_cdp: bool, timeout_ms: u32, conditions: []Wa
         }
     }
 
-    if ((comptime is_cdp) or want_http_tick) {
+    if ((comptime is_cdp) or want_http_tick or foreground_pending) {
         // Keep socket polling well below the execution deadline so the
         // watchdog measures callback/JavaScript work, not an idle wait.
         var ms_to_wait = @min(@min(timeout_ms, ms_to_next_macrotask orelse 200), 200);
-        if (browser.hasBackgroundTasks()) {
+        if (foreground_pending) {
+            // The cooperative V8 pump hit a cap. Drain CDP/network without
+            // blocking, then immediately give the finite remainder another turn.
+            ms_to_wait = 0;
+        } else if (browser.hasBackgroundTasks()) {
             // background work will queue more to do soon — don't block long
             // for a client message; loop back and run macrotasks instead.
             ms_to_wait = @min(ms_to_wait, 10);
@@ -472,6 +485,20 @@ test "Runner: waitForSelector" {
     try testing.expectEqual("selector-1-content", try el.asNode().getTextContentAlloc(testing.arena_allocator));
 }
 
+test "Runner: foreground work prevents premature completion" {
+    try testing.expect(tickIsDone(null, true, false));
+    try testing.expect(!tickIsDone(null, true, true));
+    try testing.expect(!tickIsDone(0, true, false));
+    try testing.expect(!tickIsDone(null, false, false));
+}
+
+test "Runner: foreground work takes priority over background wait" {
+    try testing.expect(canWaitForBackgroundTasks(false, true, false));
+    try testing.expect(!canWaitForBackgroundTasks(false, true, true));
+    try testing.expect(!canWaitForBackgroundTasks(true, true, false));
+    try testing.expect(!canWaitForBackgroundTasks(false, false, false));
+}
+
 test "Runner: iframe macrotasks yield between contexts" {
     const page = try testing.pageTest("runner/runner1.html", .{});
     defer page.close();
@@ -499,12 +526,12 @@ test "Runner: iframe macrotasks yield between contexts" {
     try testing.expect(create_timer.read() < 2 * std.time.ns_per_s);
 
     var pass_timer = try std.time.Timer.start();
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     try testing.expect(pass_timer.read() < 500 * std.time.ns_per_ms);
     try testing.expectEqual(1.0, try (try ls.local.compileAndRun("window.__busyDone", null)).toF64());
 
     for (0..7) |_| {
-        try page.session.browser.runMacrotasks();
+        _ = try page.session.browser.runMacrotasks();
     }
     try testing.expectEqual(8.0, try (try ls.local.compileAndRun("window.__busyDone", null)).toF64());
 }
@@ -539,11 +566,11 @@ test "Runner: new iframe context waits for next macrotask pass" {
     // Start from a nonzero cursor so a live-array walk would reach the appended
     // context before wrapping to every context that existed at pass start.
     page.session.browser.env.macrotask_context_cursor = 1;
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     try testing.expectEqual(3.0, try (try ls.local.compileAndRun("window.__existingDone", null)).toF64());
     try testing.expectEqual(0.0, try (try ls.local.compileAndRun("window.__newDone", null)).toF64());
 
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     try testing.expectEqual(1.0, try (try ls.local.compileAndRun("window.__newDone", null)).toF64());
 }
 
@@ -572,12 +599,12 @@ test "Runner: macrotask budget stops between callbacks" {
     , null);
 
     var pass_timer = try std.time.Timer.start();
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     try testing.expect(pass_timer.read() < 500 * std.time.ns_per_ms);
     try testing.expectEqual(1.0, try (try ls.local.compileAndRun("window.__busyDone", null)).toF64());
 
     for (0..7) |_| {
-        try page.session.browser.runMacrotasks();
+        _ = try page.session.browser.runMacrotasks();
     }
     try testing.expectEqual(8.0, try (try ls.local.compileAndRun("window.__busyDone", null)).toF64());
 }
@@ -606,13 +633,13 @@ test "Runner: execution watchdog interrupts self-replenishing microtasks" {
 
     const fires_before = page.session.browser.executionWatchdogFireCount();
     var pass_timer = try std.time.Timer.start();
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     try testing.expect(pass_timer.read() < 8 * std.time.ns_per_s);
     try testing.expectEqual(fires_before + 1, page.session.browser.executionWatchdogFireCount());
     try testing.expect(!page.session.browser.env.terminatePending());
 
     // The next worker pass must not re-enter the interrupted Promise chain.
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     try testing.expectEqual(fires_before + 1, page.session.browser.executionWatchdogFireCount());
 
     var ls: js.Local.Scope = undefined;
@@ -642,7 +669,7 @@ test "Runner: execution watchdog discards promises queued before synchronous ter
     }
     page.session.browser.finishExecutionWatchdog();
 
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     var ls: js.Local.Scope = undefined;
     frame.js.localScope(&ls);
     defer ls.deinit();
@@ -710,7 +737,7 @@ test "Runner: execution watchdog permits finite microtasks" {
     , null);
 
     const fires_before = page.session.browser.executionWatchdogFireCount();
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     try testing.expectEqual(fires_before, page.session.browser.executionWatchdogFireCount());
     try testing.expectEqual(100.0, try (try ls.local.compileAndRun("window.__finiteCount", null)).toF64());
 }
@@ -734,7 +761,7 @@ test "Runner: execution watchdog permits long finite callback" {
     , null);
 
     const fires_before = page.session.browser.executionWatchdogFireCount();
-    try page.session.browser.runMacrotasks();
+    _ = try page.session.browser.runMacrotasks();
     try testing.expectEqual(fires_before, page.session.browser.executionWatchdogFireCount());
     try testing.expect((try ls.local.compileAndRun("window.__longFiniteDone", null)).toBool());
 }

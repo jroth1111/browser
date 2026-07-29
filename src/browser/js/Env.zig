@@ -42,6 +42,13 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const MAX_CONTEXTS = if (lp.build_config.wpt_extensions) 8192 else 128;
 
+// Keep V8 foreground work cooperative with the outer Runner. A task can repost
+// itself indefinitely, so draining until empty can starve network/CDP dispatch.
+// The count cap bounds cheap reposting loops. The time cap prevents starting
+// another task after the turn exceeds its target; one V8 task remains non-preemptible.
+const FOREGROUND_TASK_BUDGET = 64;
+const FOREGROUND_TASK_TIME_BUDGET_NS = 5 * std.time.ns_per_ms;
+
 fn initClassIds() void {
     inline for (JsApis, 0..) |JsApi, i| {
         JsApi.Meta.class_id = i;
@@ -531,14 +538,45 @@ pub fn msToNextMacrotask(self: *Env) ?u64 {
     return if (next_task == std.math.maxInt(u64)) null else next_task;
 }
 
-pub fn pumpMessageLoop(self: *const Env) void {
+fn pumpForegroundTasks(comptime pump: anytype, args: anytype) bool {
+    var timer = std.time.Timer.start() catch unreachable;
+    for (0..FOREGROUND_TASK_BUDGET) |_| {
+        if (!@call(.auto, pump, args)) return false;
+        if (timer.read() >= FOREGROUND_TASK_TIME_BUDGET_NS) return true;
+    }
+    // PumpMessageLoop reports whether it ran a task, not whether another task is
+    // queued. Conservatively request another Runner tick after reaching a cap.
+    return true;
+}
+
+fn drainForegroundTasks(comptime pump: anytype, args: anytype) void {
+    while (@call(.auto, pump, args)) {}
+}
+
+// Runtime-safe pump. Returns true when a count/time cap was reached and the
+// Runner must conservatively schedule another turn before declaring quiescence.
+pub fn pumpMessageLoop(self: *const Env) bool {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    const isolate = self.isolate.handle;
-    const platform = self.platform.handle;
-    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {}
+    return pumpForegroundTasks(
+        v8.v8__Platform__PumpMessageLoop,
+        .{ self.platform.handle, self.isolate.handle, false },
+    );
+}
+
+// Synchronous/teardown callers require drain-to-empty semantics and must not
+// leave V8 tasks referring to a context that is about to be destroyed.
+pub fn drainMessageLoop(self: *const Env) void {
+    var hs: v8.HandleScope = undefined;
+    v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
+    defer v8.v8__HandleScope__DESTRUCT(&hs);
+
+    drainForegroundTasks(
+        v8.v8__Platform__PumpMessageLoop,
+        .{ self.platform.handle, self.isolate.handle, false },
+    );
 }
 
 pub fn hasBackgroundTasks(self: *const Env) bool {
@@ -783,6 +821,38 @@ const PrivateSymbols = struct {
 };
 
 const testing = @import("../../testing.zig");
+test "Env: cooperative foreground pump reports remaining work" {
+    const State = struct {
+        calls: usize = 0,
+
+        fn repost(self: *@This()) bool {
+            self.calls += 1;
+            return true;
+        }
+    };
+
+    var state: State = .{};
+    try std.testing.expect(pumpForegroundTasks(State.repost, .{&state}));
+    try std.testing.expect(state.calls > 0);
+    try std.testing.expect(state.calls <= FOREGROUND_TASK_BUDGET);
+}
+
+test "Env: teardown foreground drain is uncapped" {
+    const State = struct {
+        remaining: usize = FOREGROUND_TASK_BUDGET + 17,
+
+        fn finite(self: *@This()) bool {
+            if (self.remaining == 0) return false;
+            self.remaining -= 1;
+            return true;
+        }
+    };
+
+    var state: State = .{};
+    drainForegroundTasks(State.finite, .{&state});
+    try std.testing.expectEqual(@as(usize, 0), state.remaining);
+}
+
 test "Env: Worker context " {
     const frame = try testing.createFrame();
     defer testing.test_session.closeAllPages();

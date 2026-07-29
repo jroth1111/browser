@@ -288,19 +288,20 @@ pub fn runMicrotasks(self: *Browser) void {
     self.env.runMicrotasks();
 }
 
-pub fn runMacrotasks(self: *Browser) !void {
+pub fn runMacrotasks(self: *Browser) !bool {
     const env = &self.env;
 
     self.armExecutionWatchdog();
     defer self.finishExecutionWatchdog();
 
     try self.env.runMacrotasks();
-    if (self.execution_watchdog.hasFired()) return;
-    env.pumpMessageLoop();
-    if (self.execution_watchdog.hasFired()) return;
+    if (self.execution_watchdog.hasFired()) return false;
+    const foreground_pending = env.pumpMessageLoop();
+    if (self.execution_watchdog.hasFired()) return false;
 
     // either of the above could have queued more microtasks
     env.runMicrotasks();
+    return foreground_pending;
 }
 
 pub fn armExecutionWatchdog(self: *Browser) void {
